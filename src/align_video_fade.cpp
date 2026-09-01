@@ -8,7 +8,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -141,6 +143,20 @@ std::string AlphaTag(int alpha) {
 std::string TransformAlphaTag(int start, int end, int alpha) {
 	return "\\t(" + std::to_string(start) + "," + std::to_string(end)
 		+ "," + AlphaTag(alpha) + ")";
+}
+
+int RoundToCentisecond(int64_t milliseconds) {
+	// Integer division truncates toward zero, so adjust negative values to
+	// obtain floor((milliseconds + 5) / 10).
+	int64_t const shifted = milliseconds + 5;
+	int64_t quotient = shifted / 10;
+	if (shifted < 0 && shifted % 10 != 0)
+		--quotient;
+
+	int64_t const rounded = quotient * 10;
+	constexpr int64_t maximum = std::numeric_limits<int>::max() / 10 * 10;
+	constexpr int64_t minimum = std::numeric_limits<int>::min() / 10 * 10;
+	return static_cast<int>(std::clamp(rounded, minimum, maximum));
 }
 
 } // namespace
@@ -330,6 +346,29 @@ AssFadeTiming BuildAssFadeTiming(
 			duration_ms - result.fade_in_ms);
 	}
 	return result;
+}
+
+AssFadeTiming RoundAssFadeTimingToCentiseconds(AssFadeTiming timing) {
+	int64_t const start = std::max<int64_t>(timing.start_ms, 0);
+	int64_t const end = std::max<int64_t>(timing.end_ms, start);
+	int64_t const duration = end - start;
+	int64_t const fade_in = std::clamp<int64_t>(timing.fade_in_ms, 0, duration);
+	int64_t const fade_out = std::clamp<int64_t>(
+		timing.fade_out_ms,
+		0,
+		duration - fade_in);
+
+	int const rounded_start = RoundToCentisecond(start);
+	int const rounded_fade_in_end = RoundToCentisecond(start + fade_in);
+	int const rounded_fade_out_start = RoundToCentisecond(end - fade_out);
+	int const rounded_end = RoundToCentisecond(end);
+
+	return {
+		rounded_start,
+		rounded_end,
+		rounded_fade_in_end - rounded_start,
+		rounded_end - rounded_fade_out_start
+	};
 }
 
 AssFadeUpdate ApplyAssFade(

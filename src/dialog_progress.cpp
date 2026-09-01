@@ -126,14 +126,15 @@ public:
 	}
 };
 
-DialogProgress::DialogProgress(wxWindow *parent, wxString const& title_text, wxString const& message)
+DialogProgress::DialogProgress(wxWindow *parent, wxString const& title_text, wxString const& message, bool cancellable)
 : wxDialog(parent, -1, title_text, wxDefaultPosition, wxDefaultSize, wxBORDER_RAISED)
+, cancellable(cancellable)
 , pulse_timer(GetEventHandler())
 {
 	title = new wxStaticText(this, -1, title_text, wxDefaultPosition, wxDefaultSize, wxALIGN_CENTRE | wxST_NO_AUTORESIZE);
 	gauge = new wxGauge(this, -1, 300, wxDefaultPosition, FromDIP(wxSize(300, 20)));
 	text = new wxStaticText(this, -1, message, wxDefaultPosition, wxDefaultSize, wxALIGN_CENTRE | wxST_NO_AUTORESIZE);
-	cancel_button = new wxButton(this, wxID_CANCEL);
+	cancel_button = cancellable ? new wxButton(this, wxID_CANCEL) : nullptr;
 	log_output = new wxTextCtrl(this, -1, wxEmptyString, wxDefaultPosition, FromDIP(wxSize(600, 240)), wxTE_MULTILINE | wxTE_READONLY);
 
 	// make the title a slightly larger font
@@ -147,7 +148,8 @@ DialogProgress::DialogProgress(wxWindow *parent, wxString const& title_text, wxS
 	sizer->Add(title, wxSizerFlags().Expand());
 	sizer->Add(gauge, wxSizerFlags(1).Expand().Border());
 	sizer->Add(text, wxSizerFlags().Expand());
-	sizer->Add(cancel_button, wxSizerFlags().Center().Border());
+	if (cancel_button)
+		sizer->Add(cancel_button, wxSizerFlags().Center().Border());
 	sizer->Add(log_output, wxSizerFlags().Expand().Border(wxALL & ~wxTOP));
 	sizer->Hide(log_output);
 
@@ -179,13 +181,14 @@ void DialogProgress::Run(std::function<void(agi::ProgressSink*)> task) {
 
 			// Unbind the cancel handler so that the default behavior happens (i.e. the
 			// dialog is closed) as there's no longer a task to cancel
-			Unbind(wxEVT_BUTTON, &DialogProgress::OnCancel, this, wxID_CANCEL);
+			if (cancellable)
+				Unbind(wxEVT_BUTTON, &DialogProgress::OnCancel, this, wxID_CANCEL);
 
 			// If it ran to completion and there is debug output, leave the window open
 			// so the user can read the debug output and switch the cancel button to a
 			// close button
 			bool cancelled = this->ps->IsCancelled();
-			if (cancelled || (log_output->IsEmpty() && !pending_log))
+			if (!cancellable || cancelled || (log_output->IsEmpty() && !pending_log))
 				EndModal(!cancelled);
 			else {
 				if (!pending_log.empty()) {
@@ -210,10 +213,13 @@ void DialogProgress::OnShow(wxShowEvent& evt) {
 
 	// Restore the cancel button in case it was previously switched to a close
 	// button
-	Bind(wxEVT_BUTTON, &DialogProgress::OnCancel, this, wxID_CANCEL);
+	if (cancellable)
+		Bind(wxEVT_BUTTON, &DialogProgress::OnCancel, this, wxID_CANCEL);
 	Bind(wxEVT_IDLE, &DialogProgress::OnIdle, this);
-	cancel_button->SetLabelText(_("Cancel"));
-	cancel_button->Enable();
+	if (cancel_button) {
+		cancel_button->SetLabelText(_("Cancel"));
+		cancel_button->Enable();
+	}
 
 	wxSizer *sizer = GetSizer();
 	if (sizer->IsShown(log_output)) {

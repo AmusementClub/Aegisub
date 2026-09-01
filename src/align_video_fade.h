@@ -75,6 +75,11 @@ AssFadeTiming BuildAssFadeTiming(
 	bool fade_in_detected,
 	bool fade_out_detected);
 
+/// Round the absolute event and fade control points to the nearest 10 ms,
+/// with exact 5 ms ties rounded toward the later time. Invalid input is
+/// normalized to nonnegative, non-overlapping event and fade intervals first.
+AssFadeTiming RoundAssFadeTimingToCentiseconds(AssFadeTiming timing);
+
 /// Replace an existing line-wide fade representation, preserving \fad,
 /// \fade, or the common leading \alpha + \t form when possible. Lines with
 /// no existing representation receive \fad.

@@ -31,6 +31,7 @@
 #include "ass_file.h"
 #include "compat.h"
 #include "dialog_manager.h"
+#include "dialog_progress.h"
 #include "format.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
@@ -46,6 +47,7 @@
 #include "image_position_picker.h"
 
 #include <libaegisub/ass/time.h>
+#include <libaegisub/scope_exit.h>
 #include <libaegisub/vfr.h>
 
 #include <wx/dialog.h>
@@ -73,6 +75,8 @@ namespace {
 		wxTextCtrl* selected_y;
 		wxTextCtrl* selected_tolerance;
 		wxCheckBox* detect_fade;
+		wxCheckBox* round_fade_times;
+		bool scan_in_progress = false;
 
 		void update_from_textbox();
 		void update_from_textbox(wxCommandEvent&);
@@ -96,6 +100,7 @@ namespace {
 		auto tolerance = OPT_GET("Tool/Align to Video/Tolerance")->GetInt();
 		auto maximized = OPT_GET("Tool/Align to Video/Maximized")->GetBool();
 		auto detect_fade_option = OPT_GET("Tool/Align to Video/Detect Fade")->GetBool();
+		auto round_fade_times_option = OPT_GET("Tool/Align to Video/Round Fade Times")->GetBool();
 
 		current_n_frame = core.videoController->GetFrameN();
 		auto frame = provider->GetFrameBgra(
@@ -123,6 +128,13 @@ namespace {
 		detect_fade = new wxCheckBox(this, -1, _("Enable fade detection"));
 		detect_fade->SetValue(detect_fade_option);
 		detect_fade->SetToolTip(_("Extend the aligned range and write ASS fade tags when a fade is detected"));
+		round_fade_times = new wxCheckBox(this, -1, _("Round fade times to 10 ms"));
+		round_fade_times->SetValue(round_fade_times_option);
+		round_fade_times->Enable(detect_fade_option);
+		round_fade_times->SetToolTip(_("Round generated fade control times to the nearest 10 milliseconds"));
+		detect_fade->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent&) {
+			round_fade_times->Enable(detect_fade->GetValue());
+		});
 
 		selected_x->Bind(wxEVT_TEXT, &DialogAlignToVideo::update_from_textbox, this);
 		selected_y->Bind(wxEVT_TEXT, &DialogAlignToVideo::update_from_textbox, this);
@@ -133,7 +145,11 @@ namespace {
 		add_with_label(right_sizer, _("Y"), selected_y);
 		add_with_label(right_sizer, _("Color"), selected_color);
 		add_with_label(right_sizer, _("Tolerance"), selected_tolerance);
-		add_with_label(right_sizer, _("Fade"), detect_fade);
+		right_sizer->Add(new wxStaticText(this, -1, _("Fade")), 0, wxLEFT | wxRIGHT | wxCENTER, 3);
+		auto fade_sizer = new wxBoxSizer(wxVERTICAL);
+		fade_sizer->Add(detect_fade);
+		fade_sizer->Add(round_fade_times, wxSizerFlags().Border(wxTOP, 2));
+		right_sizer->Add(fade_sizer, 1, wxLEFT | wxEXPAND);
 		right_sizer->AddGrowableCol(1, 1);
 
 		wxSizer* main_sizer = new wxBoxSizer(wxHORIZONTAL);
@@ -158,6 +174,7 @@ namespace {
 	DialogAlignToVideo::~DialogAlignToVideo()
 	{
 		OPT_SET("Tool/Align to Video/Detect Fade")->SetBool(detect_fade->GetValue());
+		OPT_SET("Tool/Align to Video/Round Fade Times")->SetBool(round_fade_times->GetValue());
 
 		long lt;
 		if (!selected_tolerance->GetValue().ToLong(&lt))
@@ -170,7 +187,14 @@ namespace {
 
 	void DialogAlignToVideo::process(wxEvent &)
 	{
+		if (scan_in_progress)
+			return;
+
 		auto core = context->GetCore();
+		if (provider != core.project->VideoProvider()) {
+			wxMessageBox(_("The video has changed. Reopen the align tool and select the key point again."));
+			return;
+		}
 		auto w = provider->GetWidth();
 		auto h = provider->GetHeight();
 
@@ -219,7 +243,21 @@ namespace {
 		request.bounds_tolerance = 5;
 		request.detect_fade = detect_fade_enabled;
 		request.max_fade_frames = max_fade_frames;
-		auto scan = provider->FindKeyPointRange(request);
+
+		KeyPointRangeScanResult scan;
+		scan_in_progress = true;
+		auto reset_scan_state = agi::make_scope_exit([this] { scan_in_progress = false; });
+		DialogProgress progress(
+			this,
+			_("Align subtitle to video"),
+			_("Scanning for the key point range..."),
+			false);
+		progress.Run([&](agi::ProgressSink *sink) {
+			sink->SetIndeterminate();
+			scan = provider->FindKeyPointRange(request);
+		});
+		scan_in_progress = false;
+		reset_scan_state.release();
 		if (scan.status == KeyPointRangeScanStatus::FrameUnavailable) {
 			wxMessageBox(_("Could not retrieve a CPU-readable frame for key-point alignment."));
 			return;
@@ -251,11 +289,14 @@ namespace {
 
 		bool text_changed = false;
 		if (detect_fade_enabled && (scan.fade_in_detected || scan.fade_out_detected)) {
+			auto const tag_timing = round_fade_times->GetValue()
+				? aegisub::align_video_fade::RoundAssFadeTimingToCentiseconds(fade_timing)
+				: fade_timing;
 			auto const updated = aegisub::align_video_fade::ApplyAssFade(
 				line->Text.get(),
-				fade_timing.end_ms - fade_timing.start_ms,
-				fade_timing.fade_in_ms,
-				fade_timing.fade_out_ms);
+				tag_timing.end_ms - tag_timing.start_ms,
+				tag_timing.fade_in_ms,
+				tag_timing.fade_out_ms);
 			text_changed = updated.text != line->Text.get();
 			if (text_changed)
 				line->Text = updated.text;

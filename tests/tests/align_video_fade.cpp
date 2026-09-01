@@ -1,11 +1,16 @@
-#include <gtest/gtest.h>
+#include <main.h>
 
 #include "../../src/align_video_fade.h"
 
+#include <libaegisub/option.h>
+#include <libaegisub/option_value.h>
 #include <libaegisub/vfr.h>
 
 #include <algorithm>
 #include <array>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 
 namespace {
@@ -108,6 +113,77 @@ TEST(align_video_fade, projects_fade_controls_to_exact_frame_samples) {
 	EXPECT_GT(timing.end_ms - last_sample_ms, 0);
 }
 
+TEST(align_video_fade, rounds_absolute_fade_control_points_to_centiseconds) {
+	auto const timing = aegisub::align_video_fade::RoundAssFadeTimingToCentiseconds({
+		101,
+		202,
+		24,
+		26
+	});
+
+	// S/P/Q/E are 101/125/176/202 ms and round to 100/130/180/200 ms.
+	EXPECT_EQ(100, timing.start_ms);
+	EXPECT_EQ(200, timing.end_ms);
+	EXPECT_EQ(30, timing.fade_in_ms);
+	EXPECT_EQ(20, timing.fade_out_ms);
+}
+
+TEST(align_video_fade, rounds_half_centisecond_ties_toward_later_time) {
+	auto const timing = aegisub::align_video_fade::RoundAssFadeTimingToCentiseconds({
+		105,
+		205,
+		20,
+		20
+	});
+
+	EXPECT_EQ(110, timing.start_ms);
+	EXPECT_EQ(210, timing.end_ms);
+	EXPECT_EQ(20, timing.fade_in_ms);
+	EXPECT_EQ(20, timing.fade_out_ms);
+}
+
+TEST(align_video_fade, rounds_values_on_each_side_of_half_centisecond) {
+	auto const before = aegisub::align_video_fade::RoundAssFadeTimingToCentiseconds(
+		{ 0, 1000, 24, 0 });
+	auto const tie = aegisub::align_video_fade::RoundAssFadeTimingToCentiseconds(
+		{ 0, 1000, 25, 0 });
+	auto const after = aegisub::align_video_fade::RoundAssFadeTimingToCentiseconds(
+		{ 0, 1000, 26, 0 });
+
+	EXPECT_EQ(20, before.fade_in_ms);
+	EXPECT_EQ(30, tie.fade_in_ms);
+	EXPECT_EQ(30, after.fade_in_ms);
+}
+
+TEST(align_video_fade, normalizes_invalid_timing_before_rounding) {
+	auto const timing = aegisub::align_video_fade::RoundAssFadeTimingToCentiseconds({
+		-7,
+		34,
+		-3,
+		100
+	});
+
+	EXPECT_EQ(0, timing.start_ms);
+	EXPECT_EQ(30, timing.end_ms);
+	EXPECT_EQ(0, timing.fade_in_ms);
+	EXPECT_EQ(30, timing.fade_out_ms);
+}
+
+TEST(align_video_fade, preserves_order_when_fades_would_overlap) {
+	auto const timing = aegisub::align_video_fade::RoundAssFadeTimingToCentiseconds({
+		100,
+		149,
+		40,
+		40
+	});
+
+	EXPECT_EQ(100, timing.start_ms);
+	EXPECT_EQ(150, timing.end_ms);
+	EXPECT_EQ(40, timing.fade_in_ms);
+	EXPECT_EQ(10, timing.fade_out_ms);
+	EXPECT_LE(timing.fade_in_ms + timing.fade_out_ms, timing.end_ms - timing.start_ms);
+}
+
 TEST(align_video_fade, inserts_fad_for_an_unstyled_line) {
 	auto const update = aegisub::align_video_fade::ApplyAssFade("hello", 1000, 200, 300);
 	EXPECT_EQ(aegisub::align_video_fade::AssFadeEncoding::Fad, update.encoding);
@@ -158,4 +234,18 @@ TEST(align_video_fade, keeps_alpha_in_later_override_blocks) {
 TEST(align_video_fade, clamps_fade_durations_to_line_duration) {
 	auto const update = aegisub::align_video_fade::ApplyAssFade("x", 100, 80, 80);
 	EXPECT_TRUE(Contains(update.text, "\\fad(80,20)"));
+}
+
+TEST(align_video_fade, default_configs_disable_fade_time_rounding) {
+	for (auto const& relative_path : {
+		std::filesystem::path("src/libresrc/default_config.json"),
+		std::filesystem::path("src/libresrc/osx/default_config.json"),
+	}) {
+		std::ifstream stream(std::filesystem::path(AEGISUB_PROJECT_SOURCE_DIR) / relative_path, std::ios::binary);
+		ASSERT_TRUE(stream) << relative_path;
+		std::string const defaults(std::istreambuf_iterator<char>(stream), {});
+		agi::Options options("", {defaults.data(), defaults.size()}, agi::Options::FLUSH_SKIP);
+
+		EXPECT_FALSE(options.Get("Tool/Align to Video/Round Fade Times")->GetBool()) << relative_path;
+	}
 }

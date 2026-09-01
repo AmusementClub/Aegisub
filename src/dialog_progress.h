@@ -43,6 +43,7 @@ class DialogProgress final : public wxDialog, public agi::BackgroundRunner {
 	wxGauge *gauge;
 	wxButton *cancel_button;
 	wxTextCtrl *log_output;
+	bool cancellable;
 
 	wxTimer pulse_timer;
 	agi::ui::UiActivationScope ui_activation;
@@ -65,7 +66,8 @@ public:
 	/// @param parent Parent window of the dialog
 	/// @param title Initial title of the dialog
 	/// @param message Initial message of the dialog
-	DialogProgress(wxWindow *parent, wxString const& title=wxString(), wxString const& message=wxString());
+	/// @param cancellable Whether the task can be cancelled by the user
+	DialogProgress(wxWindow *parent, wxString const& title=wxString(), wxString const& message=wxString(), bool cancellable=true);
 	~DialogProgress() override { ui_activation.Deactivate(); }
 
 	/// BackgroundWorker implementation

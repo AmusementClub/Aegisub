@@ -1254,6 +1254,7 @@ add_executable(Aegisub WIN32
     src/watched_file_wx.cpp
     src/video_controller_timer.cpp
     src/video_controller.cpp
+    src/video_color_zoom_preview.cpp
     src/video_display.cpp
     src/video_frame.cpp
     src/video_renderer_factory.cpp

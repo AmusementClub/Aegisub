@@ -64,6 +64,8 @@
 #include "video_memory_stats.h"
 #include "video_overlay_draw_context_legacy_gl.h"
 #include "video_zoom.h"
+#include "video_color_pick.h"
+#include "video_color_zoom_preview.h"
 #include "video_controller.h"
 #include "video_frame_wx.h"
 #include "visual_guide_overlay.h"
@@ -2087,6 +2089,8 @@ void VideoDisplay::DoRender() try {
 	render_trace.SetDetails(presented_new_frame ? 1 : 0, swapped ? 1 : 0);
 
 	if (presented_new_frame) {
+		if (zoom_preview)
+			zoom_preview->OnFramePresented(presented_frame_number);
 		FramePresented(presented_frame_number);
 		con->videoController->NotifyFramePresented(presented_frame_number);
 		// The overlay pass above ran while GetPresentedFrameN() still
@@ -2585,6 +2589,13 @@ void VideoDisplay::OnMouseEvent(wxMouseEvent& event) {
 	if (point_selection && event.Entering())
 		con->ShowStatus(from_wx(point_selection->hint));
 
+	// The colour pick's magnifier follows the pointer. LeftDown is left to
+	// the pick itself below, and any pick already finished the session (and
+	// with it the magnifier) before further events arrive.
+	if (zoom_preview && !event.LeftDown() &&
+		(event.Moving() || event.Dragging() || event.Entering()))
+		zoom_preview->UpdateAt(MapClientToStoragePixel(event.GetPosition()), event.GetPosition());
+
 	if (point_selection && event.LeftDown()) {
 		SetFocus();
 		double target_width = 0.0;
@@ -2635,6 +2646,8 @@ void VideoDisplay::OnMouseEvent(wxMouseEvent& event) {
 
 void VideoDisplay::OnMouseLeave(wxMouseEvent& event) {
 	mouse_pos = Vector2D();
+	if (zoom_preview)
+		zoom_preview->UpdateAt(std::nullopt, wxPoint());
 	if (tool)
 		tool->OnMouseEvent(event);
 }
@@ -2729,7 +2742,8 @@ void VideoDisplay::BeginPointSelection(
 	bool script_coordinates,
 	std::function<void(std::vector<std::pair<double, double>>, int, bool)> completed,
 	wxCursor cursor,
-	wxString hint) {
+	wxString hint,
+	bool live_zoom) {
 	if (owner.empty() || point_count <= 0 || !completed)
 		throw std::invalid_argument("Invalid video point-selection session");
 	if (!con->project->VideoProvider())
@@ -2743,7 +2757,12 @@ void VideoDisplay::BeginPointSelection(
 			point_count);
 	point_selection = PointSelectionSession{
 		std::move(owner), point_count, script_coordinates, {}, std::move(completed),
-		cursor.IsOk() ? cursor : wxCursor(wxCURSOR_CROSS), hint};
+		cursor.IsOk() ? cursor : wxCursor(wxCURSOR_CROSS), hint, live_zoom};
+	// The magnifier stays hidden until the pointer actually moves over the
+	// canvas: at arm time it is usually still over whatever control started
+	// the pick.
+	if (live_zoom)
+		zoom_preview = std::make_unique<VideoColorZoomPreview>(con, this);
 	RefreshCursor();
 	// The session answers Escape, so it needs the focus the click came from.
 	SetFocus();
@@ -2769,6 +2788,23 @@ std::optional<std::pair<double, double>> VideoDisplay::MapClientToVideoPoint(
 	return std::make_pair(
 		(client_pos.x - left) * target_width / width,
 		(client_pos.y - top) * target_height / height);
+}
+
+std::optional<wxPoint> VideoDisplay::MapClientToStoragePixel(wxPoint client_pos) const {
+	auto *provider = con ? con->project->VideoProvider() : nullptr;
+	if (!provider || provider->GetWidth() <= 0 || provider->GetHeight() <= 0)
+		return {};
+	auto mapped = MapClientToVideoPoint(
+		client_pos,
+		static_cast<double>(provider->GetWidth()),
+		static_cast<double>(provider->GetHeight()));
+	if (!mapped)
+		return {};
+	auto const storage = aegisub::color_pick::MapDisplayPointToStorage(
+		provider->GetFrameGeometry(), mapped->first, mapped->second);
+	if (storage.first < 0 || storage.second < 0)
+		return {};
+	return wxPoint(storage.first, storage.second);
 }
 
 std::optional<wxPoint> VideoDisplay::MapScreenToVideoPixel(wxPoint screen_pos) const {
@@ -2799,6 +2835,9 @@ void VideoDisplay::FinishPointSelection(bool cancelled, bool notify) {
 	if (!point_selection) return;
 	auto session = std::move(*point_selection);
 	point_selection.reset();
+	// The magnifier must be gone before the completed callback can hand
+	// keyboard focus back to the edit box.
+	zoom_preview.reset();
 	// Hand the canvas back to the tool: resetting to the platform default here
 	// would strand a tool that hides the pointer to draw its own crosshair.
 	RefreshCursor();

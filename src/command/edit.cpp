@@ -980,8 +980,9 @@ class VideoQuickPickSession final {
 				// Name the mode and both ways out: the pick is armed until the
 				// user acts, and the eyedropper is what says so on screen.
 				GetEyedropperCursor(),
-				fmt_tl("%s: click the video to sample; Escape or right-click cancels.",
-					   mode_name));
+				fmt_tl("%s: click the video to sample, hover to magnify; Escape or right-click cancels.",
+					   mode_name),
+				/*live_zoom=*/true);
 		}
 		catch (std::exception const& err) {
 			c->ShowError(err.what(), "Video Color Pick");

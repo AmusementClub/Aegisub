@@ -61,6 +61,7 @@
 class AssDialogue;
 class RetinaHelper;
 class AsyncVideoProvider;
+class VideoColorZoomPreview;
 class OpenGLText;
 #ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 class SkiaSurfaceProvider;
@@ -123,8 +124,16 @@ class VideoDisplay final : public wxGLCanvas {
 		/// Localized "what to do now, how to get out" hint, re-shown whenever the
 		/// pointer re-enters the canvas.
 		wxString hint;
+		/// Show the colour-pick magnifier following the pointer for the
+		/// duration of the session. Click handling is unchanged; the magnifier
+		/// is a passive preview of the frame a click would sample.
+		bool live_zoom = false;
 	};
 	std::optional<PointSelectionSession> point_selection;
+	/// Magnifier for an armed colour-pick session (point_selection->live_zoom);
+	/// created by BeginPointSelection, dropped by FinishPointSelection so every
+	/// exit path closes it.
+	std::unique_ptr<VideoColorZoomPreview> zoom_preview;
 
 	/// Base viewport before attached-mode content pan/zoom is applied
 	VideoDisplayViewportLayout baseViewport;
@@ -407,7 +416,8 @@ public:
 		std::function<void(
 			std::vector<std::pair<double, double>>, int, bool)> completed,
 		wxCursor cursor = wxNullCursor,
-		wxString hint = wxString());
+		wxString hint = wxString(),
+		bool live_zoom = false);
 	/// Cancel the active selection only when its opaque owner matches.
 	void CancelPointSelection(std::string const& owner, bool notify = true);
 
@@ -416,6 +426,10 @@ public:
 	/// DPI scale. Returns nullopt when outside the video viewport.
 	std::optional<std::pair<double, double>> MapClientToVideoPoint(
 		wxPoint client_pos, double target_width, double target_height) const;
+	/// Map a display-client position onto the nearest raw-storage pixel,
+	/// including the provider's clean-aperture crop. Returns nullopt when
+	/// outside the video viewport or the geometry is degenerate.
+	std::optional<wxPoint> MapClientToStoragePixel(wxPoint client_pos) const;
 	/// Map a global screen position to the nearest raw video pixel.
 	std::optional<wxPoint> MapScreenToVideoPixel(wxPoint screen_pos) const;
 

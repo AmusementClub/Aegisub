@@ -405,6 +405,14 @@ public:
 	bool CanNormalizeScaleTool(VisualScaleAxis axis) const;
 	/// Normalize every selected line on one axis using the current Scale tool.
 	bool NormalizeScaleTool(VisualScaleAxis axis);
+	/// Whether the Measure tool's Perspective submode can Apply right now.
+	bool CanApplyMeasurePerspective() const;
+	/// Apply the Measure tool's Perspective target to the active line.
+	void ApplyMeasurePerspective();
+	/// Whether the Measure tool has a selected guide it can remove.
+	bool CanRemoveMeasureGuide() const;
+	/// Remove the Measure tool's selected measurement guide.
+	void RemoveMeasureGuide();
 	/// Select a tool-specific sub-mode on the current visual tool.
 	bool SetToolSubMode(int mode);
 	/// Current tool sub-mode, or -1 when none.

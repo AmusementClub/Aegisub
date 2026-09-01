@@ -114,6 +114,13 @@ struct RewriteResult {
 	EvaluatedTransformState const& source_state,
 	EvaluatedTransformState const& event_style_state,
 	SolverCandidate const& candidate,
-	PerspectiveScalePolicy scale_policy = PerspectiveScalePolicy::Fit);
+	PerspectiveScalePolicy scale_policy = PerspectiveScalePolicy::Fit,
+	// Under a restricted policy the candidate either drops the tags outside
+	// the subset or keeps them exactly as the source carries them. The kept
+	// form must survive as the original spelling -- the only text that
+	// round-trips the value bit for bit -- instead of being re-serialized
+	// through the decimal caps.
+	PerspectiveRepresentationPolicy representation_policy =
+		PerspectiveRepresentationPolicy::Automatic);
 
 }

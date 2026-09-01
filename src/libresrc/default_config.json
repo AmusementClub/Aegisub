@@ -311,6 +311,8 @@
 			"Highlight Secondary" : "rgb(255, 253, 185)",
 			"Lines Primary" : "rgb(187, 0, 0)",
 			"Lines Secondary" : "rgb(106, 32, 19)",
+			"Perspective Invalid Line" : "rgb(210, 55, 65)",
+			"Perspective Invalid Handle" : "rgb(235, 80, 85)",
 			"Shaded Area Alpha" : 0.5
 		}
 	},
@@ -699,10 +701,12 @@
 				"Scale Step" : 1.0,
 				"Scale Step Large" : 10.0,
 				"Origin Step" : 1.0,
-				"Origin Step Large" : 10.0
+				"Origin Step Large" : 10.0,
+				"Perspective Step" : 1.0,
+				"Perspective Step Large" : 10.0
 			},
 			"Perspective" : {
-				"Decimal Places" : 2,
+				"Decimal Places" : 4,
 				"Fax Frz Only" : false,
 				"Fit Text" : true
 			}

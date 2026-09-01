@@ -25,7 +25,11 @@ TEST(perspective_visual_tool_options, default_configs_define_persistent_solve_op
 			<< relative_path;
 		EXPECT_FALSE(options.Get("Tool/Visual/Perspective/Fax Frz Only")->GetBool())
 			<< relative_path;
-		EXPECT_EQ(2, options.Get("Tool/Visual/Perspective/Decimal Places")->GetInt())
+		// 4 by default: two digits with a 0.1 px rounding budget refuses drags
+		// that only need one more decimal, and CompactField already shortens
+		// every field to the fewest digits that fit, so a higher cap costs
+		// nothing on lines that never needed it.
+		EXPECT_EQ(4, options.Get("Tool/Visual/Perspective/Decimal Places")->GetInt())
 			<< relative_path;
 	}
 }

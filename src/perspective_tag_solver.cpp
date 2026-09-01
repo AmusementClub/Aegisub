@@ -24,6 +24,7 @@
 #include <charconv>
 #include <cmath>
 #include <limits>
+#include <numbers>
 #include <string_view>
 #include <system_error>
 #include <tuple>
@@ -38,10 +39,17 @@ constexpr int kScaleDecimals = 4;
 constexpr int kShearDecimals = 6;
 constexpr int kRotationDecimals = 5;
 
-constexpr double Pi = 3.1415926535897932384626433832795;
+constexpr double Pi = std::numbers::pi;
 constexpr double RadiansToDegrees = 180.0 / Pi;
 constexpr double DegreesToRadians = Pi / 180.0;
-constexpr std::size_t ParameterCount = 8;
+// [0] pos.x, [1] pos.y, [2] ln(scale_x/100), [3] ln(scale_y/100),
+// [4] shear_x, [5] shear_y, [6] rotation_z (radians),
+// [7] rotation_x (radians), [8] rotation_y (radians).
+// Every optimizer family freezes one or more of these slots and leaves the
+// rest free, so a family is described by which degrees of freedom it locks,
+// not by a different parameterization. CornerResidualCount stays 8: the quad
+// still constrains the fit with the same eight samples.
+constexpr std::size_t ParameterCount = 9;
 constexpr std::size_t CornerResidualCount = 8;
 
 struct AffineMap {
@@ -53,16 +61,33 @@ struct AffineMap {
 	double b1 = 0.0;
 };
 
-enum class ImplicitMode {
-	Fax,
-	Fay,
-	LockedDoubleShear,
-};
-
+// Which slots an implicit-origin fit may move. Each lock freezes exactly one
+// slot at the seed's value, so a family keeps the shape of "one shear axis" or
+// "locked rotation" without hard-coding zero: a seed that already carries the
+// line's \fay or its locked \frz makes the frozen slot preserve that value
+// through the fit.
 struct ImplicitModel {
-	ImplicitMode mode = ImplicitMode::Fax;
-	std::optional<double> locked_rotation_z;
 	bool preserve_scale = false;
+	// Freezes frx/fry at the seed's values, reducing the fit to the in-plane
+	// parameters. With a zeroed seed this is an affine fit driven by the same
+	// optimizer as the projective families, which is how a scale-pinned affine
+	// re-fit is obtained without a second closed-form derivation.
+	bool preserve_plane = false;
+	// Freezes shear_x (slot 4) at the seed's value. Used by the fay-flavoured
+	// families, whose seeds carry shear_x = 0.
+	bool preserve_shear_x = false;
+	// Freezes shear_y (slot 5) at the seed's value. The fax families seed
+	// shear_y = 0; the fay-preserving refits seed the source's own shear_y so
+	// an existing \fay survives the fit untouched.
+	bool preserve_shear_y = false;
+	// Freezes rotation_z (slot 6) at the seed's value, or at the semantic
+	// locked_rotation_z when one is set. Used by the double-shear family and
+	// by plane refits generated under a rotation lock.
+	bool preserve_rotation_z = false;
+	// Keeps the source's explicit \org instead of folding it away. Paired with
+	// preserve_plane this re-fits inside the plane the line already declares.
+	bool preserve_origin = false;
+	std::optional<double> locked_rotation_z;
 };
 
 struct Vec3 {
@@ -338,7 +363,12 @@ CandidateScore ScoreCandidate(
 bool BetterScore(CandidateScore const& left, CandidateScore const& right) {
 	int const left_no_op_penalty = left.changed_tag_count == 0 ? 0 : 1;
 	int const right_no_op_penalty = right.changed_tag_count == 0 ? 0 : 1;
+	// snapped and snap_bucket outrank the no-op preference on purpose. Without
+	// that, a drag the restricted subset cannot express would let the unchanged
+	// source win on tag economy and the tool would look broken.
 	return std::tie(
+		left.snapped,
+		left.snap_bucket,
 		left_no_op_penalty,
 		left.explicit_origin_penalty,
 		left.perspective_penalty,
@@ -349,6 +379,8 @@ bool BetterScore(CandidateScore const& left, CandidateScore const& right) {
 		left.family_rank,
 		left.residual)
 		< std::tie(
+			right.snapped,
+			right.snap_bucket,
 			right_no_op_penalty,
 			right.explicit_origin_penalty,
 			right.perspective_penalty,
@@ -367,11 +399,11 @@ void CompactField(
 	int maximum_decimals,
 	Apply&& apply,
 	SolverInput const& input,
-	Homography const& target) {
+	Homography const& reference) {
 	for (int decimals = 0; decimals <= maximum_decimals; ++decimals) {
 		auto trial = state;
 		apply(trial, raw, decimals);
-		auto const residual = StateResidual(input, target, trial);
+		auto const residual = StateResidual(input, reference, trial);
 		if (residual && *residual <= input.max_error) {
 			state = std::move(trial);
 			return;
@@ -379,22 +411,119 @@ void CompactField(
 	}
 }
 
-std::optional<SolverCandidate> QuantizeCandidate(
+// Rounding is judged against the model's own quad, not the drawn one. A model
+// that only comes close to the drawn quad still deserves the shortest digits
+// that reproduce *it*; measuring against the drawn quad instead would spend the
+// whole budget on a shortfall the digits cannot fix and force full precision.
+struct QuantizationReference {
+	Homography transform;
+	double snap_error = 0.0;
+	bool snapped = false;
+};
+
+int SnapBucket(double snap_error, double unit) {
+	if (!(unit > 0.0) || !std::isfinite(snap_error) || snap_error <= 0.0)
+		return 0;
+	double const bucket = std::ceil(snap_error / unit);
+	if (!std::isfinite(bucket))
+		return std::numeric_limits<int>::max();
+	return static_cast<int>(
+		std::min<double>(bucket, std::numeric_limits<int>::max()));
+}
+
+std::optional<QuantizationReference> ResolveQuantizationReference(
+	SolverInput const& input,
+	Homography const& target,
+	EvaluatedTransformState const& raw) {
+	auto forward_input = input.source;
+	forward_input.state = raw;
+	auto const forward = ForwardQuad(forward_input);
+	if (!forward)
+		return std::nullopt;
+	auto const snap_error = MaxResidual(
+		forward, target, input.source.bounds, input.source.state,
+		input.output_mapping);
+	if (!snap_error)
+		return std::nullopt;
+	// Every measurable model is a candidate now: the best one wins by score
+	// and its shortfall is reported and drawn, not used to refuse the drag.
+	if (*snap_error <= input.max_error) {
+		return QuantizationReference{
+			.transform = target, .snap_error = *snap_error, .snapped = false};
+	}
+	return QuantizationReference{
+		.transform = forward.transform, .snap_error = *snap_error, .snapped = true};
+}
+
+// Where a quantization attempt stopped. The distinction is what the UI
+// reports: ModelRejected means the candidate's model could not be projected
+// or measured at all. QuantizationRejected means the model is fine but the
+// emitted digits blew the rounding budget, so decimal places is the lever.
+enum class QuantizeStage {
+	Succeeded,
+	ModelRejected,
+	QuantizationRejected,
+};
+
+struct QuantizeOutcome {
+	std::optional<SolverCandidate> candidate;
+	QuantizeStage stage = QuantizeStage::ModelRejected;
+	// Rounding error the quantization-stage rejection left behind, in output
+	// pixels, plus the serialization budget it was judged against, so a total
+	// failure can quote both instead of refusing generically. Unmeasurable
+	// rejections (projection-domain deaths) stay numberless.
+	std::optional<double> rejected_error;
+	double rejected_budget = 0.0;
+};
+
+QuantizeOutcome StageRejection(QuantizeStage stage) {
+	QuantizeOutcome outcome;
+	outcome.stage = stage;
+	return outcome;
+}
+
+// Records what a digits-stage rejection left behind: how far the written
+// digits land from the model they must reproduce, and the rounding budget
+// they blew -- the number raising the Decimal Places option shrinks.
+QuantizeOutcome RejectedQuantization(double rounding_error, double budget) {
+	QuantizeOutcome outcome;
+	outcome.stage = QuantizeStage::QuantizationRejected;
+	outcome.rejected_error = rounding_error;
+	outcome.rejected_budget = budget;
+	return outcome;
+}
+
+QuantizeOutcome QuantizeCandidate(
 	SolverInput const& input,
 	Homography const& target,
 	CandidateFamily family,
 	EvaluatedTransformState const& raw) {
+	auto const fit = ResolveQuantizationReference(input, target, raw);
+	if (!fit)
+		return StageRejection(QuantizeStage::ModelRejected);
+	auto const& reference = *fit;
+	// Doing nothing is only an answer when nothing was needed. NoOp skips
+	// digit rounding entirely, so without this gate it outlives every real
+	// family whenever coarse decimals kill them, and "wins" with the line
+	// left exactly where it was, however far that is from the target.
+	if (family == CandidateFamily::NoOp && reference.snapped)
+		return StageRejection(QuantizeStage::ModelRejected);
 	auto state = raw;
 	int const maximum_decimals = ClampPerspectiveDecimalPlaces(input.maximum_decimals);
 	int const position_decimals = FieldDecimals(maximum_decimals, kPositionDecimals);
 	int const scale_decimals = FieldDecimals(maximum_decimals, kScaleDecimals);
 	int const shear_decimals = FieldDecimals(maximum_decimals, kShearDecimals);
 	int const rotation_decimals = FieldDecimals(maximum_decimals, kRotationDecimals);
+	// Restricted fields and multiline shear keep their source spelling.
+	// All other fields must match the decimals Serialize will emit.
+	bool const restricted = input.representation_policy
+		== PerspectiveRepresentationPolicy::FaxFrzOnly;
+	bool const multiline = input.source.bounds.multiline_text;
 	if (family != CandidateFamily::NoOp) {
 		state.position = {
 			Quantize(raw.position.x, position_decimals),
 			Quantize(raw.position.y, position_decimals)};
-		if (raw.origin)
+		if (raw.origin && !restricted)
 			state.origin = Vec2 {
 				Quantize(raw.origin->x, position_decimals),
 				Quantize(raw.origin->y, position_decimals)};
@@ -406,61 +535,69 @@ std::optional<SolverCandidate> QuantizeCandidate(
 			state.scale_x = input.source.state.scale_x;
 			state.scale_y = input.source.state.scale_y;
 		}
-		state.shear_x = Quantize(raw.shear_x, shear_decimals);
-		state.shear_y = Quantize(raw.shear_y, shear_decimals);
-		state.rotation_x = Quantize(raw.rotation_x, rotation_decimals);
-		state.rotation_y = Quantize(raw.rotation_y, rotation_decimals);
+		if (!multiline)
+			state.shear_x = Quantize(raw.shear_x, shear_decimals);
+		if (!restricted && !multiline)
+			state.shear_y = Quantize(raw.shear_y, shear_decimals);
+		if (!restricted) {
+			state.rotation_x = Quantize(raw.rotation_x, rotation_decimals);
+			state.rotation_y = Quantize(raw.rotation_y, rotation_decimals);
+		}
 		state.rotation_z = Quantize(raw.rotation_z, rotation_decimals);
 	}
-	auto residual = StateResidual(input, target, state);
-	if (!residual || *residual > input.max_error)
-		return std::nullopt;
+	auto residual = StateResidual(input, reference.transform, state);
+	if (!residual)
+		return StageRejection(QuantizeStage::QuantizationRejected);
+	if (*residual > input.max_error)
+		return RejectedQuantization(*residual, input.max_error);
 
 	if (family != CandidateFamily::NoOp) {
-		CompactField(state, raw, position_decimals, [](auto& value, auto const& original, int decimals) {
-			value.position = {Quantize(original.position.x, decimals), Quantize(original.position.y, decimals)};
-		}, input, target);
-		if (raw.origin) {
-			CompactField(state, raw, position_decimals, [](auto& value, auto const& original, int decimals) {
-				value.origin = Vec2 {Quantize(original.origin->x, decimals), Quantize(original.origin->y, decimals)};
-			}, input, target);
+		CompactField(state, raw, position_decimals, [](auto& value, auto const& original, int decimals) { value.position = {Quantize(original.position.x, decimals), Quantize(original.position.y, decimals)}; }, input, reference.transform);
+		if (raw.origin && !restricted) {
+			CompactField(state, raw, position_decimals, [](auto& value, auto const& original, int decimals) { value.origin = Vec2{Quantize(original.origin->x, decimals), Quantize(original.origin->y, decimals)}; }, input, reference.transform);
 		}
 		if (input.scale_policy == PerspectiveScalePolicy::Fit) {
-			CompactField(state, raw, scale_decimals, [](auto& value, auto const& original, int decimals) {
-				value.scale_x = Quantize(original.scale_x, decimals);
-			}, input, target);
-			CompactField(state, raw, scale_decimals, [](auto& value, auto const& original, int decimals) {
-				value.scale_y = Quantize(original.scale_y, decimals);
-			}, input, target);
+			CompactField(state, raw, scale_decimals, [](auto& value, auto const& original, int decimals) { value.scale_x = Quantize(original.scale_x, decimals); }, input, reference.transform);
+			CompactField(state, raw, scale_decimals, [](auto& value, auto const& original, int decimals) { value.scale_y = Quantize(original.scale_y, decimals); }, input, reference.transform);
 		}
-		CompactField(state, raw, shear_decimals, [](auto& value, auto const& original, int decimals) {
-			value.shear_x = Quantize(original.shear_x, decimals);
-		}, input, target);
-		CompactField(state, raw, shear_decimals, [](auto& value, auto const& original, int decimals) {
-			value.shear_y = Quantize(original.shear_y, decimals);
-		}, input, target);
-		CompactField(state, raw, rotation_decimals, [](auto& value, auto const& original, int decimals) {
-			value.rotation_x = Quantize(original.rotation_x, decimals);
-		}, input, target);
-		CompactField(state, raw, rotation_decimals, [](auto& value, auto const& original, int decimals) {
-			value.rotation_y = Quantize(original.rotation_y, decimals);
-		}, input, target);
-		CompactField(state, raw, rotation_decimals, [](auto& value, auto const& original, int decimals) {
-			value.rotation_z = Quantize(original.rotation_z, decimals);
-		}, input, target);
+		if (!multiline)
+			CompactField(state, raw, shear_decimals, [](auto& value, auto const& original, int decimals) { value.shear_x = Quantize(original.shear_x, decimals); }, input, reference.transform);
+		if (!restricted && !multiline)
+			CompactField(state, raw, shear_decimals, [](auto& value, auto const& original, int decimals) { value.shear_y = Quantize(original.shear_y, decimals); }, input, reference.transform);
+		if (!restricted) {
+			CompactField(state, raw, rotation_decimals, [](auto& value, auto const& original, int decimals) { value.rotation_x = Quantize(original.rotation_x, decimals); }, input, reference.transform);
+			CompactField(state, raw, rotation_decimals, [](auto& value, auto const& original, int decimals) { value.rotation_y = Quantize(original.rotation_y, decimals); }, input, reference.transform);
+		}
+		CompactField(state, raw, rotation_decimals, [](auto& value, auto const& original, int decimals) { value.rotation_z = Quantize(original.rotation_z, decimals); }, input, reference.transform);
 	}
 
-	residual = StateResidual(input, target, state);
-	if (!residual || *residual > input.max_error)
-		return std::nullopt;
+	auto const quantization_error = StateResidual(input, reference.transform, state);
+	if (!quantization_error)
+		return StageRejection(QuantizeStage::QuantizationRejected);
+	if (*quantization_error > input.max_error)
+		return RejectedQuantization(*quantization_error, input.max_error);
+	// Total is measured against the drawn quad, so it stays comparable with the
+	// value the staged verification recomputes after the tags are written.
+	auto const total_error = StateResidual(input, target, state);
+	if (!total_error)
+		return StageRejection(QuantizeStage::QuantizationRejected);
 	auto serialized = Serialize(state, maximum_decimals);
-	return SolverCandidate {
-		family,
-		state,
-		serialized,
-		ScoreCandidate(input.source.state, state, serialized, family, *residual),
-		*residual,
+	auto score = ScoreCandidate(
+		input.source.state, state, serialized, family, *total_error);
+	score.snapped = reference.snapped ? 1 : 0;
+	score.snap_bucket = reference.snapped
+							? SnapBucket(reference.snap_error, input.max_error)
+							: 0;
+	SolverCandidate candidate{
+		.family = family,
+		.state = state,
+		.serialized = serialized,
+		.score = score,
+		.max_error = *total_error,
+		.snap_error = reference.snap_error,
+		.quantization_error = *quantization_error,
 	};
+	return {std::move(candidate), QuantizeStage::Succeeded};
 }
 
 bool Solve2x2(
@@ -501,7 +638,8 @@ std::optional<AffineMap> LocalAffine(Homography const& homography, Vec2 center) 
 	return result;
 }
 
-std::optional<AffineMap> FitAffine(Quad const& target, Rect bounds) {
+std::optional<AffineMap> FitAffine(
+	Quad const& target, Rect bounds, PerspectiveEdgeAnchor anchor) {
 	double const width = bounds.Width();
 	double const height = bounds.Height();
 	if (!std::isfinite(width) || !std::isfinite(height)
@@ -511,16 +649,74 @@ std::optional<AffineMap> FitAffine(Quad const& target, Rect bounds) {
 	// Orthogonal least-squares projection of the four target corners onto the
 	// six-degree-of-freedom affine subspace. QuantizeCandidate later decides
 	// whether this simpler representation fits the output error budget.
-	Vec2 const horizontal =
+	Vec2 horizontal =
 		(target[1] + target[2] - target[0] - target[3]) / (2.0 * width);
-	Vec2 const vertical =
+	Vec2 vertical =
 		(target[3] + target[2] - target[0] - target[1]) / (2.0 * height);
 	Vec2 const source_center {
 		(bounds.left + bounds.right) / 2.0,
 		(bounds.top + bounds.bottom) / 2.0,
 	};
-	Vec2 const target_center =
+	Vec2 target_center =
 		(target[0] + target[1] + target[2] + target[3]) / 4.0;
+
+	// An anchored edge is not one of two equal measurements to be averaged: it
+	// is the measurement. It fixes its own basis vector outright, and the
+	// opposite edge then contributes only its midpoint, which is where averaging
+	// genuinely belongs -- neither of that edge's corners was trusted.
+	if (anchor != PerspectiveEdgeAnchor::None) {
+		bool const horizontal_anchor = anchor == PerspectiveEdgeAnchor::Top
+			|| anchor == PerspectiveEdgeAnchor::Bottom;
+		// Endpoints of the anchored edge, then of the edge opposite it.
+		std::size_t held_from = 0;
+		std::size_t held_to = 1;
+		std::size_t free_from = 3;
+		std::size_t free_to = 2;
+		switch (anchor) {
+			case PerspectiveEdgeAnchor::Top: break;
+			case PerspectiveEdgeAnchor::Bottom:
+				held_from = 3; held_to = 2; free_from = 0; free_to = 1;
+				break;
+			case PerspectiveEdgeAnchor::Left:
+				held_from = 0; held_to = 3; free_from = 1; free_to = 2;
+				break;
+			case PerspectiveEdgeAnchor::Right:
+				held_from = 1; held_to = 2; free_from = 0; free_to = 3;
+				break;
+			case PerspectiveEdgeAnchor::None: break;
+		}
+		double const held_span = horizontal_anchor ? width : height;
+		Vec2 const held = (target[held_to] - target[held_from]) / held_span;
+		Vec2 const held_mid = (target[held_from] + target[held_to]) / 2.0;
+		Vec2 const free_mid = (target[free_from] + target[free_to]) / 2.0;
+		// Signed so that Bottom and Right anchors push the offset the other way.
+		double const cross_span = horizontal_anchor ? height : width;
+		bool const held_is_first = anchor == PerspectiveEdgeAnchor::Top
+			|| anchor == PerspectiveEdgeAnchor::Left;
+		Vec2 const cross = (held_is_first
+			? free_mid - held_mid
+			: held_mid - free_mid) / cross_span;
+		if (horizontal_anchor) {
+			horizontal = held;
+			vertical = cross;
+		}
+		else {
+			vertical = held;
+			horizontal = cross;
+		}
+		// Place the mapped rectangle so the anchored edge lands on the drawn
+		// edge exactly. Its midpoint is enough: the basis vector above already
+		// fixed the edge's direction and length.
+		Vec2 const anchored_source_mid = horizontal_anchor
+			? Vec2 {source_center.x,
+				held_is_first ? bounds.top : bounds.bottom}
+			: Vec2 {held_is_first ? bounds.left : bounds.right,
+				source_center.y};
+		target_center = held_mid
+			+ horizontal * (source_center.x - anchored_source_mid.x)
+			+ vertical * (source_center.y - anchored_source_mid.y);
+	}
+
 	AffineMap const result {
 		horizontal.x,
 		vertical.x,
@@ -802,27 +998,14 @@ using Parameters = std::array<double, ParameterCount>;
 using ResidualVector = std::array<double, CornerResidualCount>;
 using LinearMatrix = std::array<std::array<double, ParameterCount>, ParameterCount>;
 
-Parameters ParametersFromState(
-	EvaluatedTransformState const& state,
-	ImplicitModel model) {
-	if (model.mode == ImplicitMode::LockedDoubleShear) {
-		return {
-			state.position.x,
-			state.position.y,
-			std::log(state.scale_x / 100.0),
-			std::log(state.scale_y / 100.0),
-			state.shear_x,
-			state.shear_y,
-			state.rotation_x * DegreesToRadians,
-			state.rotation_y * DegreesToRadians,
-		};
-	}
+Parameters ParametersFromState(EvaluatedTransformState const& state) {
 	return {
 		state.position.x,
 		state.position.y,
 		std::log(state.scale_x / 100.0),
 		std::log(state.scale_y / 100.0),
-		model.mode == ImplicitMode::Fay ? state.shear_y : state.shear_x,
+		state.shear_x,
+		state.shear_y,
 		state.rotation_z * DegreesToRadians,
 		state.rotation_x * DegreesToRadians,
 		state.rotation_y * DegreesToRadians,
@@ -838,7 +1021,8 @@ std::optional<EvaluatedTransformState> StateFromParameters(
 			return std::nullopt;
 	}
 	auto state = source;
-	state.origin.reset();
+	if (!model.preserve_origin)
+		state.origin.reset();
 	state.position = {parameters[0], parameters[1]};
 	if (model.preserve_scale) {
 		state.scale_x = source.scale_x;
@@ -848,29 +1032,34 @@ std::optional<EvaluatedTransformState> StateFromParameters(
 		state.scale_x = 100.0 * std::exp(parameters[2]);
 		state.scale_y = 100.0 * std::exp(parameters[3]);
 	}
-	if (model.mode == ImplicitMode::LockedDoubleShear) {
-		if (!model.locked_rotation_z || !std::isfinite(*model.locked_rotation_z))
-			return std::nullopt;
-		state.shear_x = parameters[4];
-		state.shear_y = parameters[5];
-		state.rotation_z = *model.locked_rotation_z;
-		state.rotation_x = parameters[6] * RadiansToDegrees;
-		state.rotation_y = parameters[7] * RadiansToDegrees;
-	}
-	else {
-		state.shear_x = model.mode == ImplicitMode::Fay ? 0.0 : parameters[4];
-		state.shear_y = model.mode == ImplicitMode::Fay ? parameters[4] : 0.0;
-		state.rotation_z = parameters[5] * RadiansToDegrees;
-		state.rotation_x = parameters[6] * RadiansToDegrees;
-		state.rotation_y = parameters[7] * RadiansToDegrees;
-	}
+	// The locked slots read the parameter vector itself: IsFixedImplicitParameter
+	// excludes them from every trial update, so a frozen slot keeps the value
+	// the optimizer was seeded with for the whole fit. That is what makes a lock
+	// preserve the seed's shear or rotation instead of forcing some constant.
+	state.shear_x = parameters[4];
+	state.shear_y = parameters[5];
+	if (model.preserve_rotation_z)
+		state.rotation_z =
+			model.locked_rotation_z.value_or(parameters[6] * RadiansToDegrees);
+	else
+		state.rotation_z = parameters[6] * RadiansToDegrees;
+	state.rotation_x = parameters[7] * RadiansToDegrees;
+	state.rotation_y = parameters[8] * RadiansToDegrees;
 	if (!std::isfinite(state.scale_x) || !std::isfinite(state.scale_y))
 		return std::nullopt;
 	return state;
 }
 
 bool IsFixedImplicitParameter(std::size_t index, ImplicitModel model) {
-	return model.preserve_scale && (index == 2 || index == 3);
+	if (model.preserve_scale && (index == 2 || index == 3))
+		return true;
+	if (model.preserve_shear_x && index == 4)
+		return true;
+	if (model.preserve_shear_y && index == 5)
+		return true;
+	if (model.preserve_rotation_z && index == 6)
+		return true;
+	return model.preserve_plane && (index == 7 || index == 8);
 }
 
 bool EvaluateParameters(
@@ -900,13 +1089,23 @@ bool EvaluateParameters(
 }
 
 bool SolveLinear(LinearMatrix matrix, Parameters right, Parameters& solution) {
+	// Singularity is relative to the system's own scale: angle terms and
+	// pixel-coordinate terms mix in one normal matrix, so an absolute pivot
+	// floor either accepts ill-conditioned systems at pixel scale or
+	// rejects healthy ones at normalized scale. 1e-12 of the largest entry
+	// is the structural-singularity band for double precision; the solver's
+	// residual self-check catches anything borderline the band lets through.
+	double scale = 0.0;
+	for (auto const& row : matrix)
+		for (double entry : row)
+			scale = std::max(scale, std::abs(entry));
 	for (std::size_t column = 0; column < ParameterCount; ++column) {
 		std::size_t pivot = column;
 		for (std::size_t row = column + 1; row < ParameterCount; ++row) {
 			if (std::abs(matrix[row][column]) > std::abs(matrix[pivot][column]))
 				pivot = row;
 		}
-		if (std::abs(matrix[pivot][column]) <= 1.0e-18)
+		if (!(std::abs(matrix[pivot][column]) > scale * 1.0e-12))
 			return false;
 		if (pivot != column) {
 			std::swap(matrix[pivot], matrix[column]);
@@ -933,7 +1132,14 @@ std::optional<EvaluatedTransformState> OptimizeImplicitOrigin(
 	SolverInput const& input,
 	EvaluatedTransformState const& initial,
 	ImplicitModel model) {
-	Parameters parameters = ParametersFromState(initial, model);
+	Parameters parameters = ParametersFromState(initial);
+	// Multiline shear belongs to the layout, regardless of the family's seed.
+	if (input.source.bounds.multiline_text) {
+		parameters[4] = input.source.state.shear_x;
+		parameters[5] = input.source.state.shear_y;
+		model.preserve_shear_x = true;
+		model.preserve_shear_y = true;
+	}
 	ResidualVector residual {};
 	double cost = 0.0;
 	if (!EvaluateParameters(input, parameters, model, residual, cost))
@@ -999,15 +1205,25 @@ std::optional<EvaluatedTransformState> OptimizeImplicitOrigin(
 			trial[index] += delta[index];
 			delta_norm = std::max(delta_norm, std::abs(delta[index]));
 		}
-		trial[2] = std::clamp(trial[2], -12.0, 12.0);
-		trial[3] = std::clamp(trial[3], -12.0, 12.0);
-		trial[4] = std::clamp(trial[4], -1000.0, 1000.0);
-		if (model.mode == ImplicitMode::LockedDoubleShear)
+		// Wrapping and clamping are only for slots the optimizer actually
+		// moved. A frozen slot carries the seed's value verbatim for the whole
+		// fit -- remainder() on the frozen rotation would rewrite 270 degrees
+		// as -90 and change the \frz tag the line already carries, and a clamp
+		// could do the same to a locked shear.
+		if (!IsFixedImplicitParameter(2, model))
+			trial[2] = std::clamp(trial[2], -12.0, 12.0);
+		if (!IsFixedImplicitParameter(3, model))
+			trial[3] = std::clamp(trial[3], -12.0, 12.0);
+		if (!IsFixedImplicitParameter(4, model))
+			trial[4] = std::clamp(trial[4], -1000.0, 1000.0);
+		if (!IsFixedImplicitParameter(5, model))
 			trial[5] = std::clamp(trial[5], -1000.0, 1000.0);
-		else
-			trial[5] = std::remainder(trial[5], 2.0 * Pi);
-		trial[6] = std::remainder(trial[6], 2.0 * Pi);
-		trial[7] = std::remainder(trial[7], 2.0 * Pi);
+		if (!IsFixedImplicitParameter(6, model))
+			trial[6] = std::remainder(trial[6], 2.0 * Pi);
+		if (!IsFixedImplicitParameter(7, model))
+			trial[7] = std::remainder(trial[7], 2.0 * Pi);
+		if (!IsFixedImplicitParameter(8, model))
+			trial[8] = std::remainder(trial[8], 2.0 * Pi);
 		ResidualVector trial_residual {};
 		double trial_cost = 0.0;
 		if (EvaluateParameters(input, trial, model, trial_residual, trial_cost)
@@ -1023,6 +1239,106 @@ std::optional<EvaluatedTransformState> OptimizeImplicitOrigin(
 		}
 	}
 	return StateFromParameters(input.source.state, parameters, model);
+}
+
+// Rescales the drawn quad about its corner mean to the area the model set can
+// actually produce, and reports the factor it used.
+//
+// This is what makes a scale lock size-blind. The area-pinned affine families
+// have no size freedom at all -- their output area is exactly the frozen
+// \fscx/\fscy times the base bounds area -- so they aim at the rescaled quad,
+// the one size they can hit. The projective families keep trying the drawn
+// quad verbatim first (foreshortening trades apparent area even at pinned
+// scale, so quads of almost any area may still be exactly reachable) and only
+// fall back to the rescaled one; see SolvePerspectiveTags. Either way, no
+// candidate is ever refused merely because the user drew at a different size.
+//
+// Without this, a scale lock counts pure size drift as model error. A 4% drift
+// on a 200x80 box is 8 output pixels, more than any sane tolerance, so the drag
+// is refused over a mismatch the user was never asked to avoid.
+std::optional<double> PreserveAreaFactor(Quad const& target, Quad const& reachable) {
+	double const target_area = std::abs(SignedArea(target));
+	double const reachable_area = std::abs(SignedArea(reachable));
+	if (!std::isfinite(target_area) || !std::isfinite(reachable_area))
+		return std::nullopt;
+	if (target_area <= 0.0 || reachable_area <= 0.0)
+		return std::nullopt;
+	double const factor = std::sqrt(reachable_area / target_area);
+	if (!std::isfinite(factor) || factor <= 0.0)
+		return std::nullopt;
+	return factor;
+}
+
+Quad ScaleQuadAboutCenter(Quad const& quad, double factor) {
+	Vec2 center;
+	for (auto const& point : quad)
+		center = center + point / static_cast<double>(quad.size());
+	Quad scaled;
+	for (std::size_t index = 0; index < quad.size(); ++index)
+		scaled[index] = center + (quad[index] - center) * factor;
+	return scaled;
+}
+
+// The two corners an anchored edge must keep where they were drawn. Corner
+// order is TL, TR, BR, BL: Top is p0->p1, Right p1->p2, Bottom p3->p2, Left
+// p0->p3.
+std::pair<std::size_t, std::size_t> EdgeAnchorEndpoints(PerspectiveEdgeAnchor anchor) {
+	switch (anchor) {
+		case PerspectiveEdgeAnchor::Top: return {0, 1};
+		case PerspectiveEdgeAnchor::Right: return {1, 2};
+		case PerspectiveEdgeAnchor::Bottom: return {3, 2};
+		case PerspectiveEdgeAnchor::Left: return {0, 3};
+		case PerspectiveEdgeAnchor::None: break;
+	}
+	return {0, 0};
+}
+
+// How far a landed quad's anchored corners sit from the drawn ones, in output
+// pixels. The anchor is a promise about the drawn quad itself, so both the
+// classification pre-check and the final gate measure against request.target,
+// never against an area-normalized effective target that Preserve may have
+// moved the very edge the user held down.
+double HeldEdgeError(
+	Quad const& landed,
+	Quad const& drawn,
+	std::pair<std::size_t, std::size_t> held,
+	OutputCoordinateMapping mapping) {
+	return std::max(
+		std::hypot(
+			(landed[held.first].x - drawn[held.first].x) * mapping.scale_x,
+			(landed[held.first].y - drawn[held.first].y) * mapping.scale_y),
+		std::hypot(
+			(landed[held.second].x - drawn[held.second].x) * mapping.scale_x,
+			(landed[held.second].y - drawn[held.second].y) * mapping.scale_y));
+}
+
+// Explains a NoFeasibleCandidate result by the stage every candidate died at,
+// ordered by which lever actually unblocks a solve. Quantization outranks
+// everything: a candidate whose model landed inside the snap budget is one
+// Decimal Places bump away from feasible, no matter what else died.
+// EdgeAnchor comes next: the anchor is a promise about the drawn edge, and a
+// conflict there is resolved by releasing the anchor, which unblocks every
+// candidate the current settings already allow. RepresentationPolicy follows
+// and fires when the Fax + Frz Only filter killed at least one family
+// outright: the families it kills are exactly the ones the unrestricted
+// policy would have run, and those reach a hand-drawn quad exactly, so the
+// switch itself is what to relax. Only when nothing died at any of those
+// stages -- nothing generated could be projected or measured at all -- is
+// ModelResidual the verdict. Rotation-lock rejections are model-stage deaths
+// by this logic: the lock constrains the model a family fits, not the
+// representation.
+NoFeasibleReason ClassifyNoFeasibleReason(
+	std::size_t policy_stage_deaths,
+	std::size_t model_stage_deaths,
+	std::size_t quantization_stage_deaths,
+	std::size_t edge_anchor_stage_deaths) {
+	if (quantization_stage_deaths > 0)
+		return NoFeasibleReason::Quantization;
+	if (edge_anchor_stage_deaths > 0)
+		return NoFeasibleReason::EdgeAnchor;
+	if (policy_stage_deaths > 0)
+		return NoFeasibleReason::RepresentationPolicy;
+	return NoFeasibleReason::ModelResidual;
 }
 
 }
@@ -1096,6 +1412,26 @@ bool MatchesPerspectiveRepresentationPolicy(
 		&& state.rotation_y == 0.0;
 }
 
+bool MatchesPerspectiveRepresentationPolicy(
+	EvaluatedTransformState const& source,
+	EvaluatedTransformState const& state,
+	PerspectiveRepresentationPolicy policy) {
+	if (policy == PerspectiveRepresentationPolicy::Automatic)
+		return true;
+	if (MatchesPerspectiveRepresentationPolicy(state, policy))
+		return true;
+	// Nothing outside the subset may be introduced or retuned, but what the
+	// line already carried may stay. Judging the result shape absolutely would
+	// reject even an unchanged line the moment it has an frx, which is exactly
+	// when a typesetter reaches for the switch.
+	bool const same_origin = source.origin.has_value() == state.origin.has_value()
+		&& (!source.origin || NearlyEqual(*source.origin, *state.origin));
+	return same_origin
+		&& NearlyEqual(source.shear_y, state.shear_y)
+		&& NearlyEqual(source.rotation_x, state.rotation_x)
+		&& NearlyEqual(source.rotation_y, state.rotation_y);
+}
+
 ResidualResult MeasurePerspectiveResidual(
 	ForwardInput const& candidate,
 	Quad const& target,
@@ -1122,141 +1458,503 @@ ResidualResult MeasurePerspectiveResidual(
 	return {ResidualError::None, GeometryError::None, ForwardError::None, *residual};
 }
 
-SolverResult SolvePerspectiveTags(SolverInput const& input) {
-	if (!HasValidResidualSamples(input.source.bounds))
+SolverResult SolvePerspectiveTags(SolverInput const& request) {
+	if (!HasValidResidualSamples(request.source.bounds))
 		return {SolverError::InvalidSource, GeometryError::None,
 			ForwardError::InvalidBounds};
-	if (input.locked_rotation_z) {
-		if (!std::isfinite(*input.locked_rotation_z))
+	if (request.locked_rotation_z) {
+		if (!std::isfinite(*request.locked_rotation_z))
 			return {SolverError::InvalidSource, GeometryError::None,
 				ForwardError::NonFiniteState};
-		if (std::abs(*input.locked_rotation_z) > MaxTransformParameter)
+		if (std::abs(*request.locked_rotation_z) > MaxTransformParameter)
 			return {SolverError::InvalidSource, GeometryError::None,
 				ForwardError::TransformParameterOutOfRange};
 	}
-	auto const current_forward = ForwardQuad(input.source);
+	auto const current_forward = ForwardQuad(request.source);
 	auto projection_context = current_forward;
 	if (!projection_context) {
-		projection_context = ForwardQuad(CanonicalizeCurrentGeometry(input.source));
+		projection_context = ForwardQuad(CanonicalizeCurrentGeometry(request.source));
 		if (!projection_context)
 			return {SolverError::InvalidSource, GeometryError::None,
 				projection_context.error};
 	}
-	auto const target_validation = ValidateQuad(input.target);
+	auto const target_validation = ValidateQuad(request.target);
 	if (!target_validation)
 		return {SolverError::InvalidTarget, target_validation.error};
-	if (!IsValidOutputMapping(input.output_mapping))
+	if (!IsValidOutputMapping(request.output_mapping))
 		return {SolverError::InvalidOutputMapping};
-	if (!std::isfinite(input.max_error) || input.max_error <= 0.0)
-		return {SolverError::InvalidErrorBudget};
-	auto const target_transform = MakeHomography(input.source.bounds.rectangle, input.target);
-	if (!target_transform)
-		return {SolverError::InvalidTarget, target_transform.error};
+	if (!std::isfinite(request.max_error) || request.max_error <= 0.0)
+		return {.error = SolverError::InvalidErrorBudget};
 
-	std::vector<std::pair<CandidateFamily, EvaluatedTransformState>> raw_candidates;
-	if (current_forward) {
-		raw_candidates.emplace_back(CandidateFamily::NoOp, input.source.state);
-
-		Vec2 translation;
-		for (std::size_t index = 0; index < input.target.size(); ++index)
-			translation = translation
-				+ (input.target[index] - current_forward.quad[index]) / 4.0;
-		auto position_only = input.source.state;
-		position_only.position = position_only.position + translation;
-		raw_candidates.emplace_back(CandidateFamily::CurrentRepresentation, position_only);
-		if (input.source.state.origin) {
-			auto translated_current = position_only;
-			translated_current.origin = *translated_current.origin + translation;
-			raw_candidates.emplace_back(
-				CandidateFamily::CurrentRepresentation, translated_current);
-		}
-	}
-
-	if (auto const affine = FitAffine(input.target, input.source.bounds.rectangle)) {
-		if (auto const candidate = TranslationCandidate(*affine, input.source))
-			raw_candidates.emplace_back(CandidateFamily::Translation, *candidate);
-		if (auto const candidate = SimilarityCandidate(*affine, input.source))
-			raw_candidates.emplace_back(CandidateFamily::Similarity, *candidate);
-		if (auto const candidate = DecomposeAffine(*affine, input.source, false))
-			raw_candidates.emplace_back(CandidateFamily::AffineFax, *candidate);
-		if (input.representation_policy
-			== PerspectiveRepresentationPolicy::Automatic) {
-			if (auto const candidate = DecomposeAffine(*affine, input.source, true))
-				raw_candidates.emplace_back(CandidateFamily::AffineFay, *candidate);
-		}
-	}
-
-	if (input.representation_policy
-		== PerspectiveRepresentationPolicy::Automatic) {
-		Vec2 const source_center {
-			(input.source.bounds.rectangle.left + input.source.bounds.rectangle.right) / 2.0,
-			(input.source.bounds.rectangle.top + input.source.bounds.rectangle.bottom) / 2.0,
-		};
-		if (auto const local_affine = LocalAffine(target_transform.value, source_center)) {
-			bool const preserve_scale =
-				input.scale_policy == PerspectiveScalePolicy::Preserve;
-			if (input.locked_rotation_z) {
-				if (auto const initial = DecomposeLockedAffine(
-					*local_affine, input.source, *input.locked_rotation_z)) {
-					ImplicitModel const model {
-						ImplicitMode::LockedDoubleShear, input.locked_rotation_z,
-						preserve_scale};
-					if (auto const candidate = OptimizeImplicitOrigin(input, *initial, model))
-						raw_candidates.emplace_back(
-							CandidateFamily::ProjectiveImplicitLockedDoubleShear,
-							*candidate);
+	// Under Preserve the drawn size carries no information -- turning off Fit
+	// Text says "do not change my font size", not "my hand-drawn box is already
+	// the exact right size". The area-pinned affine families aim at the drawn
+	// quad rescaled to the area the pinned scale can produce, the only size
+	// they can ever hit. The projective families are size-blind by trying, not
+	// by rescaling: foreshortening trades apparent area even at pinned scale,
+	// so a drawn quad of almost any area may still be exactly reachable
+	// verbatim, and when it is not -- a much larger draw can never be grown
+	// to -- the same families run again against the rescaled quad and fit the
+	// foreshortened shape at the producible size. See PreserveAreaFactor.
+	// Under Fit the rescaled quad is the drawn one and nothing changes.
+	Quad const drawn_target = request.target;
+	Quad affine_target = drawn_target;
+	std::optional<Homography> affine_target_transform;
+	bool size_drifted = false;
+	if (request.scale_policy == PerspectiveScalePolicy::Preserve) {
+		if (auto const factor = PreserveAreaFactor(
+			drawn_target, projection_context.quad)) {
+			auto const rescaled = ScaleQuadAboutCenter(drawn_target, *factor);
+			// A rescale can only fail validation in extreme cases, and a drawn
+			// quad the user can still see is worth more than a normalized one
+			// the solver would reject outright.
+			if (ValidateQuad(rescaled)) {
+				auto const normalized = MakeHomography(
+					request.source.bounds.rectangle, rescaled);
+				if (normalized) {
+					affine_target = rescaled;
+					affine_target_transform = normalized.value;
+					size_drifted = std::abs(*factor - 1.0) > 1.0e-6;
 				}
 			}
-			else {
-				for (ImplicitMode const mode : {ImplicitMode::Fax, ImplicitMode::Fay}) {
-					bool const use_fay = mode == ImplicitMode::Fay;
-					if (auto const initial = DecomposeAffine(
-						*local_affine, input.source, use_fay)) {
-						if (auto const candidate = OptimizeImplicitOrigin(
-							input, *initial, {mode, std::nullopt, preserve_scale})) {
-							raw_candidates.emplace_back(
-								use_fay ? CandidateFamily::ProjectiveImplicitFay
-									: CandidateFamily::ProjectiveImplicitFax,
-								*candidate);
+		}
+	}
+
+	auto const drawn_target_transform =
+		MakeHomography(request.source.bounds.rectangle, drawn_target);
+	if (!drawn_target_transform)
+		return {SolverError::InvalidTarget, drawn_target_transform.error};
+	if (!affine_target_transform)
+		affine_target_transform = drawn_target_transform.value;
+
+	struct RawCandidate {
+		CandidateFamily family;
+		EvaluatedTransformState state;
+		Quad effective_target;
+	};
+	std::vector<RawCandidate> raw_candidates;
+	if (current_forward) {
+		raw_candidates.push_back({CandidateFamily::NoOp, request.source.state,
+								  affine_target});
+
+		Quad const& translation_target =
+			affine_target;
+		Vec2 translation;
+		for (std::size_t index = 0; index < translation_target.size(); ++index)
+			translation = translation
+				+ (translation_target[index] - current_forward.quad[index]) / 4.0;
+		auto position_only = request.source.state;
+		position_only.position = position_only.position + translation;
+		raw_candidates.push_back({CandidateFamily::CurrentRepresentation,
+								  position_only, affine_target});
+		if (request.source.state.origin) {
+			auto translated_current = position_only;
+			translated_current.origin = *translated_current.origin + translation;
+			raw_candidates.push_back({CandidateFamily::CurrentRepresentation,
+									  translated_current,
+									  affine_target});
+		}
+	}
+
+	bool const preserve_scale =
+		request.scale_policy == PerspectiveScalePolicy::Preserve;
+	// Closed forms cannot preserve multiline shear; use constrained refits.
+	bool const multiline = request.source.bounds.multiline_text;
+	auto const add_refit = [&](
+							   CandidateFamily family,
+							   EvaluatedTransformState const& seed,
+							   ImplicitModel model,
+							   Quad const& target) {
+		// The refit optimizer must aim at the same quad the finished candidate
+		// is judged against, or the fit and the acceptance check disagree.
+		SolverInput family_input = request;
+		family_input.target = target;
+		if (auto const candidate = OptimizeImplicitOrigin(family_input, seed, model))
+			raw_candidates.push_back({family, *candidate, family_input.target});
+	};
+
+	if (auto const affine = FitAffine(
+			affine_target,
+			request.source.bounds.rectangle, request.edge_anchor)) {
+		if (preserve_scale || multiline) {
+			// Refit the free parameters at the pinned scale/shear. Similarity
+			// already covers translation without resetting those fields.
+			if (auto const seed = SimilarityCandidate(*affine, request.source))
+				add_refit(CandidateFamily::Similarity, *seed,
+						  {.preserve_scale = preserve_scale, .preserve_plane = true, .preserve_shear_x = true, .preserve_shear_y = true}, affine_target);
+			if (auto const seed = DecomposeAffine(*affine, request.source, false))
+				add_refit(CandidateFamily::AffineFax, *seed,
+						  {.preserve_scale = preserve_scale, .preserve_plane = true, .preserve_shear_y = true}, affine_target);
+			if (request.representation_policy
+				== PerspectiveRepresentationPolicy::Automatic) {
+				if (auto const seed = DecomposeAffine(*affine, request.source, true))
+					add_refit(CandidateFamily::AffineFay, *seed,
+							  {.preserve_scale = preserve_scale, .preserve_plane = true, .preserve_shear_x = true}, affine_target);
+			}
+		}
+		else {
+			if (auto const candidate = TranslationCandidate(*affine, request.source))
+				raw_candidates.push_back({CandidateFamily::Translation, *candidate,
+										  affine_target});
+			if (auto const candidate = SimilarityCandidate(*affine, request.source))
+				raw_candidates.push_back({CandidateFamily::Similarity, *candidate,
+										  affine_target});
+			if (auto const candidate = DecomposeAffine(*affine, request.source, false))
+				raw_candidates.push_back({CandidateFamily::AffineFax, *candidate,
+										  affine_target});
+			if (request.representation_policy
+				== PerspectiveRepresentationPolicy::Automatic) {
+				if (auto const candidate = DecomposeAffine(*affine, request.source, true))
+					raw_candidates.push_back({CandidateFamily::AffineFay, *candidate,
+											  affine_target});
+			}
+		}
+	}
+
+	// A line that already carries \fay has an affine shape the fax families
+	// above can only fit by zeroing that tag: legal wherever dropping a
+	// restricted tag is allowed, but it gives up a degree of freedom the quad
+	// may need, and it rewrites the fay wherever the state is not clean without
+	// it. Seed from the line itself and let the optimizer move pos/scale/fax/frz
+	// with the fay held exactly as written. Automatic gets the family too: it is
+	// a plain affine candidate, and the existing scoring already knows how to
+	// rank it against the zeroing variants.
+	if (std::abs(request.source.state.shear_y) > 1.0e-9
+		&& !request.source.state.origin
+		&& std::abs(request.source.state.rotation_x) <= 1.0e-9
+		&& std::abs(request.source.state.rotation_y) <= 1.0e-9) {
+		add_refit(CandidateFamily::AffineFay, request.source.state,
+				  {.preserve_scale = preserve_scale, .preserve_plane = true, .preserve_shear_y = true}, affine_target);
+	}
+
+	// A line that already declares a plane has a fit nobody generated before:
+	// hold that plane exactly as written and re-solve only the in-plane tags.
+	// Under a restricted policy this is the whole difference between "adjust
+	// inside the perspective you set up" and "flatten it". The fax-flavoured
+	// variant freezes shear_y at the line's own value, so a line carrying \fay
+	// keeps it instead of having it zeroed; for a line without one the frozen
+	// value is zero, which is exactly the fit the old hard-zeroed mode
+	// produced. A rotation lock no longer skips the block: its refit freezes
+	// frz at the lock instead of freeing it, so the lock filter below passes by
+	// construction and a vertical line with an existing plane can finally refit
+	// in plane at all.
+	if (request.source.state.origin
+		|| std::abs(request.source.state.rotation_x) > 1.0e-9
+		|| std::abs(request.source.state.rotation_y) > 1.0e-9) {
+		// The refit is a projective-class family, so under a size drift it runs
+		// against both targets: the drawn quad, which a declared plane can
+		// often still hit verbatim, and the rescaled one for the shape at the
+		// size the pinned scale can produce.
+		ImplicitModel const plane_model{
+			.preserve_scale = preserve_scale,
+			.preserve_plane = true,
+			.preserve_shear_y = true,
+			.preserve_rotation_z = request.locked_rotation_z.has_value(),
+			.preserve_origin = true,
+			.locked_rotation_z = request.locked_rotation_z};
+		add_refit(CandidateFamily::CurrentPlaneRefit, request.source.state,
+				  plane_model, drawn_target);
+		if (size_drifted)
+			add_refit(CandidateFamily::CurrentPlaneRefit, request.source.state,
+					  plane_model, affine_target);
+		// The zero-fax economy variant is meaningless under multi-line bounds:
+		// the lock would just restore the source's fax and duplicate the refit
+		// above, so it is only generated where the fax may actually move.
+		if (request.representation_policy
+			== PerspectiveRepresentationPolicy::Automatic
+			&& !multiline) {
+			// Tag-economy variant: zero the fax in the seed and freeze it, so
+			// the fit goes out to a fay-only representation when the quad
+			// allows one. Seeding the zero rather than hard-coding it keeps
+			// this a pure lock on slot 4.
+			auto seed = request.source.state;
+			seed.shear_x = 0.0;
+			ImplicitModel const fay_only_model{
+				.preserve_scale = preserve_scale,
+				.preserve_plane = true,
+				.preserve_shear_x = true,
+				.preserve_rotation_z = request.locked_rotation_z.has_value(),
+				.preserve_origin = true,
+				.locked_rotation_z = request.locked_rotation_z};
+			add_refit(CandidateFamily::CurrentPlaneRefit, seed,
+					  fay_only_model, drawn_target);
+			if (size_drifted)
+				add_refit(CandidateFamily::CurrentPlaneRefit, seed,
+						  fay_only_model, affine_target);
+		}
+	}
+
+	if (request.representation_policy
+		== PerspectiveRepresentationPolicy::Automatic) {
+		Vec2 const source_center {
+			(request.source.bounds.rectangle.left + request.source.bounds.rectangle.right) / 2.0,
+			(request.source.bounds.rectangle.top + request.source.bounds.rectangle.bottom) / 2.0,
+		};
+		// Projective families are size-blind by trying, not by rescaling:
+		// foreshortening trades apparent area even at pinned scale, so the
+		// drawn quad may be exactly reachable verbatim no matter how its area
+		// compares to the current one. When it is not (a much larger draw can
+		// never be grown to), the size-blind variant iterates: each fit
+		// reveals the area its angles actually produce, and the next pass
+		// re-aims at the drawn quad scaled to that area. A shape whose very
+		// perspectivity inflates its area therefore converges on the size it
+		// can really have, instead of on the flat-anchor normalization that
+		// ignores the swing. Whichever candidate reaches wins by the normal
+		// score order.
+		auto const generate_projective = [&](Quad const& target,
+											 Homography const& target_transform,
+											 bool size_blind) {
+			SolverInput projective_input = request;
+			projective_input.target = target;
+			// The drawn quad rescaled to the area a fitted state actually
+			// produces, or nullopt when size-blindness is off or the state
+			// cannot be probed. This is the next pass's aim: the size the
+			// shape's own angular content can have at the pinned scale.
+			auto const aim_for = [&](EvaluatedTransformState const& state)
+				-> std::optional<Quad> {
+				if (!size_blind)
+					return std::nullopt;
+				auto probe = request.source;
+				probe.state = state;
+				auto const probed = ForwardQuad(probe);
+				if (!probed)
+					return std::nullopt;
+				double const drawn_area = std::abs(SignedArea(drawn_target));
+				double const state_area = std::abs(SignedArea(probed.quad));
+				if (!(drawn_area > 0.0) || !std::isfinite(state_area) || !(state_area > 0.0))
+					return std::nullopt;
+				auto const rescaled = ScaleQuadAboutCenter(
+					drawn_target, std::sqrt(state_area / drawn_area));
+				if (!ValidateQuad(rescaled))
+					return std::nullopt;
+				return rescaled;
+			};
+			// Fit, probe, re-aim, fit again: stop when the area the state
+			// produces matches the area it was aimed at, because then the aim
+			// is self-consistent and the fit has nothing left to chase. The
+			// loop creeps geometrically toward that fixed point, and four
+			// passes get close enough that the leftover is buried in the snap
+			// tolerance that exists for exactly this kind of remainder.
+			auto const run_family = [&](CandidateFamily family, auto&& fit) {
+				std::optional<EvaluatedTransformState> state;
+				Quad aim = target;
+				Quad state_aim = aim;
+				for (int pass = 0; pass < 4; ++pass) {
+					auto const next_state = fit(aim);
+					if (!next_state)
+						break;
+					state = *next_state;
+					state_aim = aim;
+					auto const next_aim = aim_for(*state);
+					if (!next_aim)
+						break;
+					if (std::abs(SignedArea(*next_aim) - SignedArea(aim)) <= 1.0e-3 * std::abs(SignedArea(aim)))
+						break;
+					aim = *next_aim;
+				}
+				if (state) {
+					raw_candidates.push_back({.family = family,
+											  .state = *state,
+											  .effective_target = state_aim});
+				}
+			};
+			if (auto const local_affine = LocalAffine(target_transform, source_center)) {
+				if (request.locked_rotation_z) {
+					if (auto const initial = DecomposeLockedAffine(
+							*local_affine, request.source, *request.locked_rotation_z)) {
+						ImplicitModel const model{
+							.preserve_scale = preserve_scale,
+							.preserve_rotation_z = true,
+							.locked_rotation_z = request.locked_rotation_z};
+						run_family(CandidateFamily::ProjectiveImplicitLockedDoubleShear,
+								   [&](Quad const& aim) {
+									   SolverInput pass_input = request;
+									   pass_input.target = aim;
+									   return OptimizeImplicitOrigin(
+										   pass_input, *initial, model);
+								   });
+					}
+				}
+				else {
+					for (bool const use_fay : {false, true}) {
+						if (auto const initial = DecomposeAffine(
+								*local_affine, request.source, use_fay)) {
+							ImplicitModel model;
+							model.preserve_scale = preserve_scale;
+							// One shear axis per family, frozen at the decomposed
+							// seed's zero on the other axis.
+							if (use_fay)
+								model.preserve_shear_x = true;
+							else
+								model.preserve_shear_y = true;
+							run_family(use_fay ? CandidateFamily::ProjectiveImplicitFay
+											   : CandidateFamily::ProjectiveImplicitFax,
+									   [&](Quad const& aim) {
+										   SolverInput pass_input = request;
+										   pass_input.target = aim;
+										   return OptimizeImplicitOrigin(
+											   pass_input, *initial, model);
+									   });
 						}
 					}
 				}
 			}
-		}
-		if (auto const explicit_candidate = ExplicitOriginCandidate(input, projection_context))
-			raw_candidates.emplace_back(
-				CandidateFamily::ProjectiveExplicitOrigin, *explicit_candidate);
+			// The closed-form origin decomposition derives both shear axes
+			// from the target geometry and cannot carry the multi-line lock,
+			// so it only exists where the shear is free.
+			if (!multiline) {
+				run_family(CandidateFamily::ProjectiveExplicitOrigin,
+						   [&](Quad const& aim) {
+							   SolverInput pass_input = request;
+							   pass_input.target = aim;
+							   return ExplicitOriginCandidate(pass_input, projection_context);
+						   });
+			}
+		};
+		generate_projective(drawn_target, drawn_target_transform.value, false);
+		if (size_drifted)
+			generate_projective(
+				affine_target, affine_target_transform.value(), true);
 	}
 
 	std::optional<SolverCandidate> best;
-	for (auto const& [family, raw_state] : raw_candidates) {
-		auto state = raw_state;
-		if (input.scale_policy == PerspectiveScalePolicy::Preserve) {
-			if (!NearlyEqual(state.scale_x, input.source.state.scale_x)
-				|| !NearlyEqual(state.scale_y, input.source.state.scale_y))
-				continue;
-			state.scale_x = input.source.state.scale_x;
-			state.scale_y = input.source.state.scale_y;
+	Quad best_target {};
+	// Stage-at-death counters over the raw candidates, so a total failure can
+	// be attributed to the stage that owns the fix. Lock-filter deaths are
+	// model-stage deaths: the lock constrains the model the family fits, not
+	// the representation policy.
+	std::size_t policy_stage_deaths = 0;
+	std::size_t model_stage_deaths = 0;
+	std::size_t quantization_stage_deaths = 0;
+	std::size_t edge_anchor_stage_deaths = 0;
+	// Closest any candidate's digits got, so a total failure can quote the
+	// rounding error and its budget instead of only naming the option.
+	std::optional<NoFeasibleMetrics> quantization_metrics;
+	auto const consider = [](std::optional<NoFeasibleMetrics>& best,
+							 QuantizeOutcome const& outcome) {
+		if (!outcome.rejected_error)
+			return;
+		if (!best || *outcome.rejected_error < best->best_error) {
+			best = NoFeasibleMetrics{
+				.best_error = *outcome.rejected_error,
+				.budget = outcome.rejected_budget,
+			};
 		}
-		if (input.locked_rotation_z) {
-			if (!EquivalentRotation(state.rotation_z, *input.locked_rotation_z))
+	};
+	for (auto const& raw : raw_candidates) {
+		auto state = raw.state;
+		if (preserve_scale) {
+			// Pin rather than reject. Every family generated under this policy
+			// was already fitted at the source's scale, so this only clears
+			// optimizer drift in the last bits; rejecting on inequality is what
+			// used to reduce a scale lock to a translation-only solver.
+			state.scale_x = request.source.state.scale_x;
+			state.scale_y = request.source.state.scale_y;
+		}
+		if (request.source.bounds.multiline_text
+			&& (!NearlyEqual(state.shear_x, request.source.state.shear_x)
+				|| !NearlyEqual(state.shear_y, request.source.state.shear_y))) {
+			// The multi-line shear lock is part of the generation contract
+			// above; this filter is the backstop for the few families whose
+			// closed forms cannot carry it. Rejecting rather than restoring
+			// keeps the fitted geometry of the remaining parameters honest --
+			// overwriting a fitted shear after the fact would invalidate the
+			// pos/scale/rotation the fit chose for it.
+			++model_stage_deaths;
+			continue;
+		}
+		if (request.locked_rotation_z) {
+			if (!EquivalentRotation(state.rotation_z, *request.locked_rotation_z)) {
+				++model_stage_deaths;
 				continue;
-			state.rotation_z = *input.locked_rotation_z;
+			}
+			state.rotation_z = *request.locked_rotation_z;
 		}
 		if (!MatchesPerspectiveRepresentationPolicy(
-			state, input.representation_policy))
+				request.source.state, state, request.representation_policy)) {
+			++policy_stage_deaths;
 			continue;
-		auto candidate = QuantizeCandidate(input, target_transform.value, family, state);
-		if (!candidate)
+		}
+		// snap_error and total_error are measured against this candidate's own
+		// effective target: a plane refit that hit the drawn quad and an affine
+		// fit that hit the area-normalized one compete through the existing
+		// BetterScore ordering alone, with no new ranking rule.
+		auto const judging_transform =
+			MakeHomography(request.source.bounds.rectangle, raw.effective_target);
+		if (!judging_transform) {
+			++model_stage_deaths;
 			continue;
-		if (!best || BetterScore(candidate->score, best->score))
-			best = std::move(candidate);
+		}
+		// The anchored edge is a hard obligation measured against the drawn
+		// target, decided before quantization runs. A raw candidate whose
+		// model already misses the held edge is doomed for every decimal
+		// setting: counting its later digits death as quantization would send
+		// the user to raise Decimal Places for a conflict the digits can never
+		// resolve, so it dies on the anchor stage here instead and skips the
+		// quantization work entirely. The check runs again on the quantized
+		// state below, where rounding may still cost the last bit of budget.
+		std::pair<std::size_t, std::size_t> held {};
+		if (request.edge_anchor != PerspectiveEdgeAnchor::None) {
+			held = EdgeAnchorEndpoints(request.edge_anchor);
+			auto anchor_input = request.source;
+			anchor_input.state = state;
+			auto const raw_landed = ForwardQuad(anchor_input);
+			if (raw_landed
+				&& HeldEdgeError(
+					   raw_landed.quad, request.target, held,
+					   request.output_mapping)
+					> request.max_error) {
+				++edge_anchor_stage_deaths;
+				continue;
+			}
+		}
+		auto outcome = QuantizeCandidate(
+			request, judging_transform.value, raw.family, state);
+		if (!outcome.candidate) {
+			if (outcome.stage == QuantizeStage::QuantizationRejected) {
+				++quantization_stage_deaths;
+				consider(quantization_metrics, outcome);
+			}
+			else
+				++model_stage_deaths;
+			continue;
+		}
+		if (request.edge_anchor != PerspectiveEdgeAnchor::None) {
+			auto anchor_input = request.source;
+			anchor_input.state = outcome.candidate->state;
+			auto const landed = ForwardQuad(anchor_input);
+			if (!landed) {
+				++model_stage_deaths;
+				continue;
+			}
+			if (HeldEdgeError(
+					landed.quad, request.target, held, request.output_mapping)
+				> request.max_error) {
+				++edge_anchor_stage_deaths;
+				continue;
+			}
+		}
+		if (!best || BetterScore(outcome.candidate->score, best->score)) {
+			best = std::move(outcome.candidate);
+			best_target = raw.effective_target;
+		}
 	}
-	if (!best)
+	if (!best) {
+		auto const reason = ClassifyNoFeasibleReason(
+			policy_stage_deaths, model_stage_deaths, quantization_stage_deaths,
+			edge_anchor_stage_deaths);
+		// Only the digits stage carries a number worth quoting: models are
+		// never refused for distance anymore, and representation-policy deaths
+		// happen at the family filter before anything ran.
+		std::optional<NoFeasibleMetrics> metrics;
+		if (reason == NoFeasibleReason::Quantization)
+			metrics = quantization_metrics;
 		return {SolverError::NoFeasibleCandidate, GeometryError::None,
-			ForwardError::None, std::nullopt, raw_candidates.size()};
+				ForwardError::None, std::nullopt, raw_candidates.size(), drawn_target,
+				reason, metrics};
+	}
 	return {SolverError::None, GeometryError::None, ForwardError::None,
-		std::move(best), raw_candidates.size()};
+		std::move(best), raw_candidates.size(), best_target};
 }
 
 }

@@ -394,10 +394,12 @@ TEST(perspective_ass_bounds, has_deterministic_fallback_and_rejects_invalid_text
 	auto unavailable = Bounds(text, FailedTextExtents);
 	EXPECT_EQ(AssBoundsError::FontUnavailable, unavailable.error);
 	EXPECT_EQ(BoundsKind::FontUnavailable, unavailable.value.kind);
+	EXPECT_EQ("Arial", unavailable.font_name);
 
 	auto invalid = Bounds(text, InvalidTextExtents);
 	EXPECT_EQ(AssBoundsError::FontUnavailable, invalid.error);
 	EXPECT_EQ(BoundsKind::FontUnavailable, invalid.value.kind);
+	EXPECT_EQ("Arial", invalid.font_name);
 	EXPECT_STRNE("unknown Perspective ASS bounds error",
 		DescribeAssBoundsError(invalid.error));
 

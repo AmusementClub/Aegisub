@@ -233,7 +233,6 @@ std::optional<Vec2> TransformPoint(
 		return std::nullopt;
 	return result;
 }
-
 }
 
 char const* DescribeForwardError(ForwardError error) {
@@ -282,24 +281,34 @@ ForwardResult ForwardQuad(ForwardInput const& input) {
 	for (std::size_t index = 0; index < source_quad.size(); ++index) {
 		auto const transformed = TransformPoint(
 			source_quad[index], input.bounds, input.state, origin,
-				resolution.camera_distance, denominators[index]);
+			resolution.camera_distance, denominators[index]);
 		if (!transformed)
 			return {ForwardError::ProjectionDomain};
 		projected[index] = *transformed;
 	}
 
 	double min_denominator = denominators[0];
-	double max_denominator = denominators[0];
 	double denominator_scale = std::abs(denominators[0]);
 	for (double const denominator : denominators) {
 		min_denominator = std::min(min_denominator, denominator);
-		max_denominator = std::max(max_denominator, denominator);
 		denominator_scale = std::max(denominator_scale, std::abs(denominator));
 	}
 	double const denominator_epsilon =
 		128.0 * std::numeric_limits<double>::epsilon() * denominator_scale;
-	if (denominator_scale == 0.0
-		|| (min_denominator <= denominator_epsilon && max_denominator >= -denominator_epsilon))
+	// Projection domain: every corner must sit strictly in front of the
+	// camera, by a margin real against the configuration's own scale. One
+	// condition covers all the degenerate shapes: a straddle (corners on
+	// both sides of the camera), an all-behind set (which would project to
+	// a mirror image of the quad), and the all-zero degenerate (eps is 0
+	// and min is 0). libass itself never renders such geometry: its
+	// normalized frame (ass_render.c restore_transform) pins the nearest
+	// bbox corner at unit depth, so in-bbox corners cannot reach the
+	// camera, and ass_outline_transform_3d's 0.1 floor is a distant safety
+	// net for points beyond the bbox rather than a rendering rule for
+	// them. Following that floor here would flatten legitimate perspective
+	// gradients whose denominators merely sit close to the camera
+	// distance, so the honest answer is to reject instead.
+	if (min_denominator <= denominator_epsilon)
 		return {ForwardError::ProjectionDomain};
 
 	Quad const quad = {projected[0], projected[1], projected[2], projected[3]};
@@ -314,7 +323,7 @@ ForwardResult ForwardQuad(ForwardInput const& input) {
 				: ForwardError::SingularHomography,
 			homography.error, quad, Homography(), resolution.value, resolution.camera_distance};
 	return {ForwardError::None, GeometryError::None, quad, homography.value,
-		resolution.value, resolution.camera_distance};
+			resolution.value, resolution.camera_distance};
 }
 
 }

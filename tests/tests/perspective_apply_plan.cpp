@@ -278,7 +278,7 @@ TEST(perspective_apply_plan, apply_elides_geometry_inherited_from_event_style) {
 	EXPECT_LE(residual.max_error, 0.1);
 }
 
-TEST(perspective_apply_plan, scale_policy_requires_explicit_fit_for_scaled_targets) {
+TEST(perspective_apply_plan, scale_policy_preserve_ignores_size_and_fit_resizes) {
 	ApplyFixture fixture;
 	auto const capture = fixture.Capture();
 	ASSERT_TRUE(capture) << DescribePerspectivePlanError(capture.error);
@@ -288,13 +288,20 @@ TEST(perspective_apply_plan, scale_policy_requires_explicit_fit_for_scaled_targe
 	auto const scaled = ForwardQuad(scaled_input);
 	ASSERT_TRUE(scaled) << DescribeForwardError(scaled.error);
 
+	// Preserve says "do not change my font size", not "refuse a differently
+	// sized quad": the area-pinned families aim at the drawn quad rescaled to
+	// the area the source scale produces, so a uniformly larger target solves
+	// at the original size.
 	auto const preserve = BuildPerspectiveMutationPlan(
 		fixture.file, fixture.context, *capture.source, scaled.quad, 0.1,
 		nullptr, PerspectiveScalePolicy::Preserve);
-	EXPECT_EQ(PerspectivePlanError::SolverFailed, preserve.error);
-	EXPECT_EQ(SolverError::NoFeasibleCandidate, preserve.solver_error);
-	EXPECT_FALSE(preserve.plan);
+	ASSERT_TRUE(preserve) << DescribePerspectivePlanError(preserve.error);
+	EXPECT_DOUBLE_EQ(capture.source->state.transform.scale_x,
+					 preserve.plan->Candidate().state.scale_x);
+	EXPECT_DOUBLE_EQ(capture.source->state.transform.scale_y,
+					 preserve.plan->Candidate().state.scale_y);
 
+	// Fit remains the only way to actually resize the text.
 	auto const fit = BuildPerspectiveMutationPlan(
 		fixture.file, fixture.context, *capture.source, scaled.quad, 0.1,
 		nullptr, PerspectiveScalePolicy::Fit);
@@ -308,9 +315,17 @@ TEST(perspective_apply_plan, scale_policy_requires_explicit_fit_for_scaled_targe
 		fixture.file, fixture.context, *capture.source, scaled.quad, 0.1,
 		nullptr, PerspectiveScalePolicy::Preserve,
 		PerspectiveRepresentationPolicy::FaxFrzOnly);
-	EXPECT_EQ(PerspectivePlanError::SolverFailed, constrained_preserve.error);
-	EXPECT_EQ(SolverError::NoFeasibleCandidate,
-		constrained_preserve.solver_error);
+	// The restricted representation runs the same size-blind normalization;
+	// its narrower tag set still matches the shape at the source scale.
+	ASSERT_TRUE(constrained_preserve)
+		<< DescribePerspectivePlanError(constrained_preserve.error);
+	EXPECT_DOUBLE_EQ(capture.source->state.transform.scale_x,
+					 constrained_preserve.plan->Candidate().state.scale_x);
+	EXPECT_DOUBLE_EQ(capture.source->state.transform.scale_y,
+					 constrained_preserve.plan->Candidate().state.scale_y);
+	EXPECT_TRUE(MatchesPerspectiveRepresentationPolicy(
+		constrained_preserve.plan->Candidate().state,
+		PerspectiveRepresentationPolicy::FaxFrzOnly));
 
 	auto const constrained_fit = BuildPerspectiveMutationPlan(
 		fixture.file, fixture.context, *capture.source, scaled.quad, 0.1,
@@ -425,7 +440,7 @@ TEST(perspective_apply_plan, fax_frz_only_can_preserve_scale_for_affine_targets)
 	EXPECT_LE(residual.max_error, 0.1);
 }
 
-TEST(perspective_apply_plan, fax_frz_only_rejects_projective_target_without_mutation) {
+TEST(perspective_apply_plan, fax_frz_only_settles_for_the_nearest_affine_on_a_projective_target) {
 	ApplyFixture fixture;
 	auto const capture = fixture.Capture();
 	ASSERT_TRUE(capture) << DescribePerspectivePlanError(capture.error);
@@ -439,7 +454,6 @@ TEST(perspective_apply_plan, fax_frz_only_rejects_projective_target_without_muta
 	desired.state.rotation_z = 13.0;
 	auto const target = ForwardQuad(desired);
 	ASSERT_TRUE(target) << DescribeForwardError(target.error);
-	auto const original_text = fixture.line->Text.get();
 
 	auto const automatic = BuildPerspectiveMutationPlan(
 		fixture.file, fixture.context, *capture.source, target.quad);
@@ -453,10 +467,213 @@ TEST(perspective_apply_plan, fax_frz_only_rejects_projective_target_without_muta
 		fixture.file, fixture.context, *capture.source, target.quad, 0.1,
 		nullptr, PerspectiveScalePolicy::Fit,
 		PerspectiveRepresentationPolicy::FaxFrzOnly);
-	EXPECT_EQ(PerspectivePlanError::SolverFailed, constrained.error);
-	EXPECT_EQ(SolverError::NoFeasibleCandidate, constrained.solver_error);
-	EXPECT_FALSE(constrained.plan);
-	EXPECT_EQ(original_text, fixture.line->Text.get());
+	ASSERT_TRUE(constrained) << DescribePerspectivePlanError(constrained.error);
+	// The switch cannot express the projective target, so the plan settles
+	// for the nearest affine and reports the shortfall instead of refusing.
+	EXPECT_TRUE(constrained.plan->Snapped());
+	EXPECT_GT(constrained.plan->SnapError(), 0.1);
+	EXPECT_TRUE(MatchesPerspectiveRepresentationPolicy(
+		constrained.plan->Candidate().state,
+		PerspectiveRepresentationPolicy::FaxFrzOnly));
+}
+
+// The review's repro: a line carrying a high-precision restricted tag, a pure
+// translation, and a 4-decimal cap. Quantization used to round the kept
+// \frx12.123456 down to 12.12346 and the staged re-verification refused the
+// plan with StagedRepresentationMismatch; the kept tags now survive byte for
+// byte and the plan applies.
+TEST(perspective_apply_plan, fax_frz_only_keeps_a_high_precision_restricted_tag_byte_exact) {
+	ApplyFixture fixture;
+	fixture.line->Text =
+		R"({\an7\pos(100,100)\frx12.123456\p1}m 0 0 l 100 0 100 50 0 50)";
+	auto const capture = fixture.Capture();
+	ASSERT_TRUE(capture) << DescribePerspectivePlanError(capture.error);
+	ASSERT_DOUBLE_EQ(12.123456, capture.source->state.transform.rotation_x);
+
+	auto const target = Translate(CurrentQuad(capture), 20.0, 0.0);
+	auto const planned = BuildPerspectiveMutationPlan(
+		fixture.file, fixture.context, *capture.source, target, 0.1,
+		nullptr, PerspectiveScalePolicy::Fit,
+		PerspectiveRepresentationPolicy::FaxFrzOnly, 4);
+	ASSERT_TRUE(planned) << DescribePerspectivePlanError(planned.error);
+	EXPECT_DOUBLE_EQ(
+		capture.source->state.transform.rotation_x,
+		planned.plan->Candidate().state.rotation_x);
+	EXPECT_NE(std::string::npos,
+		planned.plan->ReplacementText().find(R"(\frx12.123456)"));
+
+	auto const executed = ExecutePerspectiveMutationPlan(
+		fixture.file, fixture.context, *planned.plan);
+	ASSERT_TRUE(executed) << DescribePerspectivePlanError(executed.error);
+	auto const recaptured = fixture.Capture();
+	ASSERT_TRUE(recaptured) << DescribePerspectivePlanError(recaptured.error);
+	EXPECT_DOUBLE_EQ(12.123456, recaptured.source->state.transform.rotation_x);
+}
+
+// The multiline companion to the frx case: a pure translation of a two-line
+// text with high-precision shear must keep both source tags byte for byte at
+// every decimal setting -- at zero decimals the old chain quantized the
+// frozen layout shear to zero and rejected the plan outright.
+TEST(perspective_apply_plan, multiline_shear_survives_a_zero_decimal_translation) {
+	ApplyFixture fixture;
+	fixture.line->Text =
+		R"({\an7\pos(100,100)\fax0.123456\fay0.234567}HHH\NHHH)";
+	auto const capture = fixture.Capture();
+	ASSERT_TRUE(capture) << DescribePerspectivePlanError(capture.error);
+	ASSERT_DOUBLE_EQ(0.123456, capture.source->state.transform.shear_x);
+	ASSERT_DOUBLE_EQ(0.234567, capture.source->state.transform.shear_y);
+
+	auto const target = Translate(CurrentQuad(capture), 20.0, 0.0);
+	auto const planned = BuildPerspectiveMutationPlan(
+		fixture.file, fixture.context, *capture.source, target, 0.1,
+		nullptr, PerspectiveScalePolicy::Fit,
+		PerspectiveRepresentationPolicy::Automatic, 0);
+	ASSERT_TRUE(planned) << DescribePerspectivePlanError(planned.error);
+	EXPECT_DOUBLE_EQ(0.123456, planned.plan->Candidate().state.shear_x);
+	EXPECT_DOUBLE_EQ(0.234567, planned.plan->Candidate().state.shear_y);
+	EXPECT_NE(std::string::npos,
+		planned.plan->ReplacementText().find(R"(\fax0.123456\fay0.234567)"));
+
+	auto const executed = ExecutePerspectiveMutationPlan(
+		fixture.file, fixture.context, *planned.plan);
+	ASSERT_TRUE(executed) << DescribePerspectivePlanError(executed.error);
+	auto const recaptured = fixture.Capture();
+	ASSERT_TRUE(recaptured) << DescribePerspectivePlanError(recaptured.error);
+	EXPECT_DOUBLE_EQ(0.123456, recaptured.source->state.transform.shear_x);
+	EXPECT_DOUBLE_EQ(0.234567, recaptured.source->state.transform.shear_y);
+}
+
+TEST(perspective_apply_plan, translation_preserves_sheared_plane_geometry) {
+	for (auto const *tags : {R"(\fax0.2\frx30)",
+							 R"(\fax0.2\fay0.1\frx30\fry-15)"}) {
+		SCOPED_TRACE(tags);
+		ApplyFixture fixture;
+		fixture.line->Text = std::string(R"({\an7\pos(100,100))") + tags + R"(\p1}m 0 0 l 200 0 200 80 0 80)";
+		auto const capture = fixture.Capture();
+		ASSERT_TRUE(capture) << DescribePerspectivePlanError(capture.error);
+		auto const target = Translate(CurrentQuad(capture), 20.0, 0.0);
+		auto const planned = BuildPerspectiveMutationPlan(
+			fixture.file, fixture.context, *capture.source, target, 0.1);
+		ASSERT_TRUE(planned) << DescribePerspectivePlanError(planned.error);
+		EXPECT_FALSE(planned.plan->Snapped());
+
+		auto const executed = ExecutePerspectiveMutationPlan(
+			fixture.file, fixture.context, *planned.plan);
+		ASSERT_TRUE(executed) << DescribePerspectivePlanError(executed.error);
+		auto const recaptured = fixture.Capture();
+		ASSERT_TRUE(recaptured) << DescribePerspectivePlanError(recaptured.error);
+		auto const actual = CurrentQuad(recaptured);
+		for (std::size_t index = 0; index < actual.size(); ++index) {
+			EXPECT_LE(std::hypot(
+						  (actual[index].x - target[index].x) * fixture.context.output_mapping.scale_x,
+						  (actual[index].y - target[index].y) * fixture.context.output_mapping.scale_y),
+					  0.1);
+		}
+	}
+}
+
+TEST(perspective_apply_plan, multiline_shear_allows_new_plane_rotations) {
+	for (auto const tilt : {Vec2{.x = 30.0, .y = 0.0}, Vec2{.x = 0.0, .y = -20.0}}) {
+		SCOPED_TRACE(FormatAssPoint(tilt, 1));
+		ApplyFixture fixture;
+		fixture.line->Text = R"({\an7\pos(100,100)\fax0.2\fay0.1}HHH\NHHH)";
+		auto const capture = CapturePerspectiveSource(
+			fixture.file, *fixture.line, fixture.context, &FixedTextExtents);
+		ASSERT_TRUE(capture) << DescribePerspectivePlanError(capture.error);
+		auto desired = capture.source->forward_input;
+		desired.state.rotation_x = tilt.x;
+		desired.state.rotation_y = tilt.y;
+		auto const target = ForwardQuad(desired);
+		ASSERT_TRUE(target);
+		auto const planned = BuildPerspectiveMutationPlan(
+			fixture.file, fixture.context, *capture.source, target.quad, 0.1,
+			&FixedTextExtents);
+		ASSERT_TRUE(planned) << DescribePerspectivePlanError(planned.error);
+		EXPECT_FALSE(planned.plan->Snapped());
+
+		auto const executed = ExecutePerspectiveMutationPlan(
+			fixture.file, fixture.context, *planned.plan);
+		ASSERT_TRUE(executed) << DescribePerspectivePlanError(executed.error);
+		auto const recaptured = CapturePerspectiveSource(
+			fixture.file, *fixture.line, fixture.context, &FixedTextExtents);
+		ASSERT_TRUE(recaptured) << DescribePerspectivePlanError(recaptured.error);
+		EXPECT_DOUBLE_EQ(0.2, recaptured.source->state.transform.shear_x);
+		EXPECT_DOUBLE_EQ(0.1, recaptured.source->state.transform.shear_y);
+		auto const actual = CurrentQuad(recaptured);
+		for (std::size_t index = 0; index < actual.size(); ++index) {
+			EXPECT_LE(std::hypot(
+						  (actual[index].x - target.quad[index].x) * fixture.context.output_mapping.scale_x,
+						  (actual[index].y - target.quad[index].y) * fixture.context.output_mapping.scale_y),
+					  0.1);
+		}
+	}
+}
+
+TEST(perspective_apply_plan, a_no_change_plan_keeps_the_solver_reason_empty) {
+	ApplyFixture fixture;
+	auto const capture = fixture.Capture();
+	ASSERT_TRUE(capture) << DescribePerspectivePlanError(capture.error);
+	auto desired = capture.source->forward_input;
+	desired.state.position = {360.0, 250.0};
+	desired.state.scale_x = 118.0;
+	desired.state.scale_y = 92.0;
+	desired.state.shear_x = 0.16;
+	desired.state.rotation_x = 21.0;
+	desired.state.rotation_y = -17.0;
+	desired.state.rotation_z = 13.0;
+	auto const target = ForwardQuad(desired);
+	ASSERT_TRUE(target) << DescribeForwardError(target.error);
+
+	// A plan that fails before the solver runs keeps the reason empty: a
+	// no-change target must not inherit a previous solve's classification.
+	auto const no_change = BuildPerspectiveMutationPlan(
+		fixture.file, fixture.context, *capture.source, CurrentQuad(capture));
+	EXPECT_EQ(PerspectivePlanError::NoChange, no_change.error);
+	EXPECT_EQ(NoFeasibleReason::None, no_change.solver_no_feasible_reason);
+}
+
+// The UI draws ResultQuad() as the reachable shape and reports SnapError() as
+// the shortfall, so both have to be true of the same plan: a target the
+// restricted subset cannot express must still produce a plan, and that plan's
+// own geometry must be where the emitted tags actually land.
+TEST(perspective_apply_plan, a_dragged_corner_reports_the_reachable_quad_it_settled_for) {
+	ApplyFixture fixture;
+	auto const capture = fixture.Capture();
+	ASSERT_TRUE(capture) << DescribePerspectivePlanError(capture.error);
+	// The realistic gesture: a quad that was a parallelogram until one corner
+	// was dragged a few pixels off it. That tiny twist leaves the affine
+	// reachable set, so the plan settles for the nearest affine and reports
+	// the shortfall instead of refusing the drag.
+	auto target = CurrentQuad(capture);
+	target[2].x += 4.0;
+	target[2].y += 2.0;
+
+	auto const snapped = BuildPerspectiveMutationPlan(
+		fixture.file, fixture.context, *capture.source, target, 0.1,
+		nullptr, PerspectiveScalePolicy::Fit,
+		PerspectiveRepresentationPolicy::FaxFrzOnly,
+		kDefaultPerspectiveDecimalPlaces);
+	ASSERT_TRUE(snapped) << DescribePerspectivePlanError(snapped.error);
+	EXPECT_TRUE(snapped.plan->Snapped());
+	EXPECT_GT(snapped.plan->SnapError(), 0.0);
+	// The twist is a couple of script pixels; the nearest affine must land
+	// within that neighbourhood rather than somewhere unrelated.
+	EXPECT_LE(snapped.plan->SnapError(), 8.0);
+
+	// ResultQuad is re-evaluated from the staged line, so it must sit where the
+	// solver said it would rather than on the unreachable target.
+	double result_to_target = 0.0;
+	auto const& result = snapped.plan->ResultQuad();
+	for (std::size_t index = 0; index < result.size(); ++index) {
+		result_to_target = std::max(result_to_target, std::hypot(
+			result[index].x - target[index].x,
+			result[index].y - target[index].y));
+	}
+	EXPECT_GT(result_to_target, 0.0);
+	// MaxError bounds total deviation from the drawn quad in output pixels; the
+	// per-corner distance here is in script pixels, so this is a sanity bound,
+	// not an identity.
+	EXPECT_LE(result_to_target, 8.0);
 }
 
 TEST(perspective_apply_plan, generated_tags_honor_maximum_decimals) {
@@ -506,6 +723,76 @@ TEST(perspective_apply_plan, preserve_scale_round_trips_inline_precision) {
 	EXPECT_DOUBLE_EQ(
 		capture.source->state.transform.scale_y,
 		recaptured.source->state.transform.scale_y);
+}
+
+// A scale lock holds scale exactly, at every decimal-places setting, because
+// Preserve never re-serializes \fscx/\fscy -- it copies the source tags through
+// untouched. Decimal places bound the tags this tool *writes*, so they must not
+// be able to perturb a scale it was told to leave alone. Locks the whole chain:
+// solver freeze, MakeRewriteDelta's exact check, and verbatim tag copying.
+TEST(perspective_apply_plan, preserve_scale_is_exact_at_every_decimal_setting) {
+	ApplyFixture fixture;
+	fixture.line->Text =
+		"{\\an7\\pos(100,100)\\fscx123.456789\\fscy87.654321\\p1}"
+		"m 0 0 l 100 0 100 50 0 50";
+	auto const capture = fixture.Capture();
+	ASSERT_TRUE(capture) << DescribePerspectivePlanError(capture.error);
+
+	// A pure translation, so scale is the only thing a Preserve policy has to
+	// hold; any rejection here is about the emitted digits and nothing else.
+	auto const target = Translate(CurrentQuad(capture), 15.0, -8.0);
+	for (int decimals = kMinPerspectiveDecimalPlaces;
+		decimals <= kMaxPerspectiveDecimalPlaces; ++decimals) {
+		auto const planned = BuildPerspectiveMutationPlan(
+			fixture.file, fixture.context, *capture.source, target, 0.1,
+			nullptr, PerspectiveScalePolicy::Preserve,
+			PerspectiveRepresentationPolicy::Automatic, decimals);
+		ASSERT_TRUE(planned)
+			<< "decimals=" << decimals << " "
+			<< DescribePerspectivePlanError(planned.error);
+		EXPECT_NE(PerspectivePlanError::StagedScaleMismatch, planned.error)
+			<< "decimals=" << decimals;
+
+		// Bit-exact, not within a rounding step: the full source precision has
+		// to survive even when the setting allows fewer digits than it needs.
+		auto const& state = planned.plan->Candidate().state;
+		EXPECT_DOUBLE_EQ(
+			capture.source->state.transform.scale_x, state.scale_x)
+			<< "decimals=" << decimals;
+		EXPECT_DOUBLE_EQ(
+			capture.source->state.transform.scale_y, state.scale_y)
+			<< "decimals=" << decimals;
+		// The original six-decimal tags, not a re-serialized copy of them.
+		EXPECT_NE(std::string::npos,
+			planned.plan->ReplacementText().find("\\fscx123.456789"))
+			<< "decimals=" << decimals;
+		EXPECT_NE(std::string::npos,
+			planned.plan->ReplacementText().find("\\fscy87.654321"))
+			<< "decimals=" << decimals;
+
+		// A fresh fixture, not a copy: ApplyFixture owns an AssFile and a raw
+		// line pointer into it, so copying would leave the pointer dangling.
+		ApplyFixture probe;
+		probe.line->Text = fixture.line->Text.get();
+		auto const probe_capture = probe.Capture();
+		ASSERT_TRUE(probe_capture)
+			<< DescribePerspectivePlanError(probe_capture.error);
+		auto const probe_plan = BuildPerspectiveMutationPlan(
+			probe.file, probe.context, *probe_capture.source, target, 0.1,
+			nullptr, PerspectiveScalePolicy::Preserve,
+			PerspectiveRepresentationPolicy::Automatic, decimals);
+		ASSERT_TRUE(probe_plan) << DescribePerspectivePlanError(probe_plan.error);
+		ASSERT_TRUE(ExecutePerspectiveMutationPlan(
+			probe.file, probe.context, *probe_plan.plan));
+		auto const applied = probe.Capture();
+		ASSERT_TRUE(applied) << DescribePerspectivePlanError(applied.error);
+		EXPECT_DOUBLE_EQ(
+			capture.source->state.transform.scale_x,
+			applied.source->state.transform.scale_x) << "decimals=" << decimals;
+		EXPECT_DOUBLE_EQ(
+			capture.source->state.transform.scale_y,
+			applied.source->state.transform.scale_y) << "decimals=" << decimals;
+	}
 }
 
 TEST(perspective_apply_plan, vertical_font_keeps_semantic_quarter_turn_on_apply) {
@@ -1183,4 +1470,110 @@ TEST(perspective_apply_plan, capture_rejects_nonpositive_line_identity) {
 	auto const capture = fixture.Capture();
 	EXPECT_EQ(PerspectivePlanError::InvalidInput, capture.error);
 	EXPECT_FALSE(capture.source);
+}
+
+// The end-to-end version of a_scale_lock_does_not_charge_for_size_drift. The
+// staged residual is measured against the quad the solver aimed at, so a plan
+// that correctly ignored the drawn size is not then rejected for ignoring it.
+// Before the effective-target plumbing this returned ResidualExceeded.
+TEST(perspective_apply_plan, a_locked_scale_accepts_a_hand_sized_target) {
+	ApplyFixture fixture;
+	fixture.line->Text =
+		"{\\an7\\pos(100,100)\\frz6\\fax0.1\\p1}m 0 0 l 100 0 100 50 0 50";
+	auto const capture = fixture.Capture();
+	ASSERT_TRUE(capture) << DescribePerspectivePlanError(capture.error);
+
+	// Moved and enlarged 4%, which is what four hand-placed corners produce.
+	// On this 100x50 drawing that is 8 output pixels in x, well past the 4.0
+	// The staged re-derivation must accept the shortfall the solver predicted
+	// for its own snapped candidate instead of re-charging it as an error.
+	auto const current = CurrentQuad(capture);
+	Vec2 centre;
+	for (auto const& point : current)
+		centre = centre + point / 4.0;
+	Quad target = current;
+	for (auto& point : target) {
+		point.x = centre.x + (point.x - centre.x) * 1.04;
+		point.y = centre.y + (point.y - centre.y) * 1.04;
+	}
+	target = Translate(target, 12.0, -7.0);
+
+	auto const planned = BuildPerspectiveMutationPlan(
+		fixture.file, fixture.context, *capture.source, target, 0.1, nullptr,
+		PerspectiveScalePolicy::Preserve,
+		PerspectiveRepresentationPolicy::FaxFrzOnly,
+		kDefaultPerspectiveDecimalPlaces);
+	ASSERT_TRUE(planned) << DescribePerspectivePlanError(planned.error);
+	EXPECT_NE(PerspectivePlanError::ResidualExceeded, planned.error);
+
+	// Scale really was held, so the acceptance did not come from quietly
+	// resizing the text after all.
+	EXPECT_DOUBLE_EQ(capture.source->state.transform.scale_x,
+		planned.plan->Candidate().state.scale_x);
+	EXPECT_DOUBLE_EQ(capture.source->state.transform.scale_y,
+		planned.plan->Candidate().state.scale_y);
+
+	// And the result lands at the drawn shape and centre, 4% short in size --
+	// which is the honest outcome, not a silent refusal.
+	auto const& result = planned.plan->ResultQuad();
+	Vec2 result_centre;
+	for (auto const& point : result)
+		result_centre = result_centre + point / 4.0;
+	EXPECT_NEAR(centre.x + 12.0, result_centre.x, 1.0);
+	EXPECT_NEAR(centre.y - 7.0, result_centre.y, 1.0);
+}
+
+// End-to-end version of the fay-preserving refit: a line that already declares
+// \fay, dragged in plane under Preserve + FaxFrzOnly, must come out of Apply
+// with its \fay value character-identical to the source's. The fax closed forms
+// could only represent this target by zeroing the \fay, which the rewrite would
+// then elide -- losing a tag the user wrote for a drag that never asked for it.
+TEST(perspective_apply_plan, fax_frz_only_rewrites_a_fay_line_without_touching_the_fay) {
+	ApplyFixture fixture;
+	fixture.line->Text =
+		"{\\an7\\pos(100,100)\\fay0.07\\p1}m 0 0 l 100 0 100 50 0 50";
+	auto const capture = fixture.Capture();
+	ASSERT_TRUE(capture) << DescribePerspectivePlanError(capture.error);
+
+	// In-plane drag: moved, rotated, and uniformly enlarged. The uniform 5% is
+	// size drift, which the scale lock drops by normalizing the affine target;
+	// the remaining shape change is a move and a rotation the refit can hit
+	// exactly at the source scale.
+	auto desired = capture.source->forward_input;
+	desired.state.position = {150.0, 140.0};
+	desired.state.scale_x = 105.0;
+	desired.state.scale_y = 105.0;
+	desired.state.rotation_z = 6.0;
+	auto const target = ForwardQuad(desired);
+	ASSERT_TRUE(target) << DescribeForwardError(target.error);
+
+	auto const planned = BuildPerspectiveMutationPlan(
+		fixture.file, fixture.context, *capture.source, target.quad, 0.1,
+		nullptr, PerspectiveScalePolicy::Preserve,
+		PerspectiveRepresentationPolicy::FaxFrzOnly);
+	ASSERT_TRUE(planned) << DescribePerspectivePlanError(planned.error);
+	ASSERT_TRUE(planned.plan);
+	EXPECT_EQ(CandidateFamily::AffineFay, planned.plan->Family());
+	EXPECT_DOUBLE_EQ(0.07, planned.plan->Candidate().state.shear_y);
+	EXPECT_DOUBLE_EQ(capture.source->state.transform.scale_x,
+		planned.plan->Candidate().state.scale_x);
+	EXPECT_DOUBLE_EQ(capture.source->state.transform.scale_y,
+		planned.plan->Candidate().state.scale_y);
+	// Source-relative, not absolute: the candidate keeps the line's own \fay,
+	// which the absolute subset check would reject outright.
+	EXPECT_TRUE(MatchesPerspectiveRepresentationPolicy(
+		capture.source->state.transform, planned.plan->Candidate().state,
+		PerspectiveRepresentationPolicy::FaxFrzOnly));
+
+	// The rewritten \fay is the source value re-emitted character for character.
+	auto const& replacement = planned.plan->ReplacementText();
+	EXPECT_NE(std::string::npos, replacement.find("\\fay0.07")) << replacement;
+
+	auto const executed = ExecutePerspectiveMutationPlan(
+		fixture.file, fixture.context, *planned.plan);
+	ASSERT_TRUE(executed) << DescribePerspectivePlanError(executed.error);
+	EXPECT_NE(std::string::npos, fixture.line->Text.get().find("\\fay0.07"));
+	auto const recaptured = fixture.Capture();
+	ASSERT_TRUE(recaptured) << DescribePerspectivePlanError(recaptured.error);
+	EXPECT_DOUBLE_EQ(0.07, recaptured.source->state.transform.shear_y);
 }

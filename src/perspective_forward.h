@@ -56,6 +56,13 @@ struct BaseBounds {
 	// the solver always adds the rectangle, edge midpoints, center, outline and
 	// shadow samples independently.
 	std::vector<Vec2> residual_samples;
+	// libass shears text per glyph line: every line's own baseline is the
+	// shear reference and its layout offset is never sheared, so the forward
+	// model's global x' = x + fax*y over this rectangle is only faithful for
+	// a single line. Text bounds set this when the line breaks explicitly;
+	// the solver freezes both shear axes for such bounds instead of reporting
+	// a sheared target as exactly reachable.
+	bool multiline_text = false;
 };
 
 [[nodiscard]] Vec2 ResolveBoundsAlignmentShift(

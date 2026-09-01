@@ -13,6 +13,19 @@ enum class PerspectiveQuadHandle {
 	BottomRight,
 	BottomLeft,
 	Center,
+	EdgeTop,    ///< midpoint of the TopLeft-TopRight edge
+	EdgeRight,  ///< midpoint of the TopRight-BottomRight edge
+	EdgeBottom, ///< midpoint of the BottomRight-BottomLeft edge
+	EdgeLeft,   ///< midpoint of the BottomLeft-TopLeft edge
+};
+
+// Modifier semantics applied to an in-progress quad edit gesture. Both may be
+// combined; center drags are unaffected by symmetric mirroring.
+struct PerspectiveQuadGestureModifiers {
+	/// Clamp the drag delta to its dominant axis.
+	bool axis_locked = false;
+	/// Mirror the drag delta onto the opposite corner or edge.
+	bool symmetric = false;
 };
 
 enum class PerspectiveQuadEditError {
@@ -39,7 +52,8 @@ enum class PerspectiveQuadEditError {
 	Quad const& quad);
 
 // Both the quad and point must be expressed in the same coordinate space.
-// Corners have priority over the center and retain TL/TR/BR/BL index order.
+// Corners have priority over edges, edges over the center; corners retain
+// TL/TR/BR/BL index order.
 [[nodiscard]] PerspectiveQuadHandle HitTestPerspectiveQuad(
 	Quad const& quad,
 	Vec2 point,
@@ -51,6 +65,8 @@ enum class PerspectiveQuadEditError {
 // nearest cardinal direction. Exact diagonal ties prefer the horizontal axis.
 [[nodiscard]] Quad PerspectiveQuadFromOppositeCorners(
 	Vec2 first, Vec2 second, std::optional<Vec2> first_edge_direction);
+// True when the drag escaped the click tolerance on either axis, so flat or
+// narrow quads are not mistaken for mis-clicks.
 [[nodiscard]] bool IsPerspectiveQuadCreationDrag(
 	Vec2 first_canvas,
 	Vec2 second_canvas,
@@ -80,6 +96,8 @@ public:
 		std::optional<Quad> current,
 		bool is_editable);
 	[[nodiscard]] PerspectiveQuadEditError ReplaceTarget(Quad const& replacement);
+	// Discards an editable target while keeping the binding and current quad.
+	[[nodiscard]] PerspectiveQuadEditError DropTarget();
 	void Clear();
 
 	[[nodiscard]] bool IsBound() const noexcept { return bound; }
@@ -118,7 +136,11 @@ public:
 	[[nodiscard]] PerspectiveQuadEditError BeginGesture(
 		PerspectiveQuadHandle handle,
 		Vec2 point);
-	[[nodiscard]] PerspectiveQuadEditError UpdateGesture(Vec2 point);
+	// Modifiers are read per update so keys can be toggled mid-gesture; the
+	// delta is always recomputed from the gesture start, never accumulated.
+	[[nodiscard]] PerspectiveQuadEditError UpdateGesture(
+		Vec2 point,
+		PerspectiveQuadGestureModifiers modifiers = {});
 	[[nodiscard]] PerspectiveQuadEditError FinishGesture();
 	[[nodiscard]] PerspectiveQuadEditError CancelGesture();
 	[[nodiscard]] PerspectiveQuadEditError UseCurrent();

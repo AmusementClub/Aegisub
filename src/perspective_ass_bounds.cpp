@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace perspective {
@@ -101,6 +102,14 @@ AssBoundsResult Unsupported(AssBoundsError error, BoundsKind kind) {
 	return result;
 }
 
+AssBoundsResult UnsupportedFont(std::string font) {
+	AssBoundsResult result;
+	result.error = AssBoundsError::FontUnavailable;
+	result.value.kind = BoundsKind::FontUnavailable;
+	result.font_name = std::move(font);
+	return result;
+}
+
 std::vector<std::string> SplitTextLines(std::string const& text, int wrap_style) {
 	std::vector<std::string> lines(1);
 	for (std::size_t index = 0; index < text.size(); ++index) {
@@ -155,11 +164,12 @@ AssBoundsResult EvaluateTextBounds(
 		|| style.fontsize > MaxAbsCoordinate
 		|| !std::isfinite(style.spacing)
 		|| std::abs(style.spacing) > MaxAbsCoordinate)
-		return Unsupported(AssBoundsError::FontUnavailable, BoundsKind::FontUnavailable);
+		return UnsupportedFont(style.font);
 
 	double width = 0.0;
 	double height = 0.0;
-	for (auto const& line : SplitTextLines(text, text_style.wrap_style)) {
+	auto const lines = SplitTextLines(text, text_style.wrap_style);
+	for (auto const& line : lines) {
 		// CalculateTextExtents historically assumes a non-empty string. Measure
 		// one space for line height, but keep a genuinely empty line at zero width.
 		std::string const measured_text = line.empty() ? " " : line;
@@ -168,8 +178,8 @@ AssBoundsResult EvaluateTextBounds(
 		double descent = 0.0;
 		double external_leading = 0.0;
 		if (provider && !provider(&style, measured_text, line_width, line_height,
-			descent, external_leading))
-			return Unsupported(AssBoundsError::FontUnavailable, BoundsKind::FontUnavailable);
+								  descent, external_leading))
+			return UnsupportedFont(style.font);
 		if (!provider) {
 			auto const characters = static_cast<double>(agi::CharacterCount(line, 0));
 			line_width = characters * (style.fontsize + style.spacing);
@@ -181,7 +191,7 @@ AssBoundsResult EvaluateTextBounds(
 			line_width = 0.0;
 		if (!ValidMetric(line_width) || !ValidMetric(line_height)
 			|| !ValidMetric(descent) || !ValidMetric(external_leading))
-			return Unsupported(AssBoundsError::FontUnavailable, BoundsKind::FontUnavailable);
+			return UnsupportedFont(style.font);
 		if (line_width > 0.0 && text_style.wrap_style != 2) {
 			double const rendered_width = line_width
 				* std::abs(state.transform.scale_x) / 100.0;
@@ -194,7 +204,7 @@ AssBoundsResult EvaluateTextBounds(
 		width = std::max(width, line_width);
 		height += line_height;
 		if (!ValidMetric(height))
-			return Unsupported(AssBoundsError::FontUnavailable, BoundsKind::FontUnavailable);
+			return UnsupportedFont(style.font);
 	}
 
 	if (width <= 0.0 || height <= 0.0)
@@ -207,6 +217,10 @@ AssBoundsResult EvaluateTextBounds(
 	AssBoundsResult result;
 	result.value.rectangle = bounds;
 	result.value.kind = BoundsKind::Text;
+	// Explicit line breaks make the line multi-line, and only automatic
+	// wrapping could have produced more lines than these (it is rejected
+	// above), so the line count here is the rendered line count.
+	result.value.multiline_text = lines.size() > 1;
 	return result;
 }
 

@@ -448,3 +448,189 @@ TEST(perspective_ass_state, rewrite_writes_line_wide_bundle_once_and_replays_onl
 	ASSERT_TRUE(bare_reset);
 	EXPECT_EQ("{\\r\\fscx120}text", bare_reset.text);
 }
+
+TEST(perspective_ass_state, spaced_override_spellings_capture_like_libass) {
+	// libass skips spaces after the tag backslash (ass_parse.c), so these
+	// spellings are real tags; the prototype-table classifier alone called
+	// them junk and the capture silently missed every one of them.
+	AssFile file;
+	AddStyle(file, "Default");
+
+	auto spaced_frz = Evaluate(file, MakeLine(R"({\ frz30})"));
+	ASSERT_TRUE(spaced_frz) << DescribeAssStateError(spaced_frz.error);
+	EXPECT_EQ(AssApplyBlocker::None, spaced_frz.apply_blocker);
+	EXPECT_DOUBLE_EQ(30.0, spaced_frz.value.transform.rotation_z);
+
+	auto spaced_move = Evaluate(file, MakeLine(R"({\ move(0,0,100,0)})"));
+	ASSERT_TRUE(spaced_move) << DescribeAssStateError(spaced_move.error);
+	EXPECT_EQ(AssApplyBlocker::UnsupportedMove, spaced_move.apply_blocker);
+
+	auto spaced_reset = Evaluate(file, MakeLine(R"({\r Alt\frz30})"));
+	ASSERT_TRUE(spaced_reset) << DescribeAssStateError(spaced_reset.error);
+	EXPECT_EQ(AssApplyBlocker::UnsupportedNamedReset, spaced_reset.apply_blocker);
+
+	auto spaced_animation = Evaluate(file, MakeLine(R"({\ t(0,100,\frz30)})"));
+	ASSERT_TRUE(spaced_animation) << DescribeAssStateError(spaced_animation.error);
+	EXPECT_EQ(AssApplyBlocker::UnsupportedGeometryAnimation,
+			  spaced_animation.apply_blocker);
+}
+
+TEST(perspective_ass_state, rewrite_rejects_spaced_move_and_removes_spaced_frz) {
+	EvaluatedTransformState source;
+	source.event_time_ms = 2000;
+	source.position = {960.0, 540.0};
+	source.rotation_z = 30.0; // captured from "\ frz30"
+	auto target = source;
+	target.rotation_z = 20.0;
+	auto const candidate = Candidate(target);
+
+	// The rewrite side classifies the spaced \move too: it must reject the
+	// line instead of rewriting tags libass renders differently.
+	auto move_rewrite = RewritePerspectiveTags(
+		R"({\ move(0,0,100,0)\pos(5,5)})", source, source, candidate);
+	EXPECT_EQ(RewriteError::UnsupportedMove, move_rewrite.error);
+
+	// And the spaced \frz is removed with the rest of the family before
+	// the composed tag is emitted, not left behind to win last-wins.
+	auto const result = RewritePerspectiveTags(
+		R"({\ frz30\c&H112233&}A)", source, source, candidate);
+	ASSERT_TRUE(result) << DescribeRewriteError(result.error);
+	EXPECT_TRUE(result.changed);
+	EXPECT_EQ(R"({\frz20\c&H112233&}A)", result.text);
+}
+
+// A space after the backslash inside a \t argument region is a nested tag to
+// libass (ass_parse.c skips it), so "\t(0,4000,\ frz30)" really animates the
+// line. The nested body used to be parsed by the prototype table alone, which
+// is space-blind: the evaluator read frz = 0 and no Apply blocker fired, and
+// the planner happily judged the animated line statically reachable.
+TEST(perspective_ass_state, spaced_nested_animation_tags_evaluate_and_block_apply) {
+	AssFile file;
+	AddStyle(file, "Default");
+
+	auto const animated = Evaluate(file, MakeLine(R"({\t(0,1000,\ frz30)})"), 1500);
+	ASSERT_TRUE(animated) << DescribeAssStateError(animated.error);
+	EXPECT_EQ(
+		AssApplyBlocker::UnsupportedGeometryAnimation,
+		animated.apply_blocker);
+	EXPECT_FALSE(animated.CanApply());
+	EXPECT_DOUBLE_EQ(15.0, animated.value.transform.rotation_z);
+
+	// The scanner only ends a tag name at '(' or '\', so the bytes between
+	// the name and its argument region ride along with it; libass matches
+	// the tag by prefix and renders every one of these like "\t(...)".
+	auto const spaced_paren = Evaluate(
+		file, MakeLine(R"({\t (0,1000,\ frz30)})"), 1500);
+	ASSERT_TRUE(spaced_paren) << DescribeAssStateError(spaced_paren.error);
+	EXPECT_EQ(
+		AssApplyBlocker::UnsupportedGeometryAnimation,
+		spaced_paren.apply_blocker);
+	EXPECT_FALSE(spaced_paren.CanApply());
+	EXPECT_DOUBLE_EQ(15.0, spaced_paren.value.transform.rotation_z);
+
+	auto const prefixed = Evaluate(
+		file, MakeLine(R"({\t1(0,1000,\frz30)})"), 1500);
+	ASSERT_TRUE(prefixed) << DescribeAssStateError(prefixed.error);
+	EXPECT_EQ(
+		AssApplyBlocker::UnsupportedGeometryAnimation,
+		prefixed.apply_blocker);
+	EXPECT_DOUBLE_EQ(15.0, prefixed.value.transform.rotation_z);
+
+	auto const accelerated = Evaluate(
+		file, MakeLine(R"({\t(0,1000,2,\ frz30)})"), 1500);
+	ASSERT_TRUE(accelerated) << DescribeAssStateError(accelerated.error);
+	EXPECT_EQ(
+		AssApplyBlocker::UnsupportedGeometryAnimation,
+		accelerated.apply_blocker);
+	EXPECT_DOUBLE_EQ(7.5, accelerated.value.transform.rotation_z);
+}
+
+TEST(perspective_ass_state, rewrite_rejects_spaced_nested_animation) {
+	EvaluatedTransformState source;
+	source.event_time_ms = 2000;
+	source.position = {960.0, 540.0};
+	auto const result = RewritePerspectiveTags(
+		R"({\t(0,100,\ frz30)}text)", source, source, Candidate(source));
+	EXPECT_EQ(RewriteError::UnsupportedGeometryAnimation, result.error);
+
+	auto const spaced_paren = RewritePerspectiveTags(
+		R"({\t (0,100,\ frz30)}text)", source, source, Candidate(source));
+	EXPECT_EQ(RewriteError::UnsupportedGeometryAnimation, spaced_paren.error);
+}
+
+// Under the restricted policy a candidate that keeps the source's \org, \fay,
+// \frx and \fry must leave their original spelling byte for byte: the only
+// text that reproduces the value bit for bit. Re-serializing through the
+// decimal caps used to round \frx12.123456 down to 12.12346 and the staged
+// re-verification then refused the very plan the policy allowed.
+TEST(perspective_ass_state, fax_frz_only_rewrite_keeps_restricted_tags_byte_exact) {
+	// The style baseline carries none of the restricted tags; the line's own
+	// overrides do.
+	EvaluatedTransformState event_style;
+	event_style.event_time_ms = 2000;
+	event_style.position = {100.0, 200.0};
+	EvaluatedTransformState source = event_style;
+	source.rotation_x = 12.123456;
+	source.shear_y = 0.123457;
+	source.origin = Vec2 {130.0, 230.0};
+	auto target = source;
+	target.position = {120.0, 220.0};
+
+	auto const kept = RewritePerspectiveTags(
+		R"({\org(130,230)\frx12.123456\fay0.123457\c&H112233&}text)",
+		source, event_style, Candidate(target),
+		PerspectiveScalePolicy::Fit,
+		PerspectiveRepresentationPolicy::FaxFrzOnly);
+	ASSERT_TRUE(kept) << DescribeRewriteError(kept.error);
+	EXPECT_TRUE(kept.changed);
+	EXPECT_EQ(
+		R"({\pos(120,220)\org(130,230)\frx12.123456\fay0.123457\c&H112233&}text)",
+		kept.text);
+
+	// The clean form is still the clean form: a candidate that drops the
+	// restricted tags has them removed, with nothing re-emitted for them.
+	target.origin.reset();
+	target.rotation_x = 0.0;
+	target.shear_y = 0.0;
+	auto const cleaned = RewritePerspectiveTags(
+		R"({\org(130,230)\frx12.123456\fay0.123457\c&H112233&}text)",
+		source, event_style, Candidate(target),
+		PerspectiveScalePolicy::Fit,
+		PerspectiveRepresentationPolicy::FaxFrzOnly);
+	ASSERT_TRUE(cleaned) << DescribeRewriteError(cleaned.error);
+	EXPECT_EQ(R"({\pos(120,220)\c&H112233&}text)", cleaned.text);
+}
+
+// A candidate that carries the source's own shear values keeps the original
+// \fax/\fay spelling: re-serializing through the decimal caps rounds
+// \fax0.123456 down to 0.123 and invalidates a translation that retained the
+// source tags. A candidate that does change the fax stays on the ordinary
+// remove-and-reemit path, so the elision rule is not over-broad.
+TEST(perspective_ass_state, rewrite_keeps_unchanged_source_shear_spelling) {
+	EvaluatedTransformState event_style;
+	event_style.event_time_ms = 2000;
+	event_style.position = {100.0, 200.0};
+	EvaluatedTransformState source = event_style;
+	source.shear_x = 0.123456;
+	source.shear_y = 0.234567;
+	auto target = source;
+	target.position = {120.0, 200.0};
+
+	auto const kept = RewritePerspectiveTags(
+		R"({\fax0.123456\fay0.234567\c&H112233&}text)",
+		source, event_style, Candidate(target));
+	ASSERT_TRUE(kept) << DescribeRewriteError(kept.error);
+	EXPECT_TRUE(kept.changed);
+	EXPECT_EQ(
+		R"({\pos(120,200)\fax0.123456\fay0.234567\c&H112233&}text)",
+		kept.text);
+
+	target.shear_x = 0.25;
+	auto const changed = RewritePerspectiveTags(
+		R"({\fax0.123456\fay0.234567\c&H112233&}text)",
+		source, event_style, Candidate(target));
+	ASSERT_TRUE(changed) << DescribeRewriteError(changed.error);
+	EXPECT_EQ(
+		R"({\pos(120,200)\fax0.25\fay0.234567\c&H112233&}text)",
+		changed.text);
+}

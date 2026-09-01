@@ -20,22 +20,6 @@ bool ValidResolution(Resolution value) {
 	return FinitePositive(value.width) && FinitePositive(value.height);
 }
 
-std::optional<double> PerspectiveRotationLock(EffectiveAssState const& state) {
-	if (state.drawing_mode
-		|| state.text_style.font_name.empty()
-		|| state.text_style.font_name.front() != '@')
-		return std::nullopt;
-	double rotation = state.transform.rotation_z;
-	if (!std::isfinite(rotation))
-		return std::nullopt;
-	if (std::abs(rotation) > MaxTransformParameter) {
-		rotation = std::fmod(rotation, 360.0);
-		if (rotation < 0.0)
-			rotation += 360.0;
-	}
-	return rotation;
-}
-
 bool ValidContext(PerspectiveApplyContext const& context) {
 	return context.frame_number >= 0
 		&& ValidResolution(context.play_resolution)
@@ -189,6 +173,63 @@ bool SameFingerprint(
 		&& SameOptionalStyle(left.event_style, right.event_style);
 }
 
+// Field-by-field equivalent of SameFingerprint(FingerprintSource(...), expected)
+// without building any temporary copies: staleness checks run on every Apply
+// and on every rebind, so they must not deep-copy the whole script info table,
+// event style and line text each time.
+bool FingerprintMatchesInPlace(
+	AssFile const& file,
+	AssDialogue const& line,
+	PerspectiveApplyContext const& context,
+	PerspectiveSourceFingerprint const& expected) {
+	if (reinterpret_cast<std::uintptr_t>(&file) != expected.file_identity
+		|| reinterpret_cast<std::uintptr_t>(&line) != expected.line_identity
+		|| !SameContext(context, expected.context)
+		|| line.Id != expected.line.id
+		|| line.Row != expected.line.row
+		|| line.Comment != expected.line.comment
+		|| line.Layer != expected.line.layer
+		|| line.Margin != expected.line.margins
+		|| line.Start.GetMillisecond() != expected.line.start_ms
+		|| line.End.GetMillisecond() != expected.line.end_ms
+		|| line.Style.get() != expected.line.style
+		|| line.Actor.get() != expected.line.actor
+		|| line.Effect.get() != expected.line.effect
+		|| line.ExtradataIds.get() != expected.line.extradata_ids
+		|| line.Text.get() != expected.line.text)
+		return false;
+	if (file.Info.size() != expected.script_info_entries.size())
+		return false;
+	for (std::size_t index = 0; index < file.Info.size(); ++index) {
+		if (file.Info[index].GetEntryData() != expected.script_info_entries[index])
+			return false;
+	}
+	auto const* style = aegisub::ass_style_resolution::ResolveEventStyle(
+		file, line.Style.get());
+	if (!style != !expected.event_style)
+		return false;
+	if (!style)
+		return true;
+	return style->GetEntryData() == expected.event_style->entry_data
+		&& style->name == expected.event_style->name
+		&& style->font == expected.event_style->font
+		&& style->fontsize == expected.event_style->font_size
+		&& style->bold == expected.event_style->bold
+		&& style->italic == expected.event_style->italic
+		&& style->underline == expected.event_style->underline
+		&& style->strikeout == expected.event_style->strikeout
+		&& style->scalex == expected.event_style->scale_x
+		&& style->scaley == expected.event_style->scale_y
+		&& style->spacing == expected.event_style->spacing
+		&& style->angle == expected.event_style->angle
+		&& style->borderstyle == expected.event_style->border_style
+		&& style->outline_w == expected.event_style->outline_width
+		&& style->shadow_w == expected.event_style->shadow_width
+		&& style->alignment == expected.event_style->alignment
+		&& style->Margin == expected.event_style->margins
+		&& style->encoding == expected.event_style->encoding;
+}
+
 bool SamePoint(Vec2 left, Vec2 right) {
 	return left.x == right.x && left.y == right.y;
 }
@@ -263,15 +304,33 @@ PerspectiveExecutionResult ExecutionFailure(PerspectivePlanError error) {
 
 }
 
+std::optional<double> PerspectiveRotationLock(EffectiveAssState const& state) {
+	if (state.drawing_mode
+		|| state.text_style.font_name.empty()
+		|| state.text_style.font_name.front() != '@')
+		return std::nullopt;
+	double rotation = state.transform.rotation_z;
+	if (!std::isfinite(rotation))
+		return std::nullopt;
+	if (std::abs(rotation) > MaxTransformParameter) {
+		rotation = std::fmod(rotation, 360.0);
+		if (rotation < 0.0)
+			rotation += 360.0;
+	}
+	return rotation;
+}
+
 PerspectiveMutationPlan::PerspectiveMutationPlan(
 	PerspectiveSourceFingerprint source,
 	std::string replacement_text,
 	SolverCandidate candidate,
-	double max_error)
+	double max_error,
+	Quad result_quad)
 : source_(std::move(source))
 , replacement_text_(std::move(replacement_text))
 , candidate_(std::move(candidate))
-, max_error_(max_error) {
+, max_error_(max_error)
+, result_quad_(result_quad) {
 }
 
 std::optional<Vec2> PerspectiveFirstEdgeDirection(
@@ -360,6 +419,7 @@ PerspectiveCaptureResult CapturePerspectiveSource(
 		result.error = PerspectivePlanError::BoundsEvaluationFailed;
 		result.geometry_error = bounds.geometry_error;
 		result.bounds_error = bounds.error;
+		result.bounds_font = bounds.font_name;
 		return result;
 	}
 
@@ -393,7 +453,7 @@ bool MatchesPerspectiveSource(
 	PerspectivePlanError resolve_error = PerspectivePlanError::None;
 	auto const* line = ResolveUniqueLine(file, expected.line.id, resolve_error);
 	return line && resolve_error == PerspectivePlanError::None
-		&& SameFingerprint(FingerprintSource(file, *line, context), expected);
+		&& FingerprintMatchesInPlace(file, *line, context, expected);
 }
 
 PerspectivePlanResult BuildPerspectiveMutationPlan(
@@ -405,7 +465,8 @@ PerspectivePlanResult BuildPerspectiveMutationPlan(
 	AssTextExtentsProvider text_extents,
 	PerspectiveScalePolicy scale_policy,
 	PerspectiveRepresentationPolicy representation_policy,
-	int maximum_decimals) {
+	int maximum_decimals,
+	PerspectiveEdgeAnchor edge_anchor) {
 	if (!ValidContext(current_context))
 		return PlanFailure(PerspectivePlanError::InvalidContext);
 	if (!std::isfinite(max_error) || max_error <= 0.0)
@@ -417,9 +478,8 @@ PerspectivePlanResult BuildPerspectiveMutationPlan(
 	if (!line)
 		return PlanFailure(resolve_error);
 	if (!SameContext(current_context, expected_source.fingerprint.context)
-		|| !SameFingerprint(
-			FingerprintSource(file, *line, current_context),
-			expected_source.fingerprint))
+		|| !FingerprintMatchesInPlace(
+			file, *line, current_context, expected_source.fingerprint))
 		return PlanFailure(PerspectivePlanError::StaleSource);
 
 	auto const target_validation = ValidateQuad(target);
@@ -452,6 +512,7 @@ PerspectivePlanResult BuildPerspectiveMutationPlan(
 	solver_input.locked_rotation_z = PerspectiveRotationLock(captured.source->state);
 	solver_input.scale_policy = scale_policy;
 	solver_input.representation_policy = representation_policy;
+	solver_input.edge_anchor = edge_anchor;
 	solver_input.maximum_decimals = ClampPerspectiveDecimalPlaces(maximum_decimals);
 	auto solver = SolvePerspectiveTags(solver_input);
 	if (!solver) {
@@ -459,6 +520,10 @@ PerspectivePlanResult BuildPerspectiveMutationPlan(
 		result.geometry_error = solver.geometry_error;
 		result.forward_error = solver.forward_error;
 		result.solver_error = solver.error;
+		if (solver.error == SolverError::NoFeasibleCandidate) {
+			result.solver_no_feasible_reason = solver.no_feasible_reason;
+			result.solver_no_feasible_metrics = solver.no_feasible_metrics;
+		}
 		return result;
 	}
 
@@ -467,7 +532,8 @@ PerspectivePlanResult BuildPerspectiveMutationPlan(
 		captured.source->state.transform,
 		captured.source->state.event_style_transform,
 		*solver.candidate,
-		scale_policy);
+		scale_policy,
+		representation_policy);
 	if (!rewrite) {
 		auto result = PlanFailure(PerspectivePlanError::RewriteFailed);
 		result.rewrite_error = rewrite.error;
@@ -492,6 +558,12 @@ PerspectivePlanResult BuildPerspectiveMutationPlan(
 		result.apply_blocker = staged_state.apply_blocker;
 		return result;
 	}
+	// Exact on purpose, and it stays exact. Preserve never re-serializes the
+	// scale tags: the solver freezes scale, MakeRewriteDelta refuses any
+	// deviation, and the rewrite copies the original \fscx/\fscy through
+	// verbatim. So the staged value is the source value bit-for-bit, and
+	// loosening this to a rounding step would only hide a future regression in
+	// that chain rather than admit any legitimate plan.
 	if (scale_policy == PerspectiveScalePolicy::Preserve
 		&& (staged_state.value.transform.scale_x
 				!= captured.source->state.transform.scale_x
@@ -499,7 +571,8 @@ PerspectivePlanResult BuildPerspectiveMutationPlan(
 				!= captured.source->state.transform.scale_y))
 		return PlanFailure(PerspectivePlanError::StagedScaleMismatch);
 	if (!MatchesPerspectiveRepresentationPolicy(
-		staged_state.value.transform, representation_policy))
+		captured.source->state.transform, staged_state.value.transform,
+		representation_policy))
 		return PlanFailure(PerspectivePlanError::StagedRepresentationMismatch);
 	auto const staged_bounds = EvaluateAssBaseBounds(
 		{&staged, &staged_state.value, text_extents});
@@ -507,6 +580,7 @@ PerspectivePlanResult BuildPerspectiveMutationPlan(
 		auto result = PlanFailure(PerspectivePlanError::StagedBoundsEvaluationFailed);
 		result.geometry_error = staged_bounds.geometry_error;
 		result.bounds_error = staged_bounds.error;
+		result.bounds_font = staged_bounds.font_name;
 		return result;
 	}
 	if (!SameBounds(staged_bounds.value, captured.source->bounds))
@@ -525,8 +599,13 @@ PerspectivePlanResult BuildPerspectiveMutationPlan(
 		return result;
 	}
 
+	// Against the quad the solver aimed at, not the drawn one. Under a scale
+	// lock those differ by the size the policy told the solver to ignore, and
+	// measuring the drawn quad here would reject the plan for exactly the
+	// mismatch the solver was instructed not to fix. Identical to the drawn quad
+	// in every other configuration.
 	auto const residual = MeasurePerspectiveResidual(
-		staged_input, target, current_context.output_mapping);
+		staged_input, solver.effective_target, current_context.output_mapping);
 	if (!residual) {
 		auto result = PlanFailure(PerspectivePlanError::ResidualFailed);
 		result.geometry_error = residual.geometry_error;
@@ -534,12 +613,18 @@ PerspectivePlanResult BuildPerspectiveMutationPlan(
 		result.residual_error = residual.error;
 		return result;
 	}
-	if (residual.max_error > max_error)
+	// The staged re-derivation must agree with what the solver predicted for
+	// the candidate it chose -- a snapped model is expected to miss the drawn
+	// quad by its own snap_error, and that shortfall is reported and drawn by
+	// the caller. One rounding budget of slack absorbs re-derivation noise;
+	// anything beyond that means the rewrite changed the geometry the solver
+	// modeled, which is exactly what this check exists to catch.
+	double const residual_budget = solver.candidate->max_error + max_error;
+	if (residual.max_error > residual_budget)
 		return PlanFailure(PerspectivePlanError::ResidualExceeded);
 
-	if (!SameFingerprint(
-		FingerprintSource(file, *line, current_context),
-		captured.source->fingerprint))
+	if (!FingerprintMatchesInPlace(
+			file, *line, current_context, captured.source->fingerprint))
 		return PlanFailure(PerspectivePlanError::StaleSource);
 
 	PerspectivePlanResult result;
@@ -547,7 +632,8 @@ PerspectivePlanResult BuildPerspectiveMutationPlan(
 		captured.source->fingerprint,
 		std::move(rewrite.text),
 		std::move(*solver.candidate),
-		residual.max_error);
+		residual.max_error,
+		staged_forward.quad);
 	result.plan = std::move(plan);
 	return result;
 }
@@ -563,15 +649,15 @@ PerspectiveExecutionResult ExecutePerspectiveMutationPlan(
 	if (!line)
 		return ExecutionFailure(resolve_error);
 	if (!SameContext(current_context, plan.Source().context)
-		|| !SameFingerprint(
-			FingerprintSource(file, *line, current_context), plan.Source()))
+		|| !FingerprintMatchesInPlace(
+			file, *line, current_context, plan.Source()))
 		return ExecutionFailure(PerspectivePlanError::StaleSource);
 	if (line->Text.get() == plan.ReplacementText())
 		return ExecutionFailure(PerspectivePlanError::NoChange);
 
 	decltype(line->Text) replacement(plan.ReplacementText());
-	if (!SameFingerprint(
-		FingerprintSource(file, *line, current_context), plan.Source()))
+	if (!FingerprintMatchesInPlace(
+			file, *line, current_context, plan.Source()))
 		return ExecutionFailure(PerspectivePlanError::StaleSource);
 	line->Text = std::move(replacement);
 

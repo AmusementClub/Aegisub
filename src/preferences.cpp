@@ -728,8 +728,8 @@ void BuildVisualToolsPage(OptionPage *p) {
 		0, 6);
 	perspective_decimals->SetHelpString(_(
 		"Maximum digits after the decimal point in generated Perspective tags. "
-		"The default is 2. Use 0 for integers, or increase up to 6 if Apply cannot fit the target."));
-
+		"The default is 4. Use 0 for integers. Tags still use the shortest "
+		"digits that fit, so lowering this only trades precision."));
 	binder->AddCategory(_("Nudge"));
 	binder->AddDouble(_("Rotate step (degrees)"), "Tool/Visual/Nudge/Rotate Step", 0.01, 180, 0.1, 2);
 	binder->AddDouble(_("Rotate large step (degrees)"), "Tool/Visual/Nudge/Rotate Step Large", 0.01, 180, 0.1, 2);
@@ -737,6 +737,8 @@ void BuildVisualToolsPage(OptionPage *p) {
 	binder->AddDouble(_("Scale large step (percent)"), "Tool/Visual/Nudge/Scale Step Large", 0.01, 100, 0.1, 2);
 	binder->AddDouble(_("Origin step (pixels)"), "Tool/Visual/Nudge/Origin Step", 0.01, 1000, 0.1, 2);
 	binder->AddDouble(_("Origin large step (pixels)"), "Tool/Visual/Nudge/Origin Step Large", 0.01, 1000, 0.1, 2);
+	binder->AddDouble(_("Perspective quad step (pixels)"), "Tool/Visual/Nudge/Perspective Step", 0.01, 1000, 0.1, 2);
+	binder->AddDouble(_("Perspective quad large step (pixels)"), "Tool/Visual/Nudge/Perspective Step Large", 0.01, 1000, 0.1, 2);
 
 	p->sizer->Add(grid, 1, wxEXPAND);
 	p->SetSizerAndFit(p->sizer);
@@ -930,6 +932,8 @@ void BuildInterfaceColoursPage(OptionPage *p) {
 	binder->AddColour(_("Secondary Lines"), "Colour/Visual Tools/Lines Secondary");
 	binder->AddColour(_("Primary Highlight"), "Colour/Visual Tools/Highlight Primary");
 	binder->AddColour(_("Secondary Highlight"), "Colour/Visual Tools/Highlight Secondary");
+	binder->AddColour(_("Perspective Invalid Line"), "Colour/Visual Tools/Perspective Invalid Line");
+	binder->AddColour(_("Perspective Invalid Handle"), "Colour/Visual Tools/Perspective Invalid Handle");
 	binder->AddDouble(_("Shaded Area"), "Colour/Visual Tools/Shaded Area Alpha", 0.0, 1.0, 0.1, 2);
 
 	p->sizer->Add(grid, 1, wxEXPAND);

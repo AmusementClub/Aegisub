@@ -68,6 +68,7 @@
 #include "video_frame_wx.h"
 #include "visual_guide_overlay.h"
 #include "visual_tool.h"
+#include "visual_tool_measure.h"
 #include "visual_tool_scale.h"
 
 #include <libaegisub/color.h>
@@ -2901,6 +2902,26 @@ bool VideoDisplay::CanNormalizeScaleTool(VisualScaleAxis axis) const {
 bool VideoDisplay::NormalizeScaleTool(VisualScaleAxis axis) {
 	auto *scale_tool = dynamic_cast<VisualToolScale *>(tool.get());
 	return scale_tool && scale_tool->NormalizeScale(axis);
+}
+
+bool VideoDisplay::CanApplyMeasurePerspective() const {
+	auto *measure_tool = dynamic_cast<VisualToolMeasure const *>(tool.get());
+	return measure_tool && measure_tool->CanApplyPerspective();
+}
+
+void VideoDisplay::ApplyMeasurePerspective() {
+	if (auto *measure_tool = dynamic_cast<VisualToolMeasure *>(tool.get()))
+		measure_tool->ApplyPerspective();
+}
+
+bool VideoDisplay::CanRemoveMeasureGuide() const {
+	auto *measure_tool = dynamic_cast<VisualToolMeasure const *>(tool.get());
+	return measure_tool && measure_tool->GetSubMode() == 0;
+}
+
+void VideoDisplay::RemoveMeasureGuide() {
+	if (auto *measure_tool = dynamic_cast<VisualToolMeasure *>(tool.get()))
+		measure_tool->RemoveSelectedGuide();
 }
 
 bool VideoDisplay::SetToolSubMode(int mode) {

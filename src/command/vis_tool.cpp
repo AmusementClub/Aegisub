@@ -210,6 +210,74 @@ namespace {
 		STR_HELP("Nudge the current visual tool value down by a large step")
 	};
 
+	// mode values match VisualToolMeasure::SubMode: segment=0, perspective=1
+	template<int Mode>
+	struct measure_submode : public Command {
+		CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
+
+		bool Validate(const agi::Context *c) override {
+			return c->GetUI().videoDisplay->ToolIsType(typeid(VisualToolMeasure));
+		}
+
+		bool IsActive(const agi::Context *c) override {
+			return Validate(c) && c->GetUI().videoDisplay->GetToolSubMode() == Mode;
+		}
+
+		void operator()(agi::Context *c) override {
+			c->GetUI().videoDisplay->SetToolSubMode(Mode);
+		}
+	};
+
+	struct measure_mode_segment final : public measure_submode<0> {
+		CMD_NAME("video/tool/measure/segment")
+		CMD_ICON(visual_measure)
+		STR_MENU("Measure: Segment")
+		STR_DISP("Measure: Segment")
+		STR_HELP("Measure distances with temporary guides")
+	};
+
+	struct measure_mode_perspective final : public measure_submode<1> {
+		CMD_NAME("video/tool/measure/perspective")
+		CMD_ICON(visual_vector_clip_drag)
+		STR_MENU("Measure: Perspective Quad")
+		STR_DISP("Measure: Perspective Quad")
+		STR_HELP("Draw a target quadrilateral for the active subtitle")
+	};
+
+	struct measure_perspective_apply final : public Command {
+		CMD_NAME("video/tool/measure/perspective/apply")
+		CMD_ICON(button_audio_commit)
+		STR_MENU("Measure: Apply Perspective Quad")
+		STR_DISP("Measure: Apply Perspective Quad")
+		STR_HELP("Apply the drawn target quadrilateral to the active subtitle line")
+		CMD_TYPE(COMMAND_VALIDATE)
+
+		bool Validate(const agi::Context *c) override {
+			return c->GetUI().videoDisplay->CanApplyMeasurePerspective();
+		}
+
+		void operator()(agi::Context *c) override {
+			c->GetUI().videoDisplay->ApplyMeasurePerspective();
+		}
+	};
+
+	struct measure_guide_delete final : public Command {
+		CMD_NAME("video/tool/measure/guide/delete")
+		CMD_ICON(delete_button)
+		STR_MENU("Measure: Delete Guide")
+		STR_DISP("Measure: Delete Guide")
+		STR_HELP("Delete the selected measurement guide")
+		CMD_TYPE(COMMAND_VALIDATE)
+
+		bool Validate(const agi::Context *c) override {
+			return c->GetUI().videoDisplay->CanRemoveMeasureGuide();
+		}
+
+		void operator()(agi::Context *c) override {
+			c->GetUI().videoDisplay->RemoveMeasureGuide();
+		}
+	};
+
 	// mode values match VisualToolVectorClip button IDs minus BUTTON_DRAG:
 	// drag=0, line=1, bicubic=2, convert=3, insert=4, remove=5,
 	// freehand=6, freehand_smooth=7, move=8
@@ -307,6 +375,10 @@ namespace cmd {
 		reg(agi::make_unique<visual_mode_clip>());
 		reg(agi::make_unique<visual_mode_vector_clip>());
 		reg(agi::make_unique<visual_mode_measure>());
+		reg(agi::make_unique<measure_mode_segment>());
+		reg(agi::make_unique<measure_mode_perspective>());
+		reg(agi::make_unique<measure_perspective_apply>());
+		reg(agi::make_unique<measure_guide_delete>());
 
 		reg(agi::make_unique<visual_tool_nudge_left>());
 		reg(agi::make_unique<visual_tool_nudge_right>());

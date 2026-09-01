@@ -87,6 +87,13 @@ struct PerspectiveSourceSnapshot {
 	AssApplyBlocker apply_blocker = AssApplyBlocker::None;
 };
 
+// The renderer-facing \frz lock for vertical CJK faces, or nullopt when the
+// line's rotation is free. Exposed so a live preview can build the same
+// SolverInput that Apply will build; a preview that disagreed with Apply about
+// the lock would show a shape Apply then refuses.
+[[nodiscard]] std::optional<double> PerspectiveRotationLock(
+	EffectiveAssState const& state);
+
 // Resolves the output-pixel direction of the source rectangle's first edge.
 // Vertical-font semantics win so strong shears cannot change the new frame's
 // corner correspondence; ordinary text follows a valid projected quad.
@@ -129,8 +136,19 @@ struct PerspectivePlanDiagnostic {
 	AssBoundsError bounds_error = AssBoundsError::None;
 	ForwardError forward_error = ForwardError::None;
 	SolverError solver_error = SolverError::None;
+	// Stage the solver's candidates died at when solver_error is
+	// NoFeasibleCandidate; the UI uses it to name the option to relax.
+	NoFeasibleReason solver_no_feasible_reason = NoFeasibleReason::None;
 	RewriteError rewrite_error = RewriteError::None;
 	ResidualError residual_error = ResidualError::None;
+	// Face the bounds evaluation could not measure, when bounds_error is
+	// FontUnavailable; names the actual font instead of a generic refusal.
+	std::string bounds_font;
+	// Distance the closest rejected candidate achieved and the budget it was
+	// judged against, when solver_error is NoFeasibleCandidate and the
+	// rejection was measurable; the UI turns the gap into the option value
+	// that would have accepted the candidate.
+	std::optional<NoFeasibleMetrics> solver_no_feasible_metrics;
 };
 
 struct PerspectiveCaptureResult : PerspectivePlanDiagnostic {
@@ -148,12 +166,14 @@ class PerspectiveMutationPlan {
 	std::string replacement_text_;
 	SolverCandidate candidate_;
 	double max_error_ = 0.0;
+	Quad result_quad_ {};
 
 	PerspectiveMutationPlan(
 		PerspectiveSourceFingerprint source,
 		std::string replacement_text,
 		SolverCandidate candidate,
-		double max_error);
+		double max_error,
+		Quad result_quad);
 
 	friend struct PerspectivePlanResult;
 	friend PerspectivePlanResult BuildPerspectiveMutationPlan(
@@ -165,9 +185,10 @@ class PerspectiveMutationPlan {
 		AssTextExtentsProvider,
 		PerspectiveScalePolicy,
 		PerspectiveRepresentationPolicy,
-		int);
+		int,
+		PerspectiveEdgeAnchor);
 
-public:
+	public:
 	PerspectiveMutationPlan(PerspectiveMutationPlan const&) = default;
 	PerspectiveMutationPlan(PerspectiveMutationPlan&&) noexcept = default;
 	PerspectiveMutationPlan& operator=(PerspectiveMutationPlan const&) = default;
@@ -179,6 +200,13 @@ public:
 	[[nodiscard]] SolverCandidate const& Candidate() const { return candidate_; }
 	[[nodiscard]] CandidateFamily Family() const { return candidate_.family; }
 	[[nodiscard]] double MaxError() const { return max_error_; }
+	// Where the emitted tags actually land, re-evaluated from the staged line
+	// rather than predicted by the solver. Equals the drawn quad within
+	// max_error unless the model had to snap; drawing this is what lets a user
+	// see the reachable shape instead of only being told the drag was refused.
+	[[nodiscard]] Quad const& ResultQuad() const { return result_quad_; }
+	[[nodiscard]] double SnapError() const { return candidate_.snap_error; }
+	[[nodiscard]] bool Snapped() const { return candidate_.Snapped(); }
 };
 
 struct PerspectivePlanResult : PerspectivePlanDiagnostic {
@@ -221,7 +249,10 @@ struct PerspectiveExecutionResult : PerspectivePlanDiagnostic {
 	PerspectiveScalePolicy scale_policy = PerspectiveScalePolicy::Fit,
 	PerspectiveRepresentationPolicy representation_policy =
 		PerspectiveRepresentationPolicy::Automatic,
-	int maximum_decimals = kMaxPerspectiveDecimalPlaces);
+	int maximum_decimals = kMaxPerspectiveDecimalPlaces,
+	// Which drawn edge to hold exactly when the model has to give something up.
+	// See PerspectiveEdgeAnchor.
+	PerspectiveEdgeAnchor edge_anchor = PerspectiveEdgeAnchor::None);
 
 // Revalidates immediately before assigning Text. Commit ownership stays with
 // the host so it can supply the exact returned line as its changed-lines span.

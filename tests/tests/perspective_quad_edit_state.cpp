@@ -176,11 +176,13 @@ TEST(perspective_quad_edit_state, corner_orientation_has_deterministic_fallbacks
 			{2.0, 3.0}, {9.0, 8.0}, Vec2 {-1.0, 1.0}));
 }
 
-TEST(perspective_quad_edit_state, creation_requires_width_and_height_past_tolerance) {
+TEST(perspective_quad_edit_state, creation_requires_movement_past_tolerance_on_either_axis) {
 	EXPECT_TRUE(IsPerspectiveQuadCreationDrag({10.0, 10.0}, {16.0, 4.0}, 5.0));
-	EXPECT_FALSE(IsPerspectiveQuadCreationDrag({10.0, 10.0}, {15.0, 20.0}, 5.0));
-	EXPECT_FALSE(IsPerspectiveQuadCreationDrag({10.0, 10.0}, {20.0, 15.0}, 5.0));
-	EXPECT_FALSE(IsPerspectiveQuadCreationDrag({10.0, 10.0}, {30.0, 10.0}, 5.0));
+	// Single-axis drags are intentional quads, not mis-clicks.
+	EXPECT_TRUE(IsPerspectiveQuadCreationDrag({10.0, 10.0}, {15.0, 20.0}, 5.0));
+	EXPECT_TRUE(IsPerspectiveQuadCreationDrag({10.0, 10.0}, {20.0, 15.0}, 5.0));
+	EXPECT_TRUE(IsPerspectiveQuadCreationDrag({10.0, 10.0}, {30.0, 10.0}, 5.0));
+	EXPECT_FALSE(IsPerspectiveQuadCreationDrag({10.0, 10.0}, {15.0, 14.0}, 5.0));
 	EXPECT_FALSE(IsPerspectiveQuadCreationDrag(
 		{10.0, 10.0}, {std::numeric_limits<double>::infinity(), 20.0}, 5.0));
 	EXPECT_FALSE(IsPerspectiveQuadCreationDrag(
@@ -196,7 +198,9 @@ TEST(perspective_quad_edit_state, arithmetic_center_survives_finite_invalid_targ
 	auto const center = PerspectiveQuadArithmeticCenter(bow_tie);
 	ASSERT_TRUE(center);
 	ExpectVec({5.0, 5.0}, *center);
-	EXPECT_EQ(PerspectiveQuadHandle::Center,
+	// The bow-tie's TL-TR edge midpoint coincides with the arithmetic center;
+	// the more specific edge handle wins there, but the quad stays grabbable.
+	EXPECT_EQ(PerspectiveQuadHandle::EdgeTop,
 		HitTestPerspectiveQuad(bow_tie, *center, 0.0));
 
 	auto non_finite = bow_tie;
@@ -317,6 +321,96 @@ TEST(perspective_quad_edit_state, center_drag_translates_all_ordered_corners_equ
 	ExpectVec({-20.0, 15.0}, (*state.Target())[2]);
 	ExpectVec({-30.0, 15.0}, (*state.Target())[3]);
 	EXPECT_EQ(GeometryError::None, state.Validation()->error);
+}
+
+TEST(perspective_quad_edit_state, hit_test_finds_edge_midpoints_after_corners) {
+	auto const quad = TestQuad();
+	EXPECT_EQ(PerspectiveQuadHandle::EdgeTop,
+		HitTestPerspectiveQuad(quad, {5.0, 0.0}, 0.0));
+	EXPECT_EQ(PerspectiveQuadHandle::EdgeRight,
+		HitTestPerspectiveQuad(quad, {10.0, 5.0}, 0.0));
+	EXPECT_EQ(PerspectiveQuadHandle::EdgeBottom,
+		HitTestPerspectiveQuad(quad, {5.0, 10.0}, 0.0));
+	EXPECT_EQ(PerspectiveQuadHandle::EdgeLeft,
+		HitTestPerspectiveQuad(quad, {0.0, 5.0}, 0.0));
+	// Corners keep priority over edges when a broad tolerance overlaps both.
+	EXPECT_EQ(PerspectiveQuadHandle::TopLeft,
+		HitTestPerspectiveQuad(quad, {1.0, 1.0}, 3.0));
+}
+
+TEST(perspective_quad_edit_state, edge_drag_moves_both_corners_of_the_edge) {
+	PerspectiveQuadEditState state;
+	ASSERT_EQ(PerspectiveQuadEditError::None, state.Bind(TestQuad(), true, true));
+	ASSERT_EQ(PerspectiveQuadEditError::None,
+		state.BeginGesture(PerspectiveQuadHandle::EdgeTop, {5.0, 0.0}));
+	ASSERT_EQ(PerspectiveQuadEditError::None, state.UpdateGesture({5.0, -2.0}));
+	ExpectVec({0.0, -2.0}, (*state.Target())[0]);
+	ExpectVec({10.0, -2.0}, (*state.Target())[1]);
+	ExpectVec({10.0, 10.0}, (*state.Target())[2]);
+	ExpectVec({0.0, 10.0}, (*state.Target())[3]);
+}
+
+TEST(perspective_quad_edit_state, modifiers_constrain_and_mirror_corner_drags) {
+	PerspectiveQuadEditState state;
+	ASSERT_EQ(PerspectiveQuadEditError::None, state.Bind(TestQuad(), true, true));
+	PerspectiveQuadGestureModifiers const axis_locked {true, false};
+	ASSERT_EQ(PerspectiveQuadEditError::None,
+		state.BeginGesture(PerspectiveQuadHandle::TopRight, {10.0, 0.0}));
+	ASSERT_EQ(PerspectiveQuadEditError::None,
+		state.UpdateGesture({14.0, -3.0}, axis_locked));
+	// |dx| dominates, so dy is clamped away.
+	ExpectVec({14.0, 0.0}, (*state.Target())[1]);
+	ASSERT_EQ(PerspectiveQuadEditError::None, state.FinishGesture());
+
+	PerspectiveQuadGestureModifiers const symmetric {false, true};
+	ASSERT_EQ(PerspectiveQuadEditError::None,
+		state.BeginGesture(PerspectiveQuadHandle::TopRight, {14.0, 0.0}));
+	ASSERT_EQ(PerspectiveQuadEditError::None,
+		state.UpdateGesture({17.0, 2.0}, symmetric));
+	ExpectVec({17.0, 2.0}, (*state.Target())[1]);
+	// The opposite corner (BottomLeft) mirrors the delta through the center.
+	ExpectVec({-3.0, 8.0}, (*state.Target())[3]);
+}
+
+TEST(perspective_quad_edit_state, symmetric_edge_drag_moves_the_opposite_edge_too) {
+	PerspectiveQuadEditState state;
+	ASSERT_EQ(PerspectiveQuadEditError::None, state.Bind(TestQuad(), true, true));
+	ASSERT_EQ(PerspectiveQuadEditError::None,
+		state.BeginGesture(PerspectiveQuadHandle::EdgeTop, {5.0, 0.0}));
+	ASSERT_EQ(PerspectiveQuadEditError::None,
+		state.UpdateGesture({5.0, 3.0}, {false, true}));
+	ExpectVec({0.0, 3.0}, (*state.Target())[0]);
+	ExpectVec({10.0, 3.0}, (*state.Target())[1]);
+	ExpectVec({10.0, 7.0}, (*state.Target())[2]);
+	ExpectVec({0.0, 7.0}, (*state.Target())[3]);
+}
+
+TEST(perspective_quad_edit_state, drop_target_keeps_binding_and_current_quad) {
+	PerspectiveQuadEditState state;
+	ASSERT_EQ(PerspectiveQuadEditError::None, state.Bind(TestQuad(), true, true));
+	ASSERT_EQ(PerspectiveQuadEditError::None, state.UseCurrent());
+	ASSERT_EQ(PerspectiveQuadEditError::None, state.DropTarget());
+	EXPECT_TRUE(state.IsBound());
+	EXPECT_TRUE(state.IsEditable());
+	ASSERT_TRUE(state.Current());
+	EXPECT_FALSE(state.HasTarget());
+	EXPECT_FALSE(state.Validation());
+	EXPECT_FALSE(state.IsModified());
+	EXPECT_EQ(PerspectiveQuadEditError::NoTarget,
+		state.BeginGesture(PerspectiveQuadHandle::TopLeft, {0.0, 0.0}));
+}
+
+TEST(perspective_quad_edit_state, drop_target_rejects_unbound_read_only_and_gesture) {
+	PerspectiveQuadEditState state;
+	EXPECT_EQ(PerspectiveQuadEditError::NotBound, state.DropTarget());
+	ASSERT_EQ(PerspectiveQuadEditError::None, state.Bind(TestQuad(), false, true));
+	EXPECT_EQ(PerspectiveQuadEditError::ReadOnly, state.DropTarget());
+	state.Clear();
+	ASSERT_EQ(PerspectiveQuadEditError::None, state.Bind(TestQuad(), true, true));
+	ASSERT_EQ(PerspectiveQuadEditError::None, state.UseCurrent());
+	ASSERT_EQ(PerspectiveQuadEditError::None,
+		state.BeginGesture(PerspectiveQuadHandle::Center, {5.0, 5.0}));
+	EXPECT_EQ(PerspectiveQuadEditError::GestureAlreadyActive, state.DropTarget());
 }
 
 TEST(perspective_quad_edit_state, read_only_binding_rejects_all_edit_entry_points) {

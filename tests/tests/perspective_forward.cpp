@@ -189,6 +189,40 @@ TEST(perspective_forward, projection_domain_crossing_is_rejected_before_quad_out
 	EXPECT_EQ(ForwardError::ProjectionDomain, result.error);
 }
 
+TEST(perspective_forward, behind_camera_corners_are_rejected) {
+	// All four corners behind the camera pass no projection-domain rule by
+	// accident: libass's normalized frame (restore_transform) pins the
+	// nearest bbox corner at unit depth, so it never renders in-bbox text
+	// from behind the camera, and there is no clamp target to follow.
+	// Projecting anyway would mirror the quad through the camera.
+	auto input = IdentityInput();
+	input.state.origin = {700.0, 200.0}; // rotation axis far right of the quad
+	input.state.rotation_y = 80.0;
+	auto const result = ForwardQuad(input);
+	EXPECT_EQ(ForwardError::ProjectionDomain, result.error);
+}
+
+TEST(perspective_forward, small_positive_denominators_render_true_perspective) {
+	// Every denominator positive but far below the camera distance: a
+	// legitimate perspective gradient libass also renders as-is (its
+	// normalized frame keeps the nearest corner at unit depth, far above
+	// any floor). The projection must keep the per-corner factors -- the
+	// near edge renders visibly larger than the far edge -- rather than
+	// flattening the quad into one uniform scale.
+	auto input = IdentityInput();
+	input.state.origin = {1840.0, 200.0}; // rotation axis far right of the quad
+	input.state.rotation_y = 10.0;
+	auto const result = ForwardQuad(input);
+	ASSERT_TRUE(result) << DescribeForwardError(result.error);
+
+	// Left corners sit nearer the camera (denominator ~10) than the right
+	// ones (~31), so the left edge projects roughly three times the right
+	// edge. A near-plane clamp would flatten both to the same length.
+	double const left_edge = std::fabs(result.quad[3].y - result.quad[0].y);
+	double const right_edge = std::fabs(result.quad[2].y - result.quad[1].y);
+	EXPECT_GT(left_edge, 2.0 * right_edge);
+}
+
 TEST(perspective_forward, returned_homography_maps_the_source_center) {
 	auto input = IdentityInput();
 	input.state.scale_x = 125.0;

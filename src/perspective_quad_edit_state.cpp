@@ -1,6 +1,7 @@
 #include "perspective_quad_edit_state.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <utility>
@@ -39,11 +40,73 @@ std::optional<std::size_t> CornerIndex(PerspectiveQuadHandle handle) {
 }
 
 bool IsEditableHandle(PerspectiveQuadHandle handle) {
-	return handle == PerspectiveQuadHandle::TopLeft
-		|| handle == PerspectiveQuadHandle::TopRight
-		|| handle == PerspectiveQuadHandle::BottomRight
-		|| handle == PerspectiveQuadHandle::BottomLeft
-		|| handle == PerspectiveQuadHandle::Center;
+	switch (handle) {
+		case PerspectiveQuadHandle::TopLeft:
+		case PerspectiveQuadHandle::TopRight:
+		case PerspectiveQuadHandle::BottomRight:
+		case PerspectiveQuadHandle::BottomLeft:
+		case PerspectiveQuadHandle::Center:
+		case PerspectiveQuadHandle::EdgeTop:
+		case PerspectiveQuadHandle::EdgeRight:
+		case PerspectiveQuadHandle::EdgeBottom:
+		case PerspectiveQuadHandle::EdgeLeft:
+			return true;
+		case PerspectiveQuadHandle::None:
+			return false;
+	}
+	return false;
+}
+
+// The two corner indices an edge handle moves together, in TL/TR/BR/BL order.
+std::optional<std::array<std::size_t, 2>> EdgeCornerIndices(
+	PerspectiveQuadHandle handle) {
+	switch (handle) {
+		case PerspectiveQuadHandle::EdgeTop:
+			return std::array<std::size_t, 2> {0, 1};
+		case PerspectiveQuadHandle::EdgeRight:
+			return std::array<std::size_t, 2> {1, 2};
+		case PerspectiveQuadHandle::EdgeBottom:
+			return std::array<std::size_t, 2> {2, 3};
+		case PerspectiveQuadHandle::EdgeLeft:
+			return std::array<std::size_t, 2> {3, 0};
+		case PerspectiveQuadHandle::None:
+		case PerspectiveQuadHandle::TopLeft:
+		case PerspectiveQuadHandle::TopRight:
+		case PerspectiveQuadHandle::BottomRight:
+		case PerspectiveQuadHandle::BottomLeft:
+		case PerspectiveQuadHandle::Center:
+			return std::nullopt;
+	}
+	return std::nullopt;
+}
+
+std::array<std::size_t, 2> OppositeEdgeCornerIndices(PerspectiveQuadHandle handle) {
+	switch (handle) {
+		case PerspectiveQuadHandle::EdgeTop: return {2, 3};
+		case PerspectiveQuadHandle::EdgeRight: return {3, 0};
+		case PerspectiveQuadHandle::EdgeBottom: return {0, 1};
+		case PerspectiveQuadHandle::EdgeLeft: return {1, 2};
+		case PerspectiveQuadHandle::None:
+		case PerspectiveQuadHandle::TopLeft:
+		case PerspectiveQuadHandle::TopRight:
+		case PerspectiveQuadHandle::BottomRight:
+		case PerspectiveQuadHandle::BottomLeft:
+		case PerspectiveQuadHandle::Center:
+			break;
+	}
+	return {0, 0};
+}
+
+std::optional<Vec2> EdgeMidpoint(Quad const& quad, PerspectiveQuadHandle handle) {
+	auto const corners = EdgeCornerIndices(handle);
+	if (!corners || corners->back() >= quad.size() || corners->front() >= quad.size())
+		return std::nullopt;
+	Vec2 const& first = quad[corners->front()];
+	Vec2 const& second = quad[corners->back()];
+	Vec2 const midpoint {(first.x + second.x) / 2.0, (first.y + second.y) / 2.0};
+	if (!IsFinite(midpoint))
+		return std::nullopt;
+	return midpoint;
 }
 
 PerspectiveQuadEditError ValidatePointer(Vec2 point) {
@@ -110,6 +173,20 @@ PerspectiveQuadHandle HitTestPerspectiveQuad(
 			return corner_handles[index];
 	}
 
+	constexpr PerspectiveQuadHandle edge_handles[] = {
+		PerspectiveQuadHandle::EdgeTop,
+		PerspectiveQuadHandle::EdgeRight,
+		PerspectiveQuadHandle::EdgeBottom,
+		PerspectiveQuadHandle::EdgeLeft,
+	};
+	for (auto const edge_handle : edge_handles) {
+		auto const midpoint = EdgeMidpoint(quad, edge_handle);
+		if (midpoint
+			&& std::hypot(midpoint->x - point.x, midpoint->y - point.y)
+				<= tolerance)
+			return edge_handle;
+	}
+
 	auto const center = PerspectiveQuadArithmeticCenter(quad);
 	if (center && std::hypot(center->x - point.x, center->y - point.y)
 		<= tolerance)
@@ -152,8 +229,8 @@ bool IsPerspectiveQuadCreationDrag(
 	double tolerance) {
 	return IsFinite(first_canvas) && IsFinite(second_canvas)
 		&& std::isfinite(tolerance) && tolerance >= 0.0
-		&& std::abs(second_canvas.x - first_canvas.x) > tolerance
-		&& std::abs(second_canvas.y - first_canvas.y) > tolerance;
+		&& (std::abs(second_canvas.x - first_canvas.x) > tolerance
+			|| std::abs(second_canvas.y - first_canvas.y) > tolerance);
 }
 
 PerspectiveQuadEditError PerspectiveQuadEditState::Bind(
@@ -225,6 +302,19 @@ PerspectiveQuadEditError PerspectiveQuadEditState::ReplaceTarget(
 	return PerspectiveQuadEditError::None;
 }
 
+PerspectiveQuadEditError PerspectiveQuadEditState::DropTarget() {
+	if (!bound)
+		return PerspectiveQuadEditError::NotBound;
+	if (!editable)
+		return PerspectiveQuadEditError::ReadOnly;
+	if (IsGestureActive())
+		return PerspectiveQuadEditError::GestureAlreadyActive;
+	target.reset();
+	validation.reset();
+	ClearGesture();
+	return PerspectiveQuadEditError::None;
+}
+
 void PerspectiveQuadEditState::Clear() {
 	current_quad.reset();
 	target.reset();
@@ -284,17 +374,41 @@ PerspectiveQuadEditError PerspectiveQuadEditState::BeginGesture(
 	return PerspectiveQuadEditError::None;
 }
 
-PerspectiveQuadEditError PerspectiveQuadEditState::UpdateGesture(Vec2 point) {
+PerspectiveQuadEditError PerspectiveQuadEditState::UpdateGesture(
+	Vec2 point,
+	PerspectiveQuadGestureModifiers modifiers) {
 	if (!gesture_start_target || !target)
 		return PerspectiveQuadEditError::NoGesture;
 	if (auto const pointer_error = ValidatePointer(point);
 		pointer_error != PerspectiveQuadEditError::None)
 		return pointer_error;
 
-	Vec2 const delta = point - gesture_start_pointer;
+	Vec2 delta = point - gesture_start_pointer;
+	if (modifiers.axis_locked) {
+		if (std::abs(delta.x) >= std::abs(delta.y))
+			delta.y = 0.0;
+		else
+			delta.x = 0.0;
+	}
+
 	Quad candidate = *gesture_start_target;
+	auto const move_corner = [&candidate](std::size_t index, Vec2 corner_delta) {
+		candidate[index] = candidate[index] + corner_delta;
+	};
+	Vec2 const mirrored_delta {-delta.x, -delta.y};
 	if (auto const corner = CornerIndex(active_handle)) {
-		candidate[*corner] = candidate[*corner] + delta;
+		move_corner(*corner, delta);
+		if (modifiers.symmetric)
+			move_corner((*corner + 2) % candidate.size(), mirrored_delta);
+	}
+	else if (auto const edge = EdgeCornerIndices(active_handle)) {
+		move_corner((*edge)[0], delta);
+		move_corner((*edge)[1], delta);
+		if (modifiers.symmetric) {
+			auto const opposite = OppositeEdgeCornerIndices(active_handle);
+			move_corner(opposite[0], mirrored_delta);
+			move_corner(opposite[1], mirrored_delta);
+		}
 	}
 	else if (active_handle == PerspectiveQuadHandle::Center) {
 		for (auto& candidate_point : candidate)

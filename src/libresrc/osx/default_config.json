@@ -679,10 +679,12 @@
 				"Scale Step" : 1.0,
 				"Scale Step Large" : 10.0,
 				"Origin Step" : 1.0,
-				"Origin Step Large" : 10.0
+				"Origin Step Large" : 10.0,
+				"Perspective Step" : 1.0,
+				"Perspective Step Large" : 10.0
 			},
 			"Perspective" : {
-				"Decimal Places" : 2,
+				"Decimal Places" : 4,
 				"Fax Frz Only" : false,
 				"Fit Text" : true
 			}

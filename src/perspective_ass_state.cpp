@@ -5,6 +5,7 @@
 #include "ass_font_state.h"
 #include "ass_style.h"
 #include "ass_style_resolution.h"
+#include "ass_tag_scanner.h"
 
 #include <libaegisub/string_utils.h>
 
@@ -280,6 +281,77 @@ std::optional<int> AssAlignment(AssOverrideTag const& tag, int style_alignment) 
 
 bool TagContainsGeometryAnimation(AssOverrideTag const& tag);
 
+// Re-splits an override block's body with the libass-faithful scanner
+// (aegisub::ass_tag_scanner) and re-parses every tag span through the
+// prototype table. AssOverrideTag's own span cut classifies by prefix
+// without skipping spaces after the backslash, so "{\ frz30}" lands as
+// junk there while libass renders frz 30; the canonical form -- backslash,
+// name, parenthesized arguments -- restores the classification without
+// touching the argument bytes.
+// Recanonicalizes the nested tag list inside a \t argument region, keeping
+// every non-tag byte verbatim. libass parses the nested list with the same
+// space-skipping rule as the top level (ass_parse.c), so the prototype
+// table's lazy AssDialogueBlockOverride::ParseTags only agrees with it when
+// the nested bytes are already canonical -- without this,
+// "\t(0,4000,\ frz30)" animated the line for libass while the evaluator and
+// the animation check read the body as junk and let the line through as
+// static.
+std::string CanonicalizeTagRegion(std::string_view region, int depth);
+
+std::string CanonicalizeTagText(aegisub::ass_tag_scanner::RawTag const& scanned, int depth) {
+	// The scanner ends the name only at '(' or '\', so the bytes between the
+	// tag name and its argument region ride along: "\t (0,...)" scans as
+	// "t " and "\t1(0,...)" as "t1". libass matches the tag by prefix
+	// (mystrcmp) and renders both exactly like "\t(...)", so classification
+	// and recursion must use the same prefix rule and the canonical spelling
+	// must fold the junk away -- otherwise the nested body of "\t (0,4000,\
+	// frz30)" reaches the prototype table still space-blind.
+	bool const transform = aegisub::ass_tag_scanner::NameHasPrefix(scanned.name, "t");
+	std::string canonical;
+	canonical.reserve(1 + scanned.name.size() + (scanned.has_paren ? scanned.args.size() + 2 : 0));
+	canonical += '\\';
+	if (transform && scanned.has_paren)
+		canonical += 't';
+	else
+		canonical += scanned.name;
+	if (scanned.has_paren) {
+		canonical += '(';
+		if (transform)
+			canonical += CanonicalizeTagRegion(scanned.args, depth);
+		else
+			canonical += scanned.args;
+		canonical += ')';
+	}
+	return canonical;
+}
+
+std::string CanonicalizeTagRegion(std::string_view region, int depth) {
+	std::string result;
+	result.reserve(region.size());
+	std::size_t cursor = 0;
+	if (depth < 32) {
+		aegisub::ass_tag_scanner::ScanRawTags(region,
+											  [&](aegisub::ass_tag_scanner::RawTag const& scanned) {
+												  auto const begin = static_cast<std::size_t>(
+													  scanned.bytes.data() - region.data());
+												  auto const end = begin + scanned.bytes.size();
+												  result.append(region.substr(cursor, begin - cursor));
+												  result += CanonicalizeTagText(scanned, depth + 1);
+												  cursor = end;
+											  });
+	}
+	result.append(region.substr(cursor));
+	return result;
+}
+
+void CanonicalOverrideTags(std::string_view body,
+						   std::vector<AssOverrideTag>& out) {
+	aegisub::ass_tag_scanner::ScanRawTags(body,
+										  [&](aegisub::ass_tag_scanner::RawTag const& scanned) {
+											  out.emplace_back(CanonicalizeTagText(scanned, 0));
+										  });
+}
+
 bool TransformContainsMove(AssDialogueBlockOverride const& block, int depth = 0) {
 	if (depth >= 32)
 		return false;
@@ -488,13 +560,17 @@ AssStateError ApplyLineWideTags(
 	std::int64_t event_duration_ms,
 	AssApplyBlocker& blocker) {
 	LineWideTags line_wide;
+	// One combined canonical list across all override blocks: the scan is
+	// textual-order first-wins, and line_wide holds pointers into it.
+	std::vector<AssOverrideTag> canonical;
 	for (auto const& block : blocks) {
 		if (block->GetType() != AssBlockType::OVERRIDE)
 			continue;
-		ScanLineWideTags(
-			static_cast<AssDialogueBlockOverride const&>(*block).Tags,
-			line_wide, blocker);
+		CanonicalOverrideTags(
+			static_cast<AssDialogueBlockOverride const&>(*block).GetRawText(),
+			canonical);
 	}
+	ScanLineWideTags(canonical, line_wide, blocker);
 
 	if (line_wide.alignment) {
 		auto const value = AssAlignment(*line_wide.alignment, event_style.alignment);
@@ -871,40 +947,28 @@ std::vector<OverrideSpan> FindOverrideSpans(std::string_view text) {
 
 std::vector<RawTag> ParseRawTags(std::string_view content) {
 	std::vector<RawTag> tags;
-	std::size_t position = 0;
-	while (position < content.size()) {
-		auto const begin = content.find('\\', position);
-		if (begin == std::string_view::npos)
-			break;
-		std::size_t end = begin + 1;
-		int depth = 0;
-		for (; end < content.size(); ++end) {
-			char const value = content[end];
-			if (value == '(')
-				++depth;
-			else if (value == ')' && depth > 0)
-				--depth;
-			else if (value == '\\' && depth == 0)
-				break;
-		}
-		RawTag raw;
-		raw.begin = begin;
-		raw.end = end;
-		raw.raw.assign(content.substr(begin, end - begin));
-		AssOverrideTag parsed(raw.raw);
-		raw.name = parsed.Name;
-		raw.valid = parsed.IsValid();
-		raw.contains_move = raw.valid && TagContainsMove(parsed);
-		raw.geometry_animation = raw.valid && TagContainsGeometryAnimation(parsed);
-		if (raw.valid && raw.name == "\\r" && !parsed.Params.empty()) {
-			auto const& parameter = parsed.Params.front();
-			raw.named_reset = !parameter.omitted && !parameter.empty
-				&& parameter.GetType() == VariableDataType::TEXT
-				&& !parameter.Get<std::string>().empty();
-		}
-		tags.push_back(std::move(raw));
-		position = end;
-	}
+	// The libass-faithful cut replaces the old depth-tracking span walk:
+	// for everything but a backslash swallowing through an early ')', the
+	// two agree byte for byte, and the scanner also restores the spaced
+	// spellings ("{\ frz30}") the prototype table alone cannot classify.
+	aegisub::ass_tag_scanner::ScanRawTags(content,
+										  [&](aegisub::ass_tag_scanner::RawTag const& scanned) {
+											  RawTag raw;
+											  raw.begin = static_cast<std::size_t>(
+												  scanned.bytes.data() - content.data());
+											  raw.end = raw.begin + scanned.bytes.size();
+											  raw.raw.assign(scanned.bytes);
+											  AssOverrideTag parsed(CanonicalizeTagText(scanned, 0));
+											  raw.name = parsed.Name;
+											  raw.valid = parsed.IsValid();
+											  raw.contains_move = raw.valid && TagContainsMove(parsed);
+											  raw.geometry_animation = raw.valid && TagContainsGeometryAnimation(parsed);
+											  if (raw.valid && raw.name == "\\r" && !parsed.Params.empty()) {
+												  auto const& parameter = parsed.Params.front();
+												  raw.named_reset = !parameter.omitted && !parameter.empty && parameter.GetType() == VariableDataType::TEXT && !parameter.Get<std::string>().empty();
+											  }
+											  tags.push_back(std::move(raw));
+										  });
 	return tags;
 }
 
@@ -965,15 +1029,36 @@ struct RewriteDelta {
 	bool changed = false;
 	std::string line_bundle;
 	std::string run_bundle;
+	// True when the restricted candidate keeps the source's own \org, \fay,
+	// \frx and \fry: the rewrite then leaves those tags byte-for-byte instead
+	// of removing and re-serializing them through the decimal caps, which is
+	// what rounds a high-precision source value away from the state the
+	// staged re-verification must match.
+	bool keep_restricted_tags = false;
+	// True when the candidate carries the source's own shear values (always
+	// the case for multi-line bounds, where the frozen shear is the layout).
+	// The original \fax/\fay spelling is then the only text that reproduces
+	// the values bit for bit, so the tags stay where the author wrote them.
+	bool keep_shear_tags = false;
 };
 
 bool HasChanges(RewriteDelta const& delta) {
 	return delta.changed;
 }
 
-bool RemoveTag(std::string const& name, PerspectiveScalePolicy scale_policy) {
+bool RemoveTag(
+	std::string const& name,
+	PerspectiveScalePolicy scale_policy,
+	bool keep_restricted_tags,
+	bool keep_shear_tags) {
 	if (scale_policy == PerspectiveScalePolicy::Preserve
 		&& (name == "\\fsc" || name == "\\fscx" || name == "\\fscy"))
+		return false;
+	if (keep_restricted_tags
+		&& (name == "\\org" || name == "\\fay" || name == "\\frx"
+			|| name == "\\fry"))
+		return false;
+	if (keep_shear_tags && (name == "\\fax" || name == "\\fay"))
 		return false;
 	return name == "\\an" || name == "\\a"
 		|| name == "\\pos" || name == "\\move" || name == "\\org"
@@ -995,7 +1080,8 @@ std::optional<RewriteDelta> MakeRewriteDelta(
 	EvaluatedTransformState const& source,
 	EvaluatedTransformState const& event_style,
 	SolverCandidate const& candidate,
-	PerspectiveScalePolicy scale_policy) {
+	PerspectiveScalePolicy scale_policy,
+	PerspectiveRepresentationPolicy representation_policy) {
 	auto const& target = candidate.state;
 	if (!FiniteTransform(source) || !FiniteTransform(event_style)
 		|| !FiniteTransform(target))
@@ -1008,6 +1094,25 @@ std::optional<RewriteDelta> MakeRewriteDelta(
 		return std::nullopt;
 
 	RewriteDelta delta;
+	// A restricted candidate is either the clean subset form the policy
+	// filter accepts outright, or it keeps the source's restricted tags
+	// exactly. In the kept form the original spelling is the only text that
+	// reproduces the value bit for bit, so the rewrite must keep those tags
+	// and never re-emit them from rounded digits.
+	delta.keep_restricted_tags =
+		representation_policy == PerspectiveRepresentationPolicy::FaxFrzOnly
+		&& !MatchesPerspectiveRepresentationPolicy(
+			target, representation_policy);
+	// Keep the source's shear spelling when the candidate retains its values
+	// and at least one axis is not redundant against the style baseline; a
+	// fully style-equal pair stays on the ordinary elision path. The original
+	// bytes are the only text that reproduces a high-precision value bit for
+	// bit, which the multi-line shear lock depends on.
+	bool const shear_redundant = NearlyEqual(target.shear_x, event_style.shear_x)
+		&& NearlyEqual(target.shear_y, event_style.shear_y);
+	delta.keep_shear_tags = NearlyEqual(source.shear_x, target.shear_x)
+		&& NearlyEqual(source.shear_y, target.shear_y)
+		&& !shear_redundant;
 	delta.changed = source.alignment != target.alignment
 		|| !SamePoint(source.position, target.position)
 		|| !SameOptionalPoint(source.origin, target.origin)
@@ -1030,7 +1135,7 @@ std::optional<RewriteDelta> MakeRewriteDelta(
 		&& SamePoint(target.position, event_style.position);
 	if (!inherit_position && !AppendTag(delta.line_bundle, "\\pos",
 		candidate.serialized.position)) return std::nullopt;
-	if (target.origin) {
+	if (target.origin && !delta.keep_restricted_tags) {
 		if (!candidate.serialized.origin
 			|| !AppendTag(delta.line_bundle, "\\org", *candidate.serialized.origin))
 			return std::nullopt;
@@ -1046,18 +1151,20 @@ std::optional<RewriteDelta> MakeRewriteDelta(
 		if (!AppendTag(delta.run_bundle, "\\fscy",
 			candidate.serialized.scale_y)) return std::nullopt;
 	}
-	if (!NearlyEqual(target.shear_x, event_style.shear_x)
+	if (!delta.keep_shear_tags
+		&& !NearlyEqual(target.shear_x, event_style.shear_x)
 		&& !AppendTag(delta.run_bundle, "\\fax",
 		candidate.serialized.shear_x)) return std::nullopt;
-	if (!NearlyEqual(target.shear_y, event_style.shear_y)
-		&& !AppendTag(delta.run_bundle, "\\fay",
-		candidate.serialized.shear_y)) return std::nullopt;
-	if (!NearlyEqual(target.rotation_x, event_style.rotation_x)
-		&& !AppendTag(delta.run_bundle, "\\frx",
-		candidate.serialized.rotation_x)) return std::nullopt;
-	if (!NearlyEqual(target.rotation_y, event_style.rotation_y)
-		&& !AppendTag(delta.run_bundle, "\\fry",
-		candidate.serialized.rotation_y)) return std::nullopt;
+	if (!delta.keep_shear_tags && !delta.keep_restricted_tags && !NearlyEqual(target.shear_y, event_style.shear_y) && !AppendTag(delta.run_bundle, "\\fay", candidate.serialized.shear_y))
+		return std::nullopt;
+	if (!delta.keep_restricted_tags) {
+		if (!NearlyEqual(target.rotation_x, event_style.rotation_x)
+			&& !AppendTag(delta.run_bundle, "\\frx",
+			candidate.serialized.rotation_x)) return std::nullopt;
+		if (!NearlyEqual(target.rotation_y, event_style.rotation_y)
+			&& !AppendTag(delta.run_bundle, "\\fry",
+			candidate.serialized.rotation_y)) return std::nullopt;
+	}
 	if (!NearlyEqual(target.rotation_z, event_style.rotation_z)
 		&& !AppendTag(delta.run_bundle, "\\frz",
 		candidate.serialized.rotation_z)) return std::nullopt;
@@ -1121,7 +1228,8 @@ std::string RewriteOverrideContent(
 			output.append(delta.run_bundle);
 			run_inserted = true;
 		}
-		if (!RemoveTag(tag.name, scale_policy))
+		if (!RemoveTag(tag.name, scale_policy, delta.keep_restricted_tags,
+				delta.keep_shear_tags))
 			output.append(tag.raw);
 		if (tag.name == "\\r" && reset_needs[index]) {
 			output.append(delta.run_bundle);
@@ -1213,7 +1321,9 @@ AssStateResult EvaluateEffectiveAssState(AssStateInput const& input) {
 	for (auto const& block : blocks) {
 		if (block->GetType() == AssBlockType::OVERRIDE) {
 			auto const& override_block = static_cast<AssDialogueBlockOverride const&>(*block);
-			for (auto const& tag : override_block.Tags) {
+			std::vector<AssOverrideTag> tags;
+			CanonicalOverrideTags(override_block.GetRawText(), tags);
+			for (auto const& tag : tags) {
 				result.error = ApplyTag(
 					current, tag, *input.file, *input.line, *event_style,
 					input.play_resolution, event_time_ms, event_duration_ms,
@@ -1274,7 +1384,8 @@ RewriteResult RewritePerspectiveTags(
 	EvaluatedTransformState const& source_state,
 	EvaluatedTransformState const& event_style_state,
 	SolverCandidate const& candidate,
-	PerspectiveScalePolicy scale_policy) {
+	PerspectiveScalePolicy scale_policy,
+	PerspectiveRepresentationPolicy representation_policy) {
 	RewriteResult result;
 	if (source_text.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
 		result.error = RewriteError::InvalidInput;
@@ -1300,7 +1411,8 @@ RewriteResult RewritePerspectiveTags(
 	if (result.error != RewriteError::None)
 		return result;
 	auto const delta = MakeRewriteDelta(
-		source_state, event_style_state, candidate, scale_policy);
+		source_state, event_style_state, candidate, scale_policy,
+		representation_policy);
 	if (!delta) {
 		result.error = RewriteError::InvalidTarget;
 		return result;

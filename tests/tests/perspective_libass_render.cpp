@@ -106,7 +106,9 @@ std::string MakeTransformTags(
     return result;
 }
 
-RenderedMask Render(ASS_Library* library, ASS_Renderer* renderer, std::string script) {
+RenderedMask Render(
+    ASS_Library* library, ASS_Renderer* renderer, std::string script,
+    long long now_ms = 0) {
     auto const& api = libass::runtime::GetApi();
     auto *mutable_data = script.data();
     auto *track = api.ass_read_memory(
@@ -117,7 +119,7 @@ RenderedMask Render(ASS_Library* library, ASS_Renderer* renderer, std::string sc
 
     api.ass_set_frame_size(renderer, RenderWidth, RenderHeight);
     api.ass_set_storage_size(renderer, RenderWidth, RenderHeight);
-    auto *images = api.ass_render_frame(renderer, track, 0, nullptr);
+    auto *images = api.ass_render_frame(renderer, track, now_ms, nullptr);
 
     RenderedMask result;
     result.width = RenderWidth;
@@ -398,6 +400,63 @@ TEST(perspective_libass_render, generated_tags_match_hand_drawn_quad_for_vector_
     // raster centroid is not exactly the homography of the source centroid.
     EXPECT_NEAR(transformed_stats.centroid.x, expected_centroid->x, 8.0);
     EXPECT_NEAR(transformed_stats.centroid.y, expected_centroid->y, 8.0);
+}
+
+// The review's repro, rendered: a nested tag written with a space after its
+// backslash animates for libass exactly like the canonical spelling (the
+// review measured identical masks and a 11967 px gap to the static drawing).
+// The evaluator used to parse the nested body space-blind, so it saw a static
+// line where the renderer animated one.
+TEST(perspective_libass_render, spaced_nested_animation_renders_like_the_canonical_form) {
+    if (!libass::runtime::IsAvailable())
+        GTEST_SKIP() << "libass runtime is unavailable: "
+            << libass::runtime::GetLoadError();
+
+    auto session = StartLibass();
+    ASSERT_NE(nullptr, session.library);
+    ASSERT_NE(nullptr, session.renderer);
+
+    std::string const prefix = "\\an7\\pos(200,200)";
+    std::string const drawing = "m 0 0 l 200 0 200 80 0 80";
+    std::string const spaced =
+        "{" + prefix + "\\t(0,1000,\\ frz30)\\p1}" + drawing;
+    std::string const canonical =
+        "{" + prefix + "\\t(0,1000,\\frz30)\\p1}" + drawing;
+    // A space before the argument region rides along with the tag name in
+    // the scanner; libass matches the tag by prefix and renders it exactly
+    // like the canonical spelling.
+    std::string const spaced_paren =
+        "{" + prefix + "\\t (0,1000,\\ frz30)\\p1}" + drawing;
+    auto const still = Render(
+        session.library, session.renderer,
+        MakeScript("{" + prefix + "\\p1}" + drawing));
+    auto const canonical_mask = Render(
+        session.library, session.renderer, MakeScript(canonical), 2000);
+    auto const spaced_mask = Render(
+        session.library, session.renderer, MakeScript(spaced), 2000);
+    auto const spaced_paren_mask = Render(
+        session.library, session.renderer, MakeScript(spaced_paren), 2000);
+
+    ASSERT_GT(GetStats(still).alpha_area, 100.0);
+    ASSERT_GT(GetStats(canonical_mask).alpha_area, 100.0);
+    ASSERT_EQ(spaced_mask.alpha.size(), canonical_mask.alpha.size());
+    ASSERT_GT(GetStats(spaced_mask).alpha_area, 100.0);
+    ASSERT_GT(GetStats(spaced_paren_mask).alpha_area, 100.0);
+    std::size_t spaced_vs_canonical = 0;
+    std::size_t spaced_paren_vs_canonical = 0;
+    std::size_t spaced_vs_still = 0;
+    for (std::size_t index = 0; index < spaced_mask.alpha.size(); ++index) {
+        if (spaced_mask.alpha[index] != canonical_mask.alpha[index])
+            ++spaced_vs_canonical;
+        if (spaced_paren_mask.alpha[index] != canonical_mask.alpha[index])
+            ++spaced_paren_vs_canonical;
+        if (std::abs(static_cast<int>(spaced_mask.alpha[index])
+                - static_cast<int>(still.alpha[index])) > 16)
+            ++spaced_vs_still;
+    }
+    EXPECT_EQ(0u, spaced_vs_canonical);
+    EXPECT_EQ(0u, spaced_paren_vs_canonical);
+    EXPECT_GT(spaced_vs_still, 1000u);
 }
 
 TEST(perspective_libass_render, ordinary_text_minimal_style_tags_render_target) {

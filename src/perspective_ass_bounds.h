@@ -41,6 +41,10 @@ struct AssBoundsResult {
 	AssBoundsError error = AssBoundsError::None;
 	GeometryError geometry_error = GeometryError::None;
 	BaseBounds value;
+	// Face the text measurement rejected, when error is FontUnavailable, so a
+	// diagnostic can name the font instead of refusing generically. Empty for
+	// every other error.
+	std::string font_name;
 
 	explicit operator bool() const { return error == AssBoundsError::None; }
 };

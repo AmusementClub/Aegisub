@@ -13,6 +13,7 @@
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 #include "subtitle_overlay_blend.h"
+#include "motion_track/gray_convert.h"
 #include "simd/subtitle_overlay_simd.h"
 
 #include <algorithm>
@@ -20,12 +21,14 @@
 
 namespace {
 inline unsigned char* RowPointer(BgraSubtitleTargetView target, int y) {
-	int physical_y = target.flipped ? (target.height - 1 - y) : y;
+	int physical_y = aegisub::motion_track::LogicalRowToPhysicalRow(
+		y, target.height, target.flipped);
 	return target.data + static_cast<ptrdiff_t>(physical_y) * target.stride;
 }
 
 inline unsigned char const* RowPointer(SubtitleOverlay const& overlay, int y) {
-	int physical_y = overlay.flipped ? (overlay.height - 1 - y) : y;
+	int physical_y = aegisub::motion_track::LogicalRowToPhysicalRow(
+		y, overlay.height, overlay.flipped);
 	return overlay.planes[0].data + static_cast<ptrdiff_t>(physical_y) * overlay.planes[0].stride;
 }
 }
@@ -78,7 +81,8 @@ void CompositeOpaqueBgraOverlayOntoVideoFrame(VideoFrame& frame, SubtitleOverlay
 
 	for (int y = y0; y < y1; ++y) {
 		int overlay_y = y - overlay.target_y;
-		int dst_y = frame.flipped ? (static_cast<int>(frame.height) - 1 - y) : y;
+		int dst_y = aegisub::motion_track::LogicalRowToPhysicalRow(
+			y, static_cast<int>(frame.height), frame.flipped);
 		auto* dst_row = frame.data.data() + static_cast<ptrdiff_t>(dst_y) * frame.pitch + static_cast<ptrdiff_t>(x0) * 4;
 		auto const* src_row = RowPointer(overlay, overlay_y) + static_cast<ptrdiff_t>(x0 - overlay.target_x) * 4;
 		std::memcpy(dst_row, src_row, static_cast<size_t>(x1 - x0) * 4);
@@ -98,7 +102,8 @@ void CompositePremultipliedBgraOverlayOntoVideoFrame(VideoFrame& frame, Subtitle
 
 	for (int y = y0; y < y1; ++y) {
 		int overlay_y = y - overlay.target_y;
-		int dst_y = frame.flipped ? (static_cast<int>(frame.height) - 1 - y) : y;
+		int dst_y = aegisub::motion_track::LogicalRowToPhysicalRow(
+			y, static_cast<int>(frame.height), frame.flipped);
 		auto* dst_row = frame.data.data() + static_cast<ptrdiff_t>(dst_y) * frame.pitch + static_cast<ptrdiff_t>(x0) * 4;
 		auto const* src_row = RowPointer(overlay, overlay_y) + static_cast<ptrdiff_t>(x0 - overlay.target_x) * 4;
 		aegisub::simd::CompositePremultipliedBgraRow(dst_row, src_row, x1 - x0);

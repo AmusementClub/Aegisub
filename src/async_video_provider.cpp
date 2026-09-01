@@ -24,6 +24,7 @@
 #include "async_video_trace.h"
 #include "include/aegisub/subtitles_provider.h"
 #include "key_point_color.h"
+#include "motion_track/gray_convert.h"
 #include "source_frame.h"
 #include "subtitle_overlay.h"
 #include "subtitle_overlay_blend.h"
@@ -228,7 +229,7 @@ bool NormalizeFrameY(VideoFrame const& frame, int y, int& normalized_y) {
 	if (y < 0 || y >= height)
 		return false;
 
-	normalized_y = frame.flipped ? height - 1 - y : y;
+	normalized_y = aegisub::motion_track::LogicalRowToPhysicalRow(y, height, frame.flipped);
 	return normalized_y >= 0 && normalized_y < height;
 }
 

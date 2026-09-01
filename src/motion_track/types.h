@@ -3,6 +3,8 @@
 // Frozen sample layout for the translation tracking slice: later slices may
 // only add fields, never repurpose them.
 
+#include "../raw_frame_view.h"
+
 #include <array>
 #include <cstdint>
 #include <vector>
@@ -160,14 +162,10 @@ struct RoiRect {
 
 // Non-owning view of one raw BGRA video frame; storage is owned by the
 // provider and stays valid until the next fetch or the end of the batch
-// callback.
-struct RawBgraView {
-	std::uint8_t const* data = nullptr;
-	int width = 0;
-	int height = 0;
-	int pitch = 0; // bytes per row
-	bool flipped = false;
-};
+// callback. Defined in src/raw_frame_view.h -- re-exported here because the
+// motion_track API and async_video_provider both spell it
+// motion_track::RawBgraView.
+using aegisub::RawBgraView;
 
 // samples are stored in ascending frame order; linear scan by design
 // (n <= 10000). Returns nullptr when not present.

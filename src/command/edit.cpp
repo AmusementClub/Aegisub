@@ -58,6 +58,7 @@
 #include "../selection_controller.h"
 #include "../subtitle_edit_ops.h"
 #include "../subs_controller.h"
+#include "../subs_edit_box.h"
 #include "../async_video_provider.h"
 #include "../source_frame.h"
 #include "../text_selection_controller.h"
@@ -498,7 +499,19 @@ struct parsed_line {
 		return n - in_block;
 	}
 
-	int set_tag(std::string const& tag, std::string const& value, int norm_pos, int orig_pos) {
+	/// Write `tag`+`value` at the block the caret resolves to, replacing any
+	/// same-named tag there. Returns the line's length delta. When
+	/// `written_block` is non-null it receives the block index the tag was
+	/// written into, valid in `blocks` immediately after the call (the parse
+	/// is refreshed when a new override block had to be inserted), so callers
+	/// can locate the tag in the final text without re-resolving a now-stale
+	/// caret position.
+	int set_tag(
+		std::string const& tag,
+		std::string const& value,
+		int norm_pos,
+		int orig_pos,
+		int *written_block = nullptr) {
 		int blockn = block_at_pos(norm_pos);
 
 		// block_at_pos is plain-text-count based, so a caret inside an
@@ -563,6 +576,11 @@ struct parsed_line {
 			shift += 2;
 			blocks = line->ParseTags();
 			text_rewritten = true;
+			if (written_block) {
+				// The inserted '{' sits at orig_pos, so the byte after it is
+				// inside the new override block.
+				*written_block = FindDialogueBlockForRead(blocks, orig_pos + 1);
+			}
 		}
 		else {
 			// We've reached here, ovr cannot be null
@@ -589,6 +607,8 @@ struct parsed_line {
 
 			line->UpdateText(blocks);
 			text_rewritten = true;
+			if (written_block)
+				*written_block = blockn;
 		}
 
 		return shift;
@@ -810,6 +830,7 @@ int ApplyPreparedColorEdit(
 	bool preserve_line_alpha = false) {
 	auto core = c->GetCore();
 	int active_shift = 0;
+	int active_written_block = -1;
 	for (auto& line : edit.lines) {
 		// Entry points without an alpha input (the video quick pick) must not
 		// rewrite transparency: keep each line's effective alpha instead of
@@ -817,13 +838,17 @@ int ApplyPreparedColorEdit(
 		agi::Color const applied = preserve_line_alpha
 									   ? agi::Color(new_color.r, new_color.g, new_color.b, line.color.a)
 									   : new_color;
-		int shift = line.parsed.set_tag(edit.target.tag, AssCompat::FormatOverrideColor(applied), line.norm_sel_start, line.sel_start);
+		bool const is_active = line.parsed.line == edit.active_line;
+		int shift = line.parsed.set_tag(
+			edit.target.tag, AssCompat::FormatOverrideColor(applied),
+			line.norm_sel_start, line.sel_start,
+			is_active ? &active_written_block : nullptr);
 		if (applied.a != line.color.a) {
 			shift += line.parsed.set_tag(edit.target.alpha, AssCompat::FormatOverrideAlpha(applied.a), line.norm_sel_start, line.sel_start + shift);
 			line.color.a = applied.a;
 		}
 
-		if (line.parsed.line == edit.active_line)
+		if (is_active)
 			active_shift = shift;
 	}
 
@@ -832,7 +857,29 @@ int ApplyPreparedColorEdit(
 		AssFile::COMMIT_DIAG_TEXT,
 		edit.commit_id,
 		edit.selection.size() == 1 ? *edit.selection.begin() : nullptr);
-	if (active_shift)
+
+	// Park the caret just past the colour tag on the active line rather than
+	// shifting the old caret by the line-length delta: an in-place value
+	// replacement has a zero delta (leaving the caret wherever the edit-box
+	// reload put it), and re-serialization can shift positions by more than
+	// the delta anyway. Locate on the final text via the block set_tag
+	// reported writing into — a stale caret position resolves ambiguously
+	// between same-named tags in neighbouring blocks — falling back to the
+	// caret resolution, then the legacy remap.
+	auto active = std::find_if(
+		edit.lines.begin(), edit.lines.end(),
+		[&](PreparedColorEdit::LineState const& line) { return line.parsed.line == edit.active_line; });
+	auto const *active_parsed = active != edit.lines.end() ? &active->parsed : nullptr;
+	std::optional<int> tag_end;
+	if (active_parsed && active_written_block >= 0)
+		tag_end = aegisub::subtitle_edit_ops::GetTagEndInWrittenBlock(
+			active_parsed->blocks, active_written_block, edit.target.tag, edit.target.alt);
+	if (!tag_end && active_parsed)
+		tag_end = aegisub::subtitle_edit_ops::GetTagEndInBlock(
+			active_parsed->blocks, edit.sel_start, edit.target.tag, edit.target.alt);
+	if (tag_end)
+		core.textSelectionController->SetSelection(*tag_end, *tag_end);
+	else if (active_shift)
 		core.textSelectionController->SetSelection(edit.sel_start + active_shift, edit.sel_start + active_shift);
 	return edit.commit_id;
 }
@@ -960,8 +1007,14 @@ class VideoQuickPickSession final {
 		// Disconnect first so our own commit below cannot re-trigger cancel
 		// paths, then decide whether the snapshot is still trustworthy.
 		connections.clear();
-		if (cancelled)
+		if (cancelled) {
+			// The user backed out with Escape or right-click; hand the
+			// keyboard back to the edit box the armed mode took it from.
+			// Invalidation cancels (subtitles/video changed) never reach
+			// Complete, so focus the user moved elsewhere is not overridden.
+			FocusEditBox();
 			return;
+		}
 
 		auto core = context->GetCore();
 		auto *provider = core.project->VideoProvider();
@@ -1034,10 +1087,21 @@ class VideoQuickPickSession final {
 		if (result.capped)
 			status << ", " << from_wx(_("capped at size limit"));
 		context->ShowStatus(status.str());
+		// The pick is done and the colour is in; the next keystroke belongs
+		// in the edit box, on the caret ApplyPreparedColorEdit just placed.
+		FocusEditBox();
 	}
 
 	private:
-	/// Drop the pending pick because subtitles or video changed underneath us.
+		/// The armed mode moved the keyboard focus to the video canvas; put it
+		/// back so the next keystroke lands in the edit box.
+		void FocusEditBox() {
+			auto ui = context->GetUI();
+			if (ui.subsEditBox && ui.subsEditBox->CanFocusEditControl())
+				ui.subsEditBox->FocusEditControl();
+		}
+
+		/// Drop the pending pick because subtitles or video changed underneath us.
 	void Invalidate() {
 		if (!connections.empty()) {
 			connections.clear();

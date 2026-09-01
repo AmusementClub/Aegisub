@@ -631,3 +631,69 @@ TEST(subtitle_edit_ops, tag_bounds_select_nothing_outside_tags) {
 	EXPECT_EQ("", TagAtCaret("{\\b1}|"));
 	EXPECT_EQ("", TagAtCaret("|"));
 }
+
+namespace {
+std::optional<int> TagEndAt(std::string const& text, int caret, std::string const& tag, std::string const& alt = "") {
+	AssDialogue line;
+	line.Text = text;
+	return aegisub::subtitle_edit_ops::GetTagEndInBlock(line.ParseTags(), caret, tag, alt);
+}
+} // namespace
+
+TEST(subtitle_edit_ops, tag_end_sits_just_past_the_tag_inside_its_block) {
+	// "{\3c&H112233&}" is 14 bytes; the caret lands after the '&', before '}'.
+	EXPECT_EQ(13, TagEndAt("{\\3c&H112233&}text", 6, "\\3c"));
+	EXPECT_EQ(13, TagEndAt("{\\3c&H112233&}text", 13, "\\3c"));
+	// A caret in the trailing plain text resolves to the plain block; the
+	// neighbour fallback still finds the tag beside it.
+	EXPECT_EQ(13, TagEndAt("{\\3c&H112233&}text", 15, "\\3c"));
+	// Byte offsets: a two-byte codepoint before the block shifts everything.
+	EXPECT_EQ(15, TagEndAt("\xc3\xa9{\\3c&H112233&}", 4, "\\3c"));
+}
+
+TEST(subtitle_edit_ops, tag_end_matches_the_alt_spelling) {
+	// set_tag reuses an existing \1c in place, so \c writes must find \1c.
+	EXPECT_EQ(13, TagEndAt("{\\1c&HFFFFFF&}text", 5, "\\c", "\\1c"));
+	// An empty alt matches nothing.
+	EXPECT_EQ(std::nullopt, TagEndAt("{\\1c&HFFFFFF&}text", 5, "\\c"));
+}
+
+TEST(subtitle_edit_ops, tag_end_prefers_the_block_at_the_caret) {
+	EXPECT_EQ(30, TagEndAt("{\\3c&H111111&}mid{\\3c&H222222&}", 20, "\\3c"));
+	EXPECT_EQ(30, TagEndAt("{\\3c&H111111&}mid{\\3c&H222222&}", 31, "\\3c"));
+	// The first block's tag still resolves when the caret is in it or in the
+	// plain text right after it.
+	EXPECT_EQ(13, TagEndAt("{\\3c&H111111&}mid{\\3c&H222222&}", 5, "\\3c"));
+	EXPECT_EQ(13, TagEndAt("{\\3c&H111111&}mid{\\3c&H222222&}", 15, "\\3c"));
+}
+
+TEST(subtitle_edit_ops, tag_end_lands_between_neighbouring_tags) {
+	// "{\i1\3c&H112233&\b1}": after the colour value, before the \b1.
+	EXPECT_EQ(16, TagEndAt("{\\i1\\3c&H112233&\\b1}", 3, "\\3c"));
+}
+
+TEST(subtitle_edit_ops, tag_end_returns_nullopt_when_no_such_tag_is_near) {
+	EXPECT_EQ(std::nullopt, TagEndAt("{\\b1}text", 3, "\\3c"));
+	EXPECT_EQ(std::nullopt, TagEndAt("plain text", 3, "\\3c"));
+	EXPECT_EQ(std::nullopt, TagEndAt("{\\b1}{\\i1}tail", 7, "\\3c"));
+}
+
+TEST(subtitle_edit_ops, written_block_lookup_finds_the_inserted_tag_not_an_earlier_namesake) {
+	// Post-write state of picking a colour with the caret at the end of
+	// "{\3c&H111111&}hello world": the write inserted a new override at the
+	// caret, after the plain text. The index-based lookup must land there,
+	// while the caret-based fallback demonstrably picks the line-start tag
+	// (offset 13) — the reason set_tag reports the written block.
+	AssDialogue inserted_at_end;
+	inserted_at_end.Text = "{\\3c&H111111&}hello world{\\3c&H445566&}";
+	auto blocks = inserted_at_end.ParseTags();
+	EXPECT_EQ(38, aegisub::subtitle_edit_ops::GetTagEndInWrittenBlock(blocks, 2, "\\3c", ""));
+	EXPECT_EQ(13, aegisub::subtitle_edit_ops::GetTagEndInBlock(blocks, 24, "\\3c", ""));
+
+	// Same namesake trap between two overrides: caret was in the plain text,
+	// the write landed in a new override after it.
+	AssDialogue inserted_between;
+	inserted_between.Text = "{\\3c&H111111&}mid{\\3c&H445566&}";
+	blocks = inserted_between.ParseTags();
+	EXPECT_EQ(30, aegisub::subtitle_edit_ops::GetTagEndInWrittenBlock(blocks, 2, "\\3c", ""));
+}

@@ -999,4 +999,51 @@ std::pair<int, int> GetColorValueBounds(std::string_view text, ColorSpan const& 
 		++digits;
 	return {static_cast<int>(begin), static_cast<int>(digits - begin)};
 }
+
+std::optional<int> GetTagEndInWrittenBlock(
+	std::vector<std::unique_ptr<AssDialogueBlock>> const& blocks,
+	int blockn,
+	std::string_view tag_name,
+	std::string_view alt_name) {
+	if (blockn < 0 || blockn >= static_cast<int>(blocks.size()))
+		return std::nullopt;
+	auto *ovr = dynamic_cast<AssDialogueBlockOverride const*>(blocks[blockn].get());
+	if (!ovr)
+		return std::nullopt;
+
+	// GetText() of an override block is "{" + the tags serialized in order +
+	// "}", so the tag's end offset is the sum of the preceding blocks, the
+	// opening brace, and every tag before the match.
+	size_t offset = 1;
+	for (int index = 0; index < blockn; ++index)
+		offset += blocks[index]->GetText().size();
+	for (auto const& tag : ovr->Tags) {
+		std::string const serialized = static_cast<std::string>(tag);
+		if (tag.Name == tag_name || tag.Name == alt_name)
+			return static_cast<int>(offset + serialized.size());
+		offset += serialized.size();
+	}
+	return std::nullopt;
+}
+
+std::optional<int> GetTagEndInBlock(
+	std::vector<std::unique_ptr<AssDialogueBlock>> const& blocks,
+	int caret_pos,
+	std::string_view tag_name,
+	std::string_view alt_name) {
+	int const blockn = FindDialogueBlockForRead(blocks, caret_pos);
+	// The resolved block first, then each neighbour once: a caret in plain
+	// text resolves to the plain block while the written tag lives in an
+	// override beside it, and re-serialization can shift a raw position by a
+	// block. No wider search — the same tag name in a far block is a
+	// different tag, and a wrong hit is worse than none. Callers that can
+	// know the written block (set_tag reports it) should use
+	// GetTagEndInWrittenBlock instead: this fallback can pick an earlier
+	// same-named tag when a plain-text caret resolved between two overrides.
+	if (auto end = GetTagEndInWrittenBlock(blocks, blockn, tag_name, alt_name))
+		return end;
+	if (auto end = GetTagEndInWrittenBlock(blocks, blockn - 1, tag_name, alt_name))
+		return end;
+	return GetTagEndInWrittenBlock(blocks, blockn + 1, tag_name, alt_name);
+}
 }

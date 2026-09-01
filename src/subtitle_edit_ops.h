@@ -215,4 +215,33 @@ std::vector<ColorSpan> FindColorSpans(
 /// stops at the first non-hex byte. Swatches paint and accept clicks over
 /// this range rather than the full parameter run.
 std::pair<int, int> GetColorValueBounds(std::string_view text, ColorSpan const& span);
+
+/// Byte offset, in the serialized line text, just past the override tag named
+/// `tag_name` or `alt_name` (both WITH the leading backslash, e.g. "\\3c"; an
+/// empty `alt_name` matches nothing) in the override block that a raw caret
+/// position reads from — the same block resolution the edit commands' read
+/// path uses. `blocks` must be the parse of the FINAL text, after the tag
+/// write. If the resolved block is not an override block or holds no such
+/// tag, the neighbouring blocks are tried once each to absorb a one-block
+/// drift from re-serialization. Returns nullopt when no candidate block holds
+/// the tag.
+///
+/// Prefer GetTagEndInWrittenBlock when the writer can report the block it
+/// wrote into: this caret-based resolution can pick an earlier same-named
+/// tag when a plain-text caret sits between two override blocks.
+std::optional<int> GetTagEndInBlock(
+	std::vector<std::unique_ptr<AssDialogueBlock>> const& blocks,
+	int caret_pos,
+	std::string_view tag_name,
+	std::string_view alt_name);
+
+/// GetTagEndInBlock's lookup against one known block index (as reported by
+/// the writer), skipping caret resolution and the neighbour fallback
+/// entirely. Returns nullopt when the block is not an override block or does
+/// not hold a tag named `tag_name`/`alt_name`.
+std::optional<int> GetTagEndInWrittenBlock(
+	std::vector<std::unique_ptr<AssDialogueBlock>> const& blocks,
+	int blockn,
+	std::string_view tag_name,
+	std::string_view alt_name);
 }

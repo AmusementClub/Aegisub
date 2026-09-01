@@ -2089,6 +2089,17 @@ void VideoDisplay::DoRender() try {
 	if (presented_new_frame) {
 		FramePresented(presented_frame_number);
 		con->videoController->NotifyFramePresented(presented_frame_number);
+		// The overlay pass above ran while GetPresentedFrameN() still
+		// reported the previous frame, so tools that key off it (motion
+		// track trajectory range, riding box, per-frame readout) drew one
+		// frame stale. One follow-up render while paused re-syncs the
+		// overlay; during playback the next presented frame does it for
+		// free. presented_new_frame is only set when a new packet was
+		// uploaded, so this cannot loop.
+		if (tool && !con->videoController->IsPlaying()) {
+			render_requested = true;
+			ScheduleRender();
+		}
 		if (perf_trace::ShouldSampleVideoMemory(first_presented_frame)) {
 			auto snapshot = BuildVideoMemorySnapshot(con, this);
 			perf_trace::ObserveVideoMemorySnapshot("frame_presented", snapshot, first_presented_frame);

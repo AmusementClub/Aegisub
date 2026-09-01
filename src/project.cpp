@@ -370,7 +370,12 @@ Project::Project(agi::Context *c) : context(c) {
 	});
 }
 
-Project::~Project() { }
+Project::~Project() {
+	// Quiesce any outstanding raw-video lease before members unwind; tasks
+	// observe the retirement flag and release within one batch.
+	BeginVideoProviderRetirement();
+	WaitForLeaseDrain();
+}
 
 bool Project::CanLoadBitmapSubtitlesFromVideo(MkvBitmapSubtitleCodec codec) const {
 	switch (codec) {
@@ -718,7 +723,10 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 
 	auto const load_started = std::chrono::steady_clock::now();
 	can_generate_scene_change_keyframes = false;
-	video_provider = aegisub::video_session_ops::CreateVideoProviderWithErrorHandling(
+	// Candidate-first: the new provider is built into a local object so a
+	// failed open leaves the previous provider (and any session state)
+	// untouched.
+	auto candidate = aegisub::video_session_ops::CreateVideoProviderWithErrorHandling(
 		path,
 		[&] {
 			auto core = context->GetCore();
@@ -736,12 +744,12 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 		[](char const* category, agi::fs::path const& candidate) {
 			config::mru->Remove(category, candidate);
 		});
-	if (!video_provider)
+	if (!candidate)
 		return false;
 
 	if (perf_trace::ShouldSampleVideoMemory(true)) {
 		VideoMemorySnapshot snapshot;
-		snapshot.async = video_provider->CollectMemoryStats();
+		snapshot.async = candidate->CollectMemoryStats();
 		if (audio_provider)
 			snapshot.audio = audio_provider->GetMemoryStats();
 		perf_trace::ObserveVideoMemorySnapshot("video_provider_ready", snapshot, true);
@@ -749,7 +757,7 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 
 	MkvSubtitleAvailability subtitle_availability;
 	auto opened_video = aegisub::video_session_ops::BuildOpenedVideoSummary(
-		*video_provider,
+		*candidate,
 		path,
 		[&](agi::fs::path const& candidate) {
 			subtitle_availability = MatroskaWrapper::GetSubtitleAvailability(candidate);
@@ -766,6 +774,15 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 	video_has_bitmap_subtitles = subtitle_availability.bitmap;
 	video_has_pgs_subtitles = subtitle_availability.hdmv_pgs;
 	video_has_vobsub_subtitles = subtitle_availability.vobsub;
+
+	// Raw-video lifecycle barrier: deny new leases and wait for outstanding
+	// analysis batches before swapping providers. Candidate construction and
+	// all user interaction already happened above, so this wait is bounded
+	// by at most the current batch.
+	BeginVideoProviderRetirement();
+	WaitForLeaseDrain();
+	video_provider = std::move(candidate);
+	CompleteVideoProviderRetirement();
 
 	AnnounceVideoProviderModified(video_provider.get());
 
@@ -839,7 +856,12 @@ void Project::CloseVideo() {
 	video_has_pgs_subtitles = false;
 	video_has_vobsub_subtitles = false;
 	AnnounceVideoProviderModified(nullptr);
+	// Same barrier as DoLoadVideo: quiesce outstanding analysis batches
+	// before destroying the provider.
+	BeginVideoProviderRetirement();
+	WaitForLeaseDrain();
 	video_provider.reset();
+	CompleteVideoProviderRetirement();
 	can_generate_scene_change_keyframes = false;
 	SetPath(video_file, "?video", "", "");
 	core.ass->Properties.ar_mode = 0;

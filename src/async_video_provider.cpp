@@ -201,6 +201,27 @@ struct KeyPointBounds {
 	int down = 0;
 };
 
+// Thunk-side marker: records which thread is currently executing a
+// synchronous worker section so public entries can reject same-thread
+// reentrancy before deadlocking inside Queue::Sync.
+class WorkerSyncTracker {
+public:
+	explicit WorkerSyncTracker(AsyncVideoProvider const& provider)
+	: provider(provider) {
+		std::lock_guard<std::mutex> lock(provider.sync_state.mutex);
+		provider.sync_state.owner = std::this_thread::get_id();
+		++provider.sync_state.depth;
+	}
+	~WorkerSyncTracker() {
+		std::lock_guard<std::mutex> lock(provider.sync_state.mutex);
+		if (--provider.sync_state.depth == 0)
+			provider.sync_state.owner = std::thread::id{};
+	}
+
+private:
+	AsyncVideoProvider const& provider;
+};
+
 bool NormalizeFrameY(VideoFrame const& frame, int y, int& normalized_y) {
 	int const height = static_cast<int>(frame.height);
 	if (y < 0 || y >= height)
@@ -810,12 +831,15 @@ AsyncVideoProvider::AsyncVideoProvider(std::unique_ptr<VideoProvider> source_pro
 
 AsyncVideoProvider::~AsyncVideoProvider() {
 	worker->Sync([this] {
+		WorkerSyncTracker sync_tracker(*this);
 		while (ProcessPending()) { }
 	});
 }
 AsyncVideoProviderMemoryStats AsyncVideoProvider::CollectMemoryStats() {
 	AsyncVideoProviderMemoryStats stats;
+	if (IsReentrantWorkerCall()) return {};
 	worker->Sync([&] {
+		WorkerSyncTracker sync_tracker(*this);
 		stats.provider = source_provider->GetMemoryStats();
 		stats.selected_source_mode = selected_source_mode;
 		stats.decoder_name = source_provider->GetDecoderName();
@@ -856,7 +880,9 @@ AsyncVideoProviderMemoryStats AsyncVideoProvider::CollectMemoryStats() {
 
 bool AsyncVideoProvider::CanGenerateSceneChangeKeyframes() const {
 	bool result = false;
+	if (IsReentrantWorkerCall()) return false;
 	worker->Sync([&] {
+		WorkerSyncTracker sync_tracker(*this);
 		result = source_provider->CanGenerateSceneChangeKeyframes();
 	});
 	return result;
@@ -864,7 +890,9 @@ bool AsyncVideoProvider::CanGenerateSceneChangeKeyframes() const {
 
 std::string AsyncVideoProvider::GetSceneChangeKeyframeCacheToken() const {
 	std::string token;
+	if (IsReentrantWorkerCall()) return {};
 	worker->Sync([&] {
+		WorkerSyncTracker sync_tracker(*this);
 		token = source_provider->GetSceneChangeKeyframeCacheToken();
 	});
 	return token;
@@ -873,6 +901,7 @@ std::string AsyncVideoProvider::GetSceneChangeKeyframeCacheToken() const {
 void AsyncVideoProvider::GenerateSceneChangeKeyframes(agi::fs::path const& output_path, agi::BackgroundRunner *br) {
 	auto run = [&](agi::ProgressSink *ps) {
 		worker->Sync([&] {
+			WorkerSyncTracker sync_tracker(*this);
 			while (ProcessPending()) { }
 			source_provider->GenerateSceneChangeKeyframes(output_path, ps);
 			ResetCachedSourceFrame();
@@ -1270,7 +1299,9 @@ std::shared_ptr<VideoFrame> AsyncVideoProvider::GetFrame(int frame, double time,
 
 std::shared_ptr<VideoFrame> AsyncVideoProvider::GetFrameBgra(int frame, double time, bool raw) {
 	std::shared_ptr<VideoFrame> ret;
+	if (IsReentrantWorkerCall()) return nullptr;
 	worker->Sync([&] {
+		WorkerSyncTracker sync_tracker(*this);
 		while (ProcessPending()) { }
 		ret = BakePacketForCpuReadback(ProcRenderPacket(frame, time, raw, true));
 	});
@@ -1279,7 +1310,9 @@ std::shared_ptr<VideoFrame> AsyncVideoProvider::GetFrameBgra(int frame, double t
 
 KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanRequest const& request) {
 	KeyPointRangeScanResult result;
+	if (IsReentrantWorkerCall()) return result;
 	worker->Sync([&] {
+		WorkerSyncTracker sync_tracker(*this);
 		while (ProcessPending()) { }
 
 		int const frame_count = source_provider->GetFrameCount();
@@ -1708,7 +1741,9 @@ bool AsyncVideoProvider::ReconfigureSourceOutputMode() {
 
 VideoRenderPacket AsyncVideoProvider::GetRenderPacket(int frame, double time, bool raw) {
 	VideoRenderPacket ret;
+	if (IsReentrantWorkerCall()) return {};
 	worker->Sync([&]{
+		WorkerSyncTracker sync_tracker(*this);
 		auto const render_begin = std::chrono::steady_clock::now();
 		while (ProcessPending()) { }
 		ret = ProcRenderPacket(frame, time, raw);
@@ -1733,7 +1768,9 @@ void AsyncVideoProvider::SetColorSpace(std::string const& matrix) {
 }
 
 void AsyncVideoProvider::SetSubtitlesTimecodes(agi::vfr::Framerate timecodes) {
+	if (IsReentrantWorkerCall()) return;
 	worker->Sync([&] {
+		WorkerSyncTracker sync_tracker(*this);
 		while (ProcessPending()) { }
 		subtitles_timecodes = std::move(timecodes);
 		++content_version;
@@ -1751,6 +1788,7 @@ bool AsyncVideoProvider::SetPreferredSourceModes(std::vector<SourceFrameOutputMo
 
 	bool changed = false;
 	worker->Sync([&] {
+		WorkerSyncTracker sync_tracker(*this);
 		while (ProcessPending()) { }
 		preferred_source_modes = std::move(modes);
 		changed = ReconfigureSourceOutputMode();
@@ -1760,6 +1798,7 @@ bool AsyncVideoProvider::SetPreferredSourceModes(std::vector<SourceFrameOutputMo
 
 void AsyncVideoProvider::ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvider> provider) {
 	worker->Sync([&] {
+		WorkerSyncTracker sync_tracker(*this);
 		while (ProcessPending()) { }
 		auto old_provider = std::move(subs_provider);
 		subs_provider = std::move(provider);
@@ -1780,4 +1819,82 @@ void AsyncVideoProvider::ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvi
 			TrimReusablePools();
 		}
 	});
+}
+
+RawVideoIdentity AsyncVideoProvider::GetRawVideoIdentity() const noexcept {
+	RawVideoIdentity identity;
+	identity.generation = provider_version;
+	try {
+		if (source_provider) {
+			identity.width = source_provider->GetWidth();
+			identity.height = source_provider->GetHeight();
+			identity.frame_count = source_provider->GetFrameCount();
+		}
+	} catch (...) {
+		// Identity is a best-effort snapshot; getters are simple pass-throughs
+		// but must never throw across this boundary.
+	}
+	return identity;
+}
+
+RawVideoBatchResult AsyncVideoProvider::RunRawVideoBatch(
+	RawVideoIdentity expected_identity,
+	std::function<RawVideoBatchStatus(RawFrameAccess&)> const& callback) {
+	RawVideoBatchResult result;
+	if (IsReentrantWorkerCall()) {
+		result.status = RawVideoBatchStatus::Error;
+		result.message = "nested raw video batch";
+		return result;
+	}
+	worker->Sync([&] {
+		WorkerSyncTracker sync_tracker(*this);
+		try {
+			RawVideoIdentity const live = GetRawVideoIdentity();
+			if (!live.Matches(expected_identity)) {
+				result.status = RawVideoBatchStatus::ProviderChanged;
+				result.message = "raw video identity changed";
+				return;
+			}
+			while (ProcessPending()) { }
+			if (!source_provider) {
+				result.status = RawVideoBatchStatus::Error;
+				result.message = "no source provider";
+				return;
+			}
+			RawFrameAccess access(*source_provider, live);
+			result.status = callback(access);
+		} catch (agi::Exception const& e) {
+			result.status = RawVideoBatchStatus::DecodeError;
+			result.message = e.GetMessage();
+		} catch (...) {
+			result.status = RawVideoBatchStatus::Error;
+			result.message = "unknown batch failure";
+		}
+	});
+	return result;
+}
+
+aegisub::motion_track::FrameReadResult RawFrameAccess::FetchBgra(
+	int frame, aegisub::motion_track::RawBgraView& out) noexcept {
+	try {
+		if (frame < 0 || frame >= identity.frame_count)
+			return {aegisub::motion_track::FrameReadStatus::FrameUnavailable, "frame out of range"};
+		source.GetFrame(frame, scratch);
+		out.data = scratch.data.data();
+		out.width = static_cast<int>(scratch.width);
+		out.height = static_cast<int>(scratch.height);
+		out.pitch = static_cast<int>(scratch.pitch);
+		out.flipped = scratch.flipped;
+		return {aegisub::motion_track::FrameReadStatus::Ok, {}};
+	} catch (agi::Exception const& e) {
+		return {aegisub::motion_track::FrameReadStatus::DecodeError, e.GetMessage()};
+	} catch (...) {
+		return {aegisub::motion_track::FrameReadStatus::Error, "unknown decode failure"};
+	}
+}
+
+bool AsyncVideoProvider::IsReentrantWorkerCall() const {
+	std::lock_guard<std::mutex> lock(sync_state.mutex);
+	return sync_state.depth > 0
+	    && sync_state.owner == std::this_thread::get_id();
 }

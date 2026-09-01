@@ -895,6 +895,19 @@ struct video_zoom_out final : public validator_video_attached {
 };
 }
 
+struct video_tool_motion_track final : validator_video_loaded {
+	CMD_NAME("video/tool/motion_track")
+	CMD_ICON(motion_track_button)
+	STR_MENU("&Motion Track...")
+	STR_DISP("Motion Track")
+	STR_HELP("Open the motion tracking dialog")
+
+	void operator()(agi::Context *c) override {
+		c->GetCore().videoController->Stop();
+		ShowMotionTrackDialog(c);
+	}
+};
+
 namespace cmd {
 	void init_video() {
 		reg(agi::make_unique<video_aspect_cinematic>());
@@ -921,6 +934,7 @@ namespace cmd {
 		reg(agi::make_unique<video_frame_prev_large>());
 		reg(agi::make_unique<video_frame_save>());
 		reg(agi::make_unique<video_frame_save_raw>());
+		reg(agi::make_unique<video_tool_motion_track>());
 		reg(agi::make_unique<video_jump>());
 		reg(agi::make_unique<video_jump_end>());
 		reg(agi::make_unique<video_jump_start>());

@@ -18,6 +18,8 @@
 #include <libaegisub/signal.h>
 #include <libaegisub/vfr.h>
 
+#include "motion_track/video_provider_lease.h"
+
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -35,6 +37,8 @@ struct ProjectProperties;
 class Project {
 	std::unique_ptr<agi::AudioProvider> audio_provider;
 	std::unique_ptr<AsyncVideoProvider> video_provider;
+	std::shared_ptr<aegisub::motion_track::VideoProviderLeaseState> video_lease
+	    = aegisub::motion_track::VideoProviderLeaseState::Create();
 	agi::vfr::Framerate timecodes;
 	std::vector<int> keyframes;
 
@@ -111,6 +115,17 @@ public:
 	void CloseVideo();
 	AsyncVideoProvider *VideoProvider() const { return video_provider.get(); }
 	agi::fs::path const& VideoName() const { return video_file; }
+
+	/// Raw-video lifecycle: acquire before running an analysis batch task;
+	/// retirement denies new leases and flags outstanding ones. The Project
+	/// swaps/destroys the provider only after draining outstanding leases.
+	aegisub::motion_track::VideoProviderLeaseState::Handle
+	AcquireVideoProviderLease() {
+		return video_lease->Acquire();
+	}
+	void BeginVideoProviderRetirement() { video_lease->Begin(); }
+	void CompleteVideoProviderRetirement() { video_lease->Complete(); }
+	void WaitForLeaseDrain() { video_lease->Drain(); }
 	void ReloadSubtitlesProvider();
 
 	void LoadTimecodes(agi::fs::path path);

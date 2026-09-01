@@ -89,4 +89,15 @@ AssFadeUpdate ApplyAssFade(
 	int fade_in_ms,
 	int fade_out_ms);
 
+/// Removes exactly the fade representations ApplyAssFade claims or replaces:
+/// every \fad/\fade tag, plus the leading overall-alpha \t animation of the
+/// initial override block (and its \alpha values) when no other block carries
+/// one. Non-claimable animations (overall alpha \t outside the initial block)
+/// are left alone -- ApplyAssFade would not claim them either. Text without
+/// any claimable representation is returned byte-identical, so callers can
+/// strip unconditionally. Exported so the motion-track apply planner can
+/// strip the same representations from its non-first split parts without the
+/// two predicates diverging.
+std::string StripClaimableFade(std::string const& text);
+
 } // namespace aegisub::align_video_fade

@@ -34,6 +34,9 @@
 
 #include "dialog_detached_video.h"
 
+#include "dialog_manager.h"
+#include "dialog_motion_track.h"
+
 #include "format.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
@@ -49,6 +52,7 @@
 #include "visual_tool_cross.h"
 #include "visual_tool_drag.h"
 #include "visual_tool_measure.h"
+#include "visual_tool_motion_track.h"
 #include "visual_tool_rotatexy.h"
 #include "visual_tool_rotatez.h"
 #include "visual_tool_scale.h"
@@ -65,6 +69,7 @@
 namespace {
 enum class SavedVisualTool {
 	None,
+	MotionTrack,
 	Cross,
 	Drag,
 	Measure,
@@ -91,6 +96,8 @@ SavedVisualToolState DetectVisualTool(VideoDisplay *display) {
 		return state(SavedVisualTool::Cross);
 	if (display->ToolIsType(typeid(VisualToolDrag)))
 		return state(SavedVisualTool::Drag);
+	if (display->ToolIsType(typeid(VisualToolMotionTrack)))
+		return state(SavedVisualTool::MotionTrack);
 	if (display->ToolIsType(typeid(VisualToolMeasure)))
 		return state(SavedVisualTool::Measure);
 	if (display->ToolIsType(typeid(VisualToolRotateZ)))
@@ -116,6 +123,13 @@ void RestoreVisualTool(VideoDisplay *display, agi::Context *context, SavedVisual
 			break;
 		case SavedVisualTool::Drag:
 			display->SetTool(agi::make_unique<VisualToolDrag>(display, context));
+			break;
+		case SavedVisualTool::MotionTrack:
+			// Only restore when the motion-track dialog is still alive.
+			if (context->GetUI().dialog->Get<DialogMotionTrack>())
+				display->SetTool(agi::make_unique<VisualToolMotionTrack>(display, context));
+			else
+				display->SetTool(agi::make_unique<VisualToolCross>(display, context));
 			break;
 		case SavedVisualTool::Measure:
 			display->SetTool(agi::make_unique<VisualToolMeasure>(display, context));
@@ -199,7 +213,17 @@ DialogDetachedVideo::DialogDetachedVideo(agi::Context *context)
 	AddFullScreenButton(this);
 }
 
-DialogDetachedVideo::~DialogDetachedVideo() { }
+DialogDetachedVideo::~DialogDetachedVideo() {
+	// The re-dock bookkeeping lives in OnClose, which the teardown path skips
+	// (the dialog is deleted directly, without a close event). Put the
+	// context's pointers back onto the attached controls before this dialog
+	// destroys its child display, so whatever runs later in teardown — e.g.
+	// DialogMotionTrack's ResetOverlayTool — never follows the dying detached
+	// display. Idempotent after OnClose, which restores the same values.
+	auto ui = context->GetUI();
+	ui.videoDisplay = old_display;
+	ui.videoSlider = old_slider;
+}
 
 void DialogDetachedVideo::OnClose(wxCloseEvent &evt) {
 	if (close_started) {

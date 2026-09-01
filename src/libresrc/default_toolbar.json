@@ -80,6 +80,7 @@
         "video/tool/clip",
         "video/tool/vector_clip",
         "video/tool/measure",
+        "video/tool/motion_track",
         "",
         "help/video"
     ]

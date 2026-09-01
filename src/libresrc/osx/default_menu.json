@@ -145,6 +145,7 @@
         { "recent" : "Video" },
         { "command" : "video/open/dummy" },
         { "command" : "video/details" },
+        { "command" : "video/tool/motion_track" },
         {},
         { "command" : "timecode/open" },
         { "command" : "timecode/save" },

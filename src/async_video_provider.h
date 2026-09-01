@@ -18,6 +18,7 @@
 
 #include "async_video_provider_host.h"
 #include "include/aegisub/video_provider.h"
+#include "motion_track/frame_reader.h"
 #include "source_frame_format_selection.h"
 #include "ui_dispatch.h"
 #include "video_memory_stats.h"
@@ -32,6 +33,7 @@
 #include <memory>
 #include <mutex>
 #include <span>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -82,6 +84,60 @@ struct KeyPointRangeScanResult {
 	bool fade_out_detected = false;
 	double fade_in_confidence = 0.0;
 	double fade_out_confidence = 0.0;
+};
+
+/// Process-unique identity of the raw source video behind a provider.
+/// Generation changes whenever a new provider is installed; a batch holding
+/// a stale generation must be discarded.
+struct RawVideoIdentity {
+	std::uint64_t generation = 0;
+	int width = 0;
+	int height = 0;
+	int frame_count = 0;
+
+	bool Matches(RawVideoIdentity const& other) const noexcept {
+		return generation == other.generation && width == other.width
+		    && height == other.height && frame_count == other.frame_count;
+	}
+};
+
+enum class RawVideoBatchStatus : std::uint8_t {
+	Completed,
+	ProviderChanged,
+	FrameUnavailable,
+	DecodeError,
+	Error,
+};
+
+struct RawVideoBatchResult {
+	RawVideoBatchStatus status = RawVideoBatchStatus::Error;
+	std::string message;
+};
+
+/// Batch-scoped access to raw source frames. Only AsyncVideoProvider can
+/// construct one; the reference target is kept alive by the enclosing
+/// RunRawVideoBatch Sync. Non-copyable, non-movable: instances cannot escape
+/// the callback. RawBgraView results are valid until the next FetchBgra or
+/// until the callback returns.
+class RawFrameAccess {
+	friend class AsyncVideoProvider;
+	RawFrameAccess(VideoProvider& source, RawVideoIdentity identity) noexcept
+	: source(source), identity(identity) { }
+
+	VideoProvider& source;
+	RawVideoIdentity identity;
+	VideoFrame scratch;
+
+public:
+	RawFrameAccess(RawFrameAccess const&) = delete;
+	RawFrameAccess& operator=(RawFrameAccess const&) = delete;
+
+	RawVideoIdentity Identity() const noexcept { return identity; }
+
+	/// Decodes one raw frame into `out`. Out-of-range frames yield
+	/// FrameUnavailable; decode failures map to DecodeError; unexpected
+	/// exceptions to Error. Never throws.
+	aegisub::motion_track::FrameReadResult FetchBgra(int frame, aegisub::motion_track::RawBgraView& out) noexcept;
 };
 
 /// Asynchronous helper for video frame requests.
@@ -175,6 +231,19 @@ class AsyncVideoProvider {
 	SourceFrameOutputMode selected_source_mode = SourceFrameOutputMode::Bgra8;
 	bool has_logged_source_mode = false;
 
+public:
+	/// Reentrancy bookkeeping for synchronous worker entries. Manipulated
+	/// only by WorkerSyncTracker on the worker thread; public entries read
+	/// it to reject same-thread nesting before it deadlocks Queue::Sync.
+	struct WorkerSyncState {
+		mutable std::mutex mutex;
+		mutable std::thread::id owner;
+		mutable int depth = 0;
+	};
+
+	WorkerSyncState sync_state;
+
+private:
 	void DeliverFrameReady(VideoRenderPacket packet, double time);
 	void DeliverVideoError(std::string const& message);
 	void DeliverSubtitlesError(std::string const& message);
@@ -183,6 +252,7 @@ class AsyncVideoProvider {
 	bool ReconfigureSourceOutputMode();
 	void ScheduleProcessing();
 	bool ProcessPending();
+	bool IsReentrantWorkerCall() const;
 
 public:
 	/// @brief Load the passed subtitle file
@@ -236,6 +306,20 @@ public:
 	std::shared_ptr<VideoFrame> GetFrameBgra(int frame, double time, bool raw = false);
 	KeyPointRangeScanResult FindKeyPointRange(KeyPointRangeScanRequest const& request);
 	VideoRenderPacket GetRenderPacket(int frame, double time, bool raw = false);
+
+	/// Snapshot of the raw source identity (generation + geometry). A pure
+	/// read; it grants no lifetime. Holding a provider pointer/identity
+	/// without a Project lease and calling into it is invalid.
+	RawVideoIdentity GetRawVideoIdentity() const noexcept;
+
+	/// Run `callback` on the worker thread with batch-scoped raw frame
+	/// access, after flushing pending preview work to quiescence. The batch
+	/// is rejected with ProviderChanged when the live identity no longer
+	/// matches `expected_identity`. The callback must not call any other
+	/// AsyncVideoProvider method; its only capability is RawFrameAccess.
+	RawVideoBatchResult RunRawVideoBatch(
+		RawVideoIdentity expected_identity,
+		std::function<RawVideoBatchStatus(RawFrameAccess&)> const& callback);
 
 	/// Ask the video provider to change YCbCr matricies
 	void SetColorSpace(std::string const& matrix);

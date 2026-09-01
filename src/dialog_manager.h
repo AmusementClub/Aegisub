@@ -62,14 +62,17 @@ class DialogManager {
 	}
 
 public:
-	/// Show a modeless dialog of the given type, creating it if needed
-	/// @tparam DialogType Type of dialog to show
+	/// Single-instance variant: returns a pointer to the existing dialog
+	/// (focusing it), or creates + registers + shows a new one. Fixes the old
+	/// Show<T> bug where an existing dialog was focused and then a SECOND
+	/// dialog was constructed anyway.
 	template<class DialogType>
-	void Show(agi::Context *c) {
+	DialogType *ShowOnce(agi::Context *c) {
 		for (auto const& diag : created_dialogs) {
 			if (*diag.first == typeid(DialogType)) {
 				diag.second->Show();
 				diag.second->SetFocus();
+				return static_cast<DialogType *>(diag.second);
 			}
 		}
 
@@ -80,8 +83,19 @@ public:
 			d->Bind(wxEVT_BUTTON, &DialogManager::OnClose<wxCommandEvent>, this, wxID_CANCEL);
 			d->Show();
 			SetFloatOnParent(d);
+			return static_cast<DialogType *>(d);
 		}
-		catch (agi::UserCancelException const&) { }
+		catch (agi::UserCancelException const&) { return nullptr; }
+	}
+
+
+	/// Show a modeless dialog of the given type, creating it if needed.
+	/// @tparam DialogType Type of dialog to show
+	template<class DialogType>
+	void Show(agi::Context *c) {
+		// Delegate to the single-instance path: the old implementation focused
+		// an existing dialog and then constructed a second one anyway.
+		ShowOnce<DialogType>(c);
 	}
 
 	/// Show a modal dialog of the given type, creating it if needed
@@ -110,10 +124,15 @@ public:
 	}
 
 	~DialogManager() {
+		// Delete synchronously rather than with Destroy(): deferred
+		// destruction lets these dialogs run their destructors from
+		// wxPendingDelete after the agi::Context they dereference has been
+		// freed. Safe here because nothing in this loop is on the stack of an
+		// event handler of the deleted dialog.
 		for (auto const& it : created_dialogs) {
 			it.second->Unbind(wxEVT_CLOSE_WINDOW, &DialogManager::OnClose<wxCloseEvent>, this);
 			it.second->Unbind(wxEVT_BUTTON, &DialogManager::OnClose<wxCommandEvent>, this, wxID_CANCEL);
-			it.second->Destroy();
+			delete it.second;
 		}
 	}
 };

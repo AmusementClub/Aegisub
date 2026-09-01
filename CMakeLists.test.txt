@@ -211,6 +211,16 @@ if(GTEST_FOUND)
         tests/tests/lua_re.cpp
         tests/tests/lua_script_reader.cpp
         tests/tests/mkv_wrap_common.cpp
+        tests/tests/motion_track_session.cpp
+        tests/tests/motion_track_similarity.cpp
+        tests/tests/motion_track_raw_batch.cpp
+        tests/tests/motion_track_apply_plan.cpp
+        tests/tests/motion_track_backend.cpp
+        tests/tests/motion_track_gray_ncc.cpp
+        tests/tests/motion_track_backend_real.cpp
+        tests/tests/motion_track_fade.cpp
+        tests/tests/motion_track_occlusion.cpp
+        tests/tests/motion_track_stabilize.cpp
         tests/tests/pgs_sup_packet_stream.cpp
         tests/tests/media_load_precheck.cpp
         tests/tests/native_library.cpp

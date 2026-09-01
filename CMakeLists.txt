@@ -765,6 +765,15 @@ set(AEGISUB_CORE_SOURCES
     src/perspective_quad_geometry.cpp
     src/perspective_quad_edit_state.cpp
     src/perspective_tag_solver.cpp
+    # Motion tracking (translation slice)
+    src/motion_track/apply_plan.cpp
+    src/motion_track/gray_convert.cpp
+    src/motion_track/ncc.cpp
+    src/motion_track/raw_batch_motion_frame_reader.cpp
+    src/motion_track/session.cpp
+    src/motion_track/similarity_backend.cpp
+    src/motion_track/synthetic_frame_reader.cpp
+    src/motion_track/translation_backend.cpp
     src/translation_service.cpp
     # ASS data model
     src/ass_attachment.cpp
@@ -1156,6 +1165,7 @@ add_executable(Aegisub WIN32
     src/libresrc/libresrc.cpp
     src/dialog_about.cpp
     src/dialog_align.cpp
+    src/dialog_motion_track.cpp
     src/dialog_attachments.cpp
     src/dialog_automation.cpp
     src/dialog_autosave.cpp
@@ -1259,6 +1269,7 @@ add_executable(Aegisub WIN32
     src/visual_tool_cross.cpp
     src/visual_tool_drag.cpp
     src/visual_tool_measure.cpp
+    src/visual_tool_motion_track.cpp
     src/visual_tool_rotatexy.cpp
     src/visual_tool_rotatez.cpp
     src/visual_tool_scale.cpp

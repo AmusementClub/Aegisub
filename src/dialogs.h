@@ -69,6 +69,7 @@ void ShowFontsCollectorDialog(agi::Context *c);
 void ShowJumpToDialog(agi::Context *c);
 void ShowKanjiTimerDialog(agi::Context *c);
 void ShowLogWindow(agi::Context *c);
+void ShowMotionTrackDialog(agi::Context *c);
 void ShowPreferences(wxWindow *parent);
 void ShowPropertiesDialog(agi::Context *c);
 void ShowSelectLinesDialog(agi::Context *c);

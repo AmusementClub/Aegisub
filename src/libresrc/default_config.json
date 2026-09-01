@@ -711,6 +711,19 @@
 				"Fit Text" : true
 			}
 		},
+		"Motion Track" : {
+			"Direction" : 2,
+			"Model" : 0,
+			"Apply Mode" : 0,
+			"Compact Error" : 0.75,
+			"Position Decimals" : 2,
+			"Search Radius" : 0,
+			"Smooth Frames" : 0,
+			"Template Refresh" : true,
+			"Stabilize" : false,
+			"Scale Border Shadow Blur" : false,
+			"Apply Fad" : false
+		},
 		"Align to Video" : {
 			"Tolerance" : 20,
 			"Maximized" : true,

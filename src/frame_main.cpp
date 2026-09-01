@@ -456,6 +456,14 @@ FrameMain::~FrameMain () {
 	AudioOutputRecoveryDebounce.Stop();
 	UnregisterSessionNotifications();
 #endif
+	// Tear the modeless dialogs down synchronously, before anything else:
+	// their destructors dereference the context and swap visual tools on the
+	// video display, so they must run while both are still alive. This has to
+	// precede CloseVideo() as well — a video-close notification closes the
+	// detached-video dialog, whose deferred destruction would then run after
+	// the context is gone.
+	context->GetUI().dialog.reset();
+
 	core.project->CloseAudio();
 	core.project->CloseVideo();
 

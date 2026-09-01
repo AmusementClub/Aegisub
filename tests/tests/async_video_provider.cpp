@@ -3172,3 +3172,143 @@ TEST(async_video_provider, subtitle_timecodes_override_source_fps_for_visibility
 	EXPECT_EQ(1, frames[0].subtitle_generation);
 	EXPECT_EQ(2, frames[1].subtitle_generation);
 }
+
+// --- raw video batch API (motion track) ---
+
+namespace {
+auto MakeRawTestProvider() {
+	return agi::make_unique<AsyncVideoProvider>(
+		agi::make_unique<FakeVideoProvider>(std::make_shared<VideoProviderState>()),
+		agi::make_unique<FakeSubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+}
+}
+
+TEST(async_video_provider_raw_batch, fetches_frames_and_reports_completed) {
+	auto provider = MakeRawTestProvider();
+	auto identity = provider->GetRawVideoIdentity();
+	EXPECT_EQ(2, identity.width);
+	EXPECT_EQ(100, identity.frame_count);
+	EXPECT_NE(0u, identity.generation);
+
+	std::vector<int> seen;
+	RawVideoBatchResult result = provider->RunRawVideoBatch(
+		identity,
+		[&](RawFrameAccess& access) {
+			for (int f : {3, 5, 9}) {
+				aegisub::motion_track::RawBgraView view;
+				auto read = access.FetchBgra(f, view);
+				if (read.status != aegisub::motion_track::FrameReadStatus::Ok)
+					return RawVideoBatchStatus::DecodeError;
+				if (view.width != 2 || view.height != 2 || view.pitch < 8)
+					return RawVideoBatchStatus::Error;
+				seen.push_back(f);
+			}
+			return RawVideoBatchStatus::Completed;
+		});
+	EXPECT_EQ(RawVideoBatchStatus::Completed, result.status);
+	ASSERT_EQ(3u, seen.size());
+	EXPECT_EQ(3, seen[0]);
+	EXPECT_EQ(9, seen[2]);
+}
+
+TEST(async_video_provider_raw_batch, stale_identity_is_rejected) {
+	auto provider = MakeRawTestProvider();
+
+	auto stale_generation = provider->GetRawVideoIdentity();
+	stale_generation.generation += 1;
+	auto result = provider->RunRawVideoBatch(
+		stale_generation, [&](RawFrameAccess&) {
+			return RawVideoBatchStatus::Completed;
+		});
+	EXPECT_EQ(RawVideoBatchStatus::ProviderChanged, result.status);
+
+	auto stale_width = provider->GetRawVideoIdentity();
+	stale_width.width += 1;
+	result = provider->RunRawVideoBatch(
+		stale_width, [&](RawFrameAccess&) {
+			return RawVideoBatchStatus::Completed;
+		});
+	EXPECT_EQ(RawVideoBatchStatus::ProviderChanged, result.status);
+}
+
+TEST(async_video_provider_raw_batch, out_of_range_frame_maps_to_frame_unavailable) {
+	auto provider = MakeRawTestProvider();
+	RawVideoBatchResult result = provider->RunRawVideoBatch(
+		provider->GetRawVideoIdentity(),
+		[&](RawFrameAccess& access) {
+			aegisub::motion_track::RawBgraView view;
+			auto read = access.FetchBgra(-1, view);
+			if (read.status != aegisub::motion_track::FrameReadStatus::FrameUnavailable)
+				return RawVideoBatchStatus::Error;
+			read = access.FetchBgra(100, view);
+			if (read.status != aegisub::motion_track::FrameReadStatus::FrameUnavailable)
+				return RawVideoBatchStatus::Error;
+			return RawVideoBatchStatus::Completed;
+		});
+	EXPECT_EQ(RawVideoBatchStatus::Completed, result.status);
+}
+
+TEST(async_video_provider_raw_batch, decode_error_maps_to_decode_error) {
+	auto fake = agi::make_unique<FakeVideoProvider>(std::make_shared<VideoProviderState>());
+	fake->fill_frame = [](int, VideoFrame&) {
+		throw VideoDecodeError("boom");
+	};
+	auto provider = agi::make_unique<AsyncVideoProvider>(
+		std::move(fake),
+		agi::make_unique<FakeSubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	RawVideoBatchResult result = provider->RunRawVideoBatch(
+		provider->GetRawVideoIdentity(),
+		[&](RawFrameAccess& access) {
+			aegisub::motion_track::RawBgraView view;
+			auto read = access.FetchBgra(0, view);
+			if (read.status != aegisub::motion_track::FrameReadStatus::DecodeError)
+				return RawVideoBatchStatus::Error;
+			if (read.message.find("boom") == std::string::npos)
+				return RawVideoBatchStatus::Error;
+			return RawVideoBatchStatus::Completed;
+		});
+	EXPECT_EQ(RawVideoBatchStatus::Completed, result.status);
+}
+
+TEST(async_video_provider_raw_batch, non_agi_exception_maps_to_error) {
+	struct Mystery {};
+	auto fake = agi::make_unique<FakeVideoProvider>(std::make_shared<VideoProviderState>());
+	fake->fill_frame = [](int, VideoFrame&) { throw Mystery{}; };
+	auto provider = agi::make_unique<AsyncVideoProvider>(
+		std::move(fake),
+		agi::make_unique<FakeSubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	RawVideoBatchResult result = provider->RunRawVideoBatch(
+		provider->GetRawVideoIdentity(),
+		[&](RawFrameAccess& access) {
+			aegisub::motion_track::RawBgraView view;
+			auto read = access.FetchBgra(0, view);
+			if (read.status != aegisub::motion_track::FrameReadStatus::Error)
+				return RawVideoBatchStatus::Error;
+			return RawVideoBatchStatus::Completed;
+		});
+	// The non-agi exception was mapped inside FetchBgra; the batch itself
+	// completes so the caller can decide what to do with the failed frame.
+	EXPECT_EQ(RawVideoBatchStatus::Completed, result.status);
+}
+
+TEST(async_video_provider_raw_batch, nested_sync_inside_callback_returns_null_without_deadlock) {
+	auto provider = MakeRawTestProvider();
+	RawVideoBatchResult result = provider->RunRawVideoBatch(
+		provider->GetRawVideoIdentity(),
+		[&](RawFrameAccess&) {
+			// A nested synchronous worker entry must be rejected instead of
+			// self-deadlocking on the queue.
+			auto nested = provider->GetFrameBgra(1, 0.0);
+			EXPECT_EQ(nullptr, nested);
+			return RawVideoBatchStatus::Completed;
+		});
+	EXPECT_EQ(RawVideoBatchStatus::Completed, result.status);
+
+	// The provider still serves normal requests afterwards.
+	EXPECT_NE(nullptr, provider->GetFrameBgra(2, 0.0));
+}

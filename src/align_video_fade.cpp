@@ -136,6 +136,80 @@ AssDialogueBlockOverride* InitialOverride(
 	return result;
 }
 
+// The fade representations ApplyAssFade may claim or replace: any \fad/\fade
+// tag anywhere, and the leading overall-alpha \t animation of the initial
+// override block -- but only while no other block carries one (an animation
+// spanning later blocks is mid-line styling, not a line-wide fade).
+// alpha_animation_block is the initial block while that leading animation is
+// claimable, nullptr otherwise.
+struct ClaimableFade {
+	bool has_fade = false; // \fade anywhere
+	bool has_fad = false;  // \fad anywhere
+	AssDialogueBlockOverride *alpha_animation_block = nullptr;
+};
+
+ClaimableFade DetectClaimableFade(
+	std::vector<std::unique_ptr<AssDialogueBlock>> const& blocks) {
+	ClaimableFade claim;
+	bool alpha_animation_in_initial_block = false;
+	bool alpha_animation_elsewhere = false;
+	AssDialogueBlockOverride *initial = nullptr;
+	if (!blocks.empty() && blocks.front()->GetType() == AssBlockType::OVERRIDE)
+		initial = static_cast<AssDialogueBlockOverride *>(blocks.front().get());
+
+	for (size_t block_index = 0; block_index < blocks.size(); ++block_index) {
+		if (blocks[block_index]->GetType() != AssBlockType::OVERRIDE)
+			continue;
+		auto const *block = static_cast<AssDialogueBlockOverride const *>(blocks[block_index].get());
+		for (auto const& tag : block->Tags) {
+			claim.has_fade = claim.has_fade || tag.Name == "\\fade";
+			claim.has_fad = claim.has_fad || tag.Name == "\\fad";
+			if (TransformContainsOverallAlpha(tag)) {
+				if (block_index == 0)
+					alpha_animation_in_initial_block = true;
+				else
+					alpha_animation_elsewhere = true;
+			}
+		}
+	}
+	if (alpha_animation_in_initial_block && !alpha_animation_elsewhere)
+		claim.alpha_animation_block = initial;
+	return claim;
+}
+
+// Erases the claimable representations in place: every \fad/\fade tag, and
+// (inside alpha_animation_block only) the overall-alpha values plus the \t
+// animations that carried them. Empty override blocks left behind are
+// dropped.
+void RemoveClaimableFade(
+	std::vector<std::unique_ptr<AssDialogueBlock>>& blocks,
+	AssDialogueBlockOverride *alpha_animation_block) {
+	for (auto& block : blocks) {
+		if (block->GetType() != AssBlockType::OVERRIDE)
+			continue;
+		auto *override_block = static_cast<AssDialogueBlockOverride *>(block.get());
+		bool const normalize_alpha_animation = override_block == alpha_animation_block;
+
+		for (auto it = override_block->Tags.begin(); it != override_block->Tags.end();) {
+			if (IsFadeTag(*it) || (normalize_alpha_animation && IsOverallAlphaTag(*it))) {
+				it = override_block->Tags.erase(it);
+				continue;
+			}
+			if (normalize_alpha_animation && it->Name == "\\t" && !RemoveOverallAlphaFromTransform(*it)) {
+				it = override_block->Tags.erase(it);
+				continue;
+			}
+			++it;
+		}
+	}
+
+	blocks.erase(
+		std::remove_if(blocks.begin(), blocks.end(), [](auto const& block) {
+			return block->GetType() == AssBlockType::OVERRIDE && static_cast<AssDialogueBlockOverride const *>(block.get())->Tags.empty();
+		}),
+		blocks.end());
+}
+
 std::string AlphaTag(int alpha) {
 	return "\\alpha" + AssCompat::FormatOverrideAlpha(alpha);
 }
@@ -384,71 +458,20 @@ AssFadeUpdate ApplyAssFade(
 	line.Text = text;
 	auto blocks = line.ParseTags();
 
-	bool has_fade = false;
-	bool has_fad = false;
-	bool alpha_animation_in_initial_block = false;
-	bool alpha_animation_elsewhere = false;
-	for (size_t block_index = 0; block_index < blocks.size(); ++block_index) {
-		if (blocks[block_index]->GetType() != AssBlockType::OVERRIDE)
-			continue;
-		auto const* block = static_cast<AssDialogueBlockOverride*>(blocks[block_index].get());
-		for (auto const& tag : block->Tags) {
-			has_fade = has_fade || tag.Name == "\\fade";
-			has_fad = has_fad || tag.Name == "\\fad";
-			if (TransformContainsOverallAlpha(tag)) {
-				if (block_index == 0)
-					alpha_animation_in_initial_block = true;
-				else
-					alpha_animation_elsewhere = true;
-			}
-		}
-	}
+	auto const claim = DetectClaimableFade(blocks);
+	AssFadeEncoding encoding = claim.has_fade
+								   ? AssFadeEncoding::Fade
+							   : claim.has_fad
+								   ? AssFadeEncoding::Fad
+							   : claim.alpha_animation_block
+								   ? AssFadeEncoding::AlphaTransform
+								   : AssFadeEncoding::Fad;
 
-	AssFadeEncoding encoding = has_fade
-		? AssFadeEncoding::Fade
-		: has_fad
-			? AssFadeEncoding::Fad
-			: alpha_animation_in_initial_block && !alpha_animation_elsewhere
-				? AssFadeEncoding::AlphaTransform
-				: AssFadeEncoding::Fad;
-
-	AssDialogueBlockOverride* alpha_animation_block = nullptr;
 	std::vector<int> alpha_values;
-	if (encoding == AssFadeEncoding::AlphaTransform
-		&& !blocks.empty()
-		&& blocks.front()->GetType() == AssBlockType::OVERRIDE) {
-		alpha_animation_block = static_cast<AssDialogueBlockOverride*>(blocks.front().get());
-		GatherOverallAlphaValues(*alpha_animation_block, alpha_values);
-	}
+	if (encoding == AssFadeEncoding::AlphaTransform)
+		GatherOverallAlphaValues(*claim.alpha_animation_block, alpha_values);
 
-	for (auto& block : blocks) {
-		if (block->GetType() != AssBlockType::OVERRIDE)
-			continue;
-		auto* override_block = static_cast<AssDialogueBlockOverride*>(block.get());
-		bool const normalize_alpha_animation = override_block == alpha_animation_block;
-
-		for (auto it = override_block->Tags.begin(); it != override_block->Tags.end();) {
-			if (IsFadeTag(*it)
-				|| (normalize_alpha_animation && IsOverallAlphaTag(*it))) {
-				it = override_block->Tags.erase(it);
-				continue;
-			}
-			if (normalize_alpha_animation
-				&& it->Name == "\\t"
-				&& !RemoveOverallAlphaFromTransform(*it)) {
-				it = override_block->Tags.erase(it);
-				continue;
-			}
-			++it;
-		}
-	}
-
-	blocks.erase(
-		std::remove_if(blocks.begin(), blocks.end(), [](auto const& block) {
-			return block->GetType() == AssBlockType::OVERRIDE
-				&& static_cast<AssDialogueBlockOverride const*>(block.get())->Tags.empty();
-		}),
-		blocks.end());
+	RemoveClaimableFade(blocks, claim.alpha_animation_block);
 
 	auto* initial = InitialOverride(blocks);
 	std::vector<AssOverrideTag> inserted;
@@ -483,6 +506,20 @@ AssFadeUpdate ApplyAssFade(
 		std::make_move_iterator(inserted.end()));
 	line.UpdateText(blocks);
 	return { line.Text.get(), encoding };
+}
+
+std::string StripClaimableFade(std::string const& text) {
+	AssDialogue line;
+	line.Text = text;
+	auto blocks = line.ParseTags();
+
+	auto const claim = DetectClaimableFade(blocks);
+	if (!claim.has_fade && !claim.has_fad && !claim.alpha_animation_block)
+		return text;
+
+	RemoveClaimableFade(blocks, claim.alpha_animation_block);
+	line.UpdateText(blocks);
+	return line.Text.get();
 }
 
 } // namespace aegisub::align_video_fade

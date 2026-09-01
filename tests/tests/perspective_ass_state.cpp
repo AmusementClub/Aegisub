@@ -96,6 +96,13 @@ TEST(perspective_ass_state, follows_first_alignment_and_renderer_clamps) {
 	ASSERT_TRUE(ass_first);
 	EXPECT_EQ(7, ass_first.value.transform.alignment);
 
+	auto const a4 = Evaluate(file, MakeLine("{\\a4}text"));
+	ASSERT_TRUE(a4) << DescribeAssStateError(a4.error);
+	EXPECT_EQ(7, a4.value.transform.alignment);
+	auto const a8 = Evaluate(file, MakeLine("{\\a8}text"));
+	ASSERT_TRUE(a8) << DescribeAssStateError(a8.error);
+	EXPECT_EQ(7, a8.value.transform.alignment);
+
 	auto const clamped = Evaluate(
 		file, MakeLine("{\\bord-2\\xbord-3\\ybord-4"
 			"\\xshad-6\\shad-5\\yshad-7}text"));

@@ -53,7 +53,7 @@ inline bool StyleNamesMatch(agi::util::strings::view defined_name, agi::util::st
 	return defined == lookup;
 }
 
-template<class StyleMap>
+template <class StyleMap>
 typename StyleMap::const_iterator FindStyle(StyleMap const& styles, std::string const& name) {
 	auto exact = styles.find(name);
 	if (exact != styles.end())
@@ -271,6 +271,27 @@ inline bool ParseOverrideAlpha(agi::util::strings::view text, int& out) {
 		return false;
 	out = color.r;
 	return true;
+}
+
+// Tag-level SSA \a → ASS \an, matching libass ass_parse.c (VSFilter quirk):
+// values 1..11 are accepted, and illegal \a4 / \a8 are treated like \a5
+// (top-left, \an7). Out-of-range values keep `fallback` (typically the
+// event style alignment, or 0 meaning "no override").
+inline int NormalizeLegacyAssAlignment(int ssa, int fallback) noexcept {
+	switch (ssa) {
+		case 1: return 1;
+		case 2: return 2;
+		case 3: return 3;
+		case 4: return 7;
+		case 5: return 7;
+		case 6: return 8;
+		case 7: return 9;
+		case 8: return 7;
+		case 9: return 4;
+		case 10: return 5;
+		case 11: return 6;
+		default: return fallback;
+	}
 }
 
 inline std::string FormatInteger(int value) {

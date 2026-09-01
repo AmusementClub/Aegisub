@@ -273,14 +273,8 @@ std::optional<int> AssAlignment(AssOverrideTag const& tag, int style_alignment) 
 	int value = 0;
 	if (!AssCompat::ParseInteger(tag.Params.front().Get<std::string>(), value))
 		return std::nullopt;
-	if (tag.Name == "\\a") {
-		switch (value) {
-			case 1: case 2: case 3: case 5: case 6: case 7: case 9: case 10: case 11:
-				return AssStyle::SsaToAss(value);
-			default:
-				return std::nullopt;
-		}
-	}
+	if (tag.Name == "\\a")
+		return AssCompat::NormalizeLegacyAssAlignment(value, style_alignment);
 	return value >= 1 && value <= 9 ? std::optional<int>(value) : std::nullopt;
 }
 

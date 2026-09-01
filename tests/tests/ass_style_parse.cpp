@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "../../src/ass_compat.h"
 #include "../../src/ass_style.h"
 #include "../../src/subtitle_format.h"
 
@@ -103,4 +104,20 @@ TEST(lagi_ass_style, rejects_bad_color_field) {
 	EXPECT_THROW(
 		AssStyle("Style: Default,Arial,48,nope,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,2,2,2,10,20,30,1"),
 		SubtitleFormatParseError);
+}
+
+TEST(lagi_ass_style, tag_level_ssa_alignment_matches_libass_quirk) {
+	EXPECT_EQ(1, AssCompat::NormalizeLegacyAssAlignment(1, 2));
+	EXPECT_EQ(2, AssCompat::NormalizeLegacyAssAlignment(2, 5));
+	EXPECT_EQ(3, AssCompat::NormalizeLegacyAssAlignment(3, 2));
+	EXPECT_EQ(7, AssCompat::NormalizeLegacyAssAlignment(4, 2));
+	EXPECT_EQ(7, AssCompat::NormalizeLegacyAssAlignment(5, 2));
+	EXPECT_EQ(8, AssCompat::NormalizeLegacyAssAlignment(6, 2));
+	EXPECT_EQ(9, AssCompat::NormalizeLegacyAssAlignment(7, 2));
+	EXPECT_EQ(7, AssCompat::NormalizeLegacyAssAlignment(8, 2));
+	EXPECT_EQ(4, AssCompat::NormalizeLegacyAssAlignment(9, 2));
+	EXPECT_EQ(5, AssCompat::NormalizeLegacyAssAlignment(10, 2));
+	EXPECT_EQ(6, AssCompat::NormalizeLegacyAssAlignment(11, 2));
+	EXPECT_EQ(2, AssCompat::NormalizeLegacyAssAlignment(0, 2));
+	EXPECT_EQ(5, AssCompat::NormalizeLegacyAssAlignment(12, 5));
 }

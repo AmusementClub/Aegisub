@@ -20,6 +20,7 @@
 
 #include "visual_tool.h"
 
+#include "ass_compat.h"
 #include "ass_dialogue.h"
 #include "async_video_provider.h"
 #include "ass_file.h"
@@ -700,7 +701,8 @@ Vector2D VisualToolBase::GetLinePosition(AssDialogue *diag) {
 	if ((align_tag = find_tag(blocks, "\\an")))
 		ovr_align = (*align_tag)[0].Get<int>(ovr_align);
 	else if ((align_tag = find_tag(blocks, "\\a")))
-		ovr_align = AssStyle::SsaToAss((*align_tag)[0].Get<int>(2));
+		ovr_align = AssCompat::NormalizeLegacyAssAlignment(
+			(*align_tag)[0].Get<int>(0), 0);
 
 	if (ovr_align > 0 && ovr_align <= 9)
 		align = ovr_align;

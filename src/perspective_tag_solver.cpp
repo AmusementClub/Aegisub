@@ -33,6 +33,11 @@
 namespace perspective {
 namespace {
 
+constexpr int kPositionDecimals = 4;
+constexpr int kScaleDecimals = 4;
+constexpr int kShearDecimals = 6;
+constexpr int kRotationDecimals = 5;
+
 constexpr double Pi = 3.1415926535897932384626433832795;
 constexpr double RadiansToDegrees = 180.0 / Pi;
 constexpr double DegreesToRadians = Pi / 180.0;
@@ -46,6 +51,18 @@ struct AffineMap {
 	double a11 = 1.0;
 	double b0 = 0.0;
 	double b1 = 0.0;
+};
+
+enum class ImplicitMode {
+	Fax,
+	Fay,
+	LockedDoubleShear,
+};
+
+struct ImplicitModel {
+	ImplicitMode mode = ImplicitMode::Fax;
+	std::optional<double> locked_rotation_z;
+	bool preserve_scale = false;
 };
 
 struct Vec3 {
@@ -85,6 +102,13 @@ Vec3 RotateZ(Vec3 value, double radians) {
 		sine * value.x + cosine * value.y, value.z};
 }
 
+Vec2 RotateZ(Vec2 value, double radians) {
+	double const cosine = std::cos(radians);
+	double const sine = std::sin(radians);
+	return {cosine * value.x - sine * value.y,
+		sine * value.x + cosine * value.y};
+}
+
 bool IsFinite(Vec3 value) {
 	return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
@@ -96,6 +120,14 @@ bool NearlyEqual(double left, double right) {
 
 bool NearlyEqual(Vec2 left, Vec2 right) {
 	return NearlyEqual(left.x, right.x) && NearlyEqual(left.y, right.y);
+}
+
+bool EquivalentRotation(double left, double right) {
+	return std::abs(std::remainder(left - right, 360.0)) <= 1.0e-9;
+}
+
+int FieldDecimals(int requested, int field_max) {
+	return std::min(ClampPerspectiveDecimalPlaces(requested), field_max);
 }
 
 double Quantize(double value, int decimals) {
@@ -224,18 +256,29 @@ std::optional<double> StateResidual(
 		input.output_mapping);
 }
 
-SerializedTransformState Serialize(EvaluatedTransformState const& state) {
+SerializedTransformState Serialize(
+	EvaluatedTransformState const& state,
+	int maximum_decimals) {
 	SerializedTransformState serialized;
-	serialized.position = FormatAssPoint(state.position, 4);
+	serialized.position = FormatAssPoint(
+		state.position, FieldDecimals(maximum_decimals, kPositionDecimals));
 	if (state.origin)
-		serialized.origin = FormatAssPoint(*state.origin, 4);
-	serialized.scale_x = FormatAssNumber(state.scale_x, 4);
-	serialized.scale_y = FormatAssNumber(state.scale_y, 4);
-	serialized.shear_x = FormatAssNumber(state.shear_x, 6);
-	serialized.shear_y = FormatAssNumber(state.shear_y, 6);
-	serialized.rotation_x = FormatAssNumber(state.rotation_x, 5);
-	serialized.rotation_y = FormatAssNumber(state.rotation_y, 5);
-	serialized.rotation_z = FormatAssNumber(state.rotation_z, 5);
+		serialized.origin = FormatAssPoint(
+			*state.origin, FieldDecimals(maximum_decimals, kPositionDecimals));
+	serialized.scale_x = FormatAssNumber(
+		state.scale_x, FieldDecimals(maximum_decimals, kScaleDecimals));
+	serialized.scale_y = FormatAssNumber(
+		state.scale_y, FieldDecimals(maximum_decimals, kScaleDecimals));
+	serialized.shear_x = FormatAssNumber(
+		state.shear_x, FieldDecimals(maximum_decimals, kShearDecimals));
+	serialized.shear_y = FormatAssNumber(
+		state.shear_y, FieldDecimals(maximum_decimals, kShearDecimals));
+	serialized.rotation_x = FormatAssNumber(
+		state.rotation_x, FieldDecimals(maximum_decimals, kRotationDecimals));
+	serialized.rotation_y = FormatAssNumber(
+		state.rotation_y, FieldDecimals(maximum_decimals, kRotationDecimals));
+	serialized.rotation_z = FormatAssNumber(
+		state.rotation_z, FieldDecimals(maximum_decimals, kRotationDecimals));
 	return serialized;
 }
 
@@ -263,7 +306,7 @@ CandidateScore ScoreCandidate(
 		if (serialized.origin)
 			score.token_count += TokenSize("\\org", *serialized.origin);
 	}
-	if (candidate.origin && origin_changed)
+	if (candidate.origin)
 		++score.explicit_origin_penalty;
 
 	auto const scalar = [&](double old_value, double new_value, std::string_view tag,
@@ -282,6 +325,7 @@ CandidateScore ScoreCandidate(
 	scalar(source.rotation_z, candidate.rotation_z, "\\frz", serialized.rotation_z);
 	score.perspective_penalty = (std::abs(candidate.rotation_x) > 1.0e-9 ? 1 : 0)
 		+ (std::abs(candidate.rotation_y) > 1.0e-9 ? 1 : 0);
+	score.non_fax_shear_penalty = std::abs(candidate.shear_y) > 1.0e-9 ? 1 : 0;
 	score.condition_penalty =
 		std::abs(std::log(candidate.scale_x / 100.0))
 		+ std::abs(std::log(candidate.scale_y / 100.0))
@@ -292,18 +336,24 @@ CandidateScore ScoreCandidate(
 }
 
 bool BetterScore(CandidateScore const& left, CandidateScore const& right) {
+	int const left_no_op_penalty = left.changed_tag_count == 0 ? 0 : 1;
+	int const right_no_op_penalty = right.changed_tag_count == 0 ? 0 : 1;
 	return std::tie(
-		left.changed_tag_count,
+		left_no_op_penalty,
 		left.explicit_origin_penalty,
 		left.perspective_penalty,
+		left.non_fax_shear_penalty,
+		left.changed_tag_count,
 		left.token_count,
 		left.condition_penalty,
 		left.family_rank,
 		left.residual)
 		< std::tie(
-			right.changed_tag_count,
+			right_no_op_penalty,
 			right.explicit_origin_penalty,
 			right.perspective_penalty,
+			right.non_fax_shear_penalty,
+			right.changed_tag_count,
 			right.token_count,
 			right.condition_penalty,
 			right.family_rank,
@@ -335,50 +385,67 @@ std::optional<SolverCandidate> QuantizeCandidate(
 	CandidateFamily family,
 	EvaluatedTransformState const& raw) {
 	auto state = raw;
+	int const maximum_decimals = ClampPerspectiveDecimalPlaces(input.maximum_decimals);
+	int const position_decimals = FieldDecimals(maximum_decimals, kPositionDecimals);
+	int const scale_decimals = FieldDecimals(maximum_decimals, kScaleDecimals);
+	int const shear_decimals = FieldDecimals(maximum_decimals, kShearDecimals);
+	int const rotation_decimals = FieldDecimals(maximum_decimals, kRotationDecimals);
 	if (family != CandidateFamily::NoOp) {
-		state.position = {Quantize(raw.position.x, 4), Quantize(raw.position.y, 4)};
+		state.position = {
+			Quantize(raw.position.x, position_decimals),
+			Quantize(raw.position.y, position_decimals)};
 		if (raw.origin)
-			state.origin = Vec2 {Quantize(raw.origin->x, 4), Quantize(raw.origin->y, 4)};
-		state.scale_x = Quantize(raw.scale_x, 4);
-		state.scale_y = Quantize(raw.scale_y, 4);
-		state.shear_x = Quantize(raw.shear_x, 6);
-		state.shear_y = Quantize(raw.shear_y, 6);
-		state.rotation_x = Quantize(raw.rotation_x, 5);
-		state.rotation_y = Quantize(raw.rotation_y, 5);
-		state.rotation_z = Quantize(raw.rotation_z, 5);
+			state.origin = Vec2 {
+				Quantize(raw.origin->x, position_decimals),
+				Quantize(raw.origin->y, position_decimals)};
+		if (input.scale_policy == PerspectiveScalePolicy::Fit) {
+			state.scale_x = Quantize(raw.scale_x, scale_decimals);
+			state.scale_y = Quantize(raw.scale_y, scale_decimals);
+		}
+		else {
+			state.scale_x = input.source.state.scale_x;
+			state.scale_y = input.source.state.scale_y;
+		}
+		state.shear_x = Quantize(raw.shear_x, shear_decimals);
+		state.shear_y = Quantize(raw.shear_y, shear_decimals);
+		state.rotation_x = Quantize(raw.rotation_x, rotation_decimals);
+		state.rotation_y = Quantize(raw.rotation_y, rotation_decimals);
+		state.rotation_z = Quantize(raw.rotation_z, rotation_decimals);
 	}
 	auto residual = StateResidual(input, target, state);
 	if (!residual || *residual > input.max_error)
 		return std::nullopt;
 
 	if (family != CandidateFamily::NoOp) {
-		CompactField(state, raw, 4, [](auto& value, auto const& original, int decimals) {
+		CompactField(state, raw, position_decimals, [](auto& value, auto const& original, int decimals) {
 			value.position = {Quantize(original.position.x, decimals), Quantize(original.position.y, decimals)};
 		}, input, target);
 		if (raw.origin) {
-			CompactField(state, raw, 4, [](auto& value, auto const& original, int decimals) {
+			CompactField(state, raw, position_decimals, [](auto& value, auto const& original, int decimals) {
 				value.origin = Vec2 {Quantize(original.origin->x, decimals), Quantize(original.origin->y, decimals)};
 			}, input, target);
 		}
-		CompactField(state, raw, 4, [](auto& value, auto const& original, int decimals) {
-			value.scale_x = Quantize(original.scale_x, decimals);
-		}, input, target);
-		CompactField(state, raw, 4, [](auto& value, auto const& original, int decimals) {
-			value.scale_y = Quantize(original.scale_y, decimals);
-		}, input, target);
-		CompactField(state, raw, 6, [](auto& value, auto const& original, int decimals) {
+		if (input.scale_policy == PerspectiveScalePolicy::Fit) {
+			CompactField(state, raw, scale_decimals, [](auto& value, auto const& original, int decimals) {
+				value.scale_x = Quantize(original.scale_x, decimals);
+			}, input, target);
+			CompactField(state, raw, scale_decimals, [](auto& value, auto const& original, int decimals) {
+				value.scale_y = Quantize(original.scale_y, decimals);
+			}, input, target);
+		}
+		CompactField(state, raw, shear_decimals, [](auto& value, auto const& original, int decimals) {
 			value.shear_x = Quantize(original.shear_x, decimals);
 		}, input, target);
-		CompactField(state, raw, 6, [](auto& value, auto const& original, int decimals) {
+		CompactField(state, raw, shear_decimals, [](auto& value, auto const& original, int decimals) {
 			value.shear_y = Quantize(original.shear_y, decimals);
 		}, input, target);
-		CompactField(state, raw, 5, [](auto& value, auto const& original, int decimals) {
+		CompactField(state, raw, rotation_decimals, [](auto& value, auto const& original, int decimals) {
 			value.rotation_x = Quantize(original.rotation_x, decimals);
 		}, input, target);
-		CompactField(state, raw, 5, [](auto& value, auto const& original, int decimals) {
+		CompactField(state, raw, rotation_decimals, [](auto& value, auto const& original, int decimals) {
 			value.rotation_y = Quantize(original.rotation_y, decimals);
 		}, input, target);
-		CompactField(state, raw, 5, [](auto& value, auto const& original, int decimals) {
+		CompactField(state, raw, rotation_decimals, [](auto& value, auto const& original, int decimals) {
 			value.rotation_z = Quantize(original.rotation_z, decimals);
 		}, input, target);
 	}
@@ -386,7 +453,7 @@ std::optional<SolverCandidate> QuantizeCandidate(
 	residual = StateResidual(input, target, state);
 	if (!residual || *residual > input.max_error)
 		return std::nullopt;
-	auto serialized = Serialize(state);
+	auto serialized = Serialize(state, maximum_decimals);
 	return SolverCandidate {
 		family,
 		state,
@@ -434,31 +501,46 @@ std::optional<AffineMap> LocalAffine(Homography const& homography, Vec2 center) 
 	return result;
 }
 
-std::optional<AffineMap> ExactAffine(Homography const& homography, Rect bounds) {
-	auto const corners = MakeQuad(bounds);
-	double min_denominator = homography.Denominator(corners[0]);
-	double max_denominator = min_denominator;
-	double scale = std::abs(min_denominator);
-	for (auto const point : corners) {
-		double const denominator = homography.Denominator(point);
-		min_denominator = std::min(min_denominator, denominator);
-		max_denominator = std::max(max_denominator, denominator);
-		scale = std::max(scale, std::abs(denominator));
-	}
-	if (scale == 0.0 || max_denominator - min_denominator > scale * 1.0e-10)
+std::optional<AffineMap> FitAffine(Quad const& target, Rect bounds) {
+	double const width = bounds.Width();
+	double const height = bounds.Height();
+	if (!std::isfinite(width) || !std::isfinite(height)
+		|| width <= 0.0 || height <= 0.0)
 		return std::nullopt;
-	auto const& matrix = homography.Matrix();
-	double const divisor = matrix(2, 2);
-	if (!std::isfinite(divisor) || std::abs(divisor) <= scale * 1.0e-14)
-		return std::nullopt;
-	return AffineMap {
-		matrix(0, 0) / divisor,
-		matrix(0, 1) / divisor,
-		matrix(1, 0) / divisor,
-		matrix(1, 1) / divisor,
-		matrix(0, 2) / divisor,
-		matrix(1, 2) / divisor,
+
+	// Orthogonal least-squares projection of the four target corners onto the
+	// six-degree-of-freedom affine subspace. QuantizeCandidate later decides
+	// whether this simpler representation fits the output error budget.
+	Vec2 const horizontal =
+		(target[1] + target[2] - target[0] - target[3]) / (2.0 * width);
+	Vec2 const vertical =
+		(target[3] + target[2] - target[0] - target[1]) / (2.0 * height);
+	Vec2 const source_center {
+		(bounds.left + bounds.right) / 2.0,
+		(bounds.top + bounds.bottom) / 2.0,
 	};
+	Vec2 const target_center =
+		(target[0] + target[1] + target[2] + target[3]) / 4.0;
+	AffineMap const result {
+		horizontal.x,
+		vertical.x,
+		horizontal.y,
+		vertical.y,
+		target_center.x - horizontal.x * source_center.x
+			- vertical.x * source_center.y,
+		target_center.y - horizontal.y * source_center.x
+			- vertical.y * source_center.y,
+	};
+	for (double const value : {
+		result.a00, result.a01, result.a10,
+		result.a11, result.b0, result.b1}) {
+		if (!std::isfinite(value))
+			return std::nullopt;
+	}
+	if (std::abs(result.a00 * result.a11 - result.a01 * result.a10)
+		<= 1.0e-14)
+		return std::nullopt;
+	return result;
 }
 
 std::optional<EvaluatedTransformState> DecomposeAffine(
@@ -509,6 +591,47 @@ std::optional<EvaluatedTransformState> DecomposeAffine(
 		sine * scale_x * shift.x + cosine * scale_y * shift.y,
 	};
 	state.position = {map.b0 - rotated_scaled_shift.x, map.b1 - rotated_scaled_shift.y};
+	return state;
+}
+
+std::optional<EvaluatedTransformState> DecomposeLockedAffine(
+	AffineMap const& map,
+	ForwardInput const& source,
+	double locked_rotation_z) {
+	// Repository-local fixed-angle decomposition. Holding frz constant frees
+	// its optimizer slot for the second shear without over-parameterizing the
+	// eight degrees of freedom of a quad homography.
+	if (!std::isfinite(locked_rotation_z))
+		return std::nullopt;
+	double const rotation = locked_rotation_z * DegreesToRadians;
+	Vec2 const basis_x = RotateZ(Vec2 {map.a00, map.a10}, rotation);
+	Vec2 const basis_y = RotateZ(Vec2 {map.a01, map.a11}, rotation);
+	if (!std::isfinite(basis_x.x) || !std::isfinite(basis_x.y)
+		|| !std::isfinite(basis_y.x) || !std::isfinite(basis_y.y)
+		|| basis_x.x <= 1.0e-12 || basis_y.y <= 1.0e-12)
+		return std::nullopt;
+
+	auto state = source.state;
+	state.origin.reset();
+	state.scale_x = basis_x.x * 100.0;
+	state.scale_y = basis_y.y * 100.0;
+	state.shear_x = basis_y.x / basis_x.x;
+	state.shear_y = basis_x.y / basis_y.y;
+	state.rotation_x = 0.0;
+	state.rotation_y = 0.0;
+	state.rotation_z = locked_rotation_z;
+	double const shear_determinant = 1.0 - state.shear_x * state.shear_y;
+	if (!std::isfinite(state.scale_x) || !std::isfinite(state.scale_y)
+		|| !std::isfinite(state.shear_x) || !std::isfinite(state.shear_y)
+		|| !std::isfinite(shear_determinant) || shear_determinant <= 0.0)
+		return std::nullopt;
+
+	Vec2 const shift = ResolveBoundsAlignmentShift(source.bounds, state.alignment);
+	Vec2 const rotated_shift = RotateZ(
+		Vec2 {shift.x * basis_x.x, shift.y * basis_y.y}, -rotation);
+	state.position = {map.b0 - rotated_shift.x, map.b1 - rotated_shift.y};
+	if (!std::isfinite(state.position.x) || !std::isfinite(state.position.y))
+		return std::nullopt;
 	return state;
 }
 
@@ -608,6 +731,45 @@ std::optional<EvaluatedTransformState> ExplicitOriginCandidate(
 	double const rotate_x = std::atan2(normal.y, normal.z);
 	for (auto& point : points)
 		point = RotateX(RotateY(point, rotate_y), rotate_x);
+	double const width = input.source.bounds.rectangle.Width();
+	double const height = input.source.bounds.rectangle.Height();
+	auto state = input.source.state;
+	state.origin = *center;
+	state.rotation_x = rotate_x * RadiansToDegrees;
+	state.rotation_y = -rotate_y * RadiansToDegrees;
+	Vec2 const first = {input.source.bounds.rectangle.left, input.source.bounds.rectangle.top};
+	Vec2 const shift = ResolveBoundsAlignmentShift(input.source.bounds, state.alignment);
+	if (input.locked_rotation_z) {
+		// Repository-local decomposition: keep the renderer-facing Z angle and
+		// recover the remaining 2D basis with both ASS shear axes.
+		double const rotation = *input.locked_rotation_z * DegreesToRadians;
+		Vec2 const top {
+			(points[1].x - points[0].x) / width,
+			(points[1].y - points[0].y) / width};
+		Vec2 const left {
+			(points[3].x - points[0].x) / height,
+			(points[3].y - points[0].y) / height};
+		Vec2 const basis_x = RotateZ(top, rotation);
+		Vec2 const basis_y = RotateZ(left, rotation);
+		if (!std::isfinite(basis_x.x) || !std::isfinite(basis_x.y)
+			|| !std::isfinite(basis_y.x) || !std::isfinite(basis_y.y)
+			|| basis_x.x <= 1.0e-12 || basis_y.y <= 1.0e-12)
+			return std::nullopt;
+		state.scale_x = basis_x.x * 100.0;
+		state.scale_y = basis_y.y * 100.0;
+		state.shear_x = basis_y.x / basis_x.x;
+		state.shear_y = basis_x.y / basis_y.y;
+		state.rotation_z = *input.locked_rotation_z;
+		Vec2 const local {
+			(first.x + first.y * state.shear_x + shift.x) * basis_x.x,
+			(first.x * state.shear_y + first.y + shift.y) * basis_y.y,
+		};
+		Vec2 const rotated_first = RotateZ(
+			Vec2 {points[0].x, points[0].y}, rotation);
+		state.position = *center + rotated_first - local;
+		return state;
+	}
+
 	Vec3 top = points[1] - points[0];
 	double const rotate_z = std::atan2(top.y, top.x);
 	for (auto& point : points)
@@ -617,25 +779,17 @@ std::optional<EvaluatedTransformState> ExplicitOriginCandidate(
 	Vec3 const left = points[3] - points[0];
 	if (std::abs(left.y) <= 1.0e-12)
 		return std::nullopt;
-	double const width = input.source.bounds.rectangle.Width();
-	double const height = input.source.bounds.rectangle.Height();
 	double const scale_x = top.Length() / width;
 	double const scale_y = std::abs(left.y) / height;
 	if (!std::isfinite(scale_x) || !std::isfinite(scale_y)
 		|| scale_x <= 0.0 || scale_y <= 0.0)
 		return std::nullopt;
 
-	auto state = input.source.state;
-	state.origin = *center;
 	state.scale_x = scale_x * 100.0;
 	state.scale_y = scale_y * 100.0;
 	state.shear_x = (left.x / left.y) * scale_y / scale_x;
 	state.shear_y = 0.0;
-	state.rotation_x = rotate_x * RadiansToDegrees;
-	state.rotation_y = -rotate_y * RadiansToDegrees;
 	state.rotation_z = -rotate_z * RadiansToDegrees;
-	Vec2 const first = {input.source.bounds.rectangle.left, input.source.bounds.rectangle.top};
-	Vec2 const shift = ResolveBoundsAlignmentShift(input.source.bounds, state.alignment);
 	Vec2 const local {
 		(first.x + first.y * state.shear_x + shift.x) * scale_x,
 		(first.x * state.shear_y + first.y + shift.y) * scale_y,
@@ -648,13 +802,27 @@ using Parameters = std::array<double, ParameterCount>;
 using ResidualVector = std::array<double, CornerResidualCount>;
 using LinearMatrix = std::array<std::array<double, ParameterCount>, ParameterCount>;
 
-Parameters ParametersFromState(EvaluatedTransformState const& state, bool use_fay) {
+Parameters ParametersFromState(
+	EvaluatedTransformState const& state,
+	ImplicitModel model) {
+	if (model.mode == ImplicitMode::LockedDoubleShear) {
+		return {
+			state.position.x,
+			state.position.y,
+			std::log(state.scale_x / 100.0),
+			std::log(state.scale_y / 100.0),
+			state.shear_x,
+			state.shear_y,
+			state.rotation_x * DegreesToRadians,
+			state.rotation_y * DegreesToRadians,
+		};
+	}
 	return {
 		state.position.x,
 		state.position.y,
 		std::log(state.scale_x / 100.0),
 		std::log(state.scale_y / 100.0),
-		use_fay ? state.shear_y : state.shear_x,
+		model.mode == ImplicitMode::Fay ? state.shear_y : state.shear_x,
 		state.rotation_z * DegreesToRadians,
 		state.rotation_x * DegreesToRadians,
 		state.rotation_y * DegreesToRadians,
@@ -664,7 +832,7 @@ Parameters ParametersFromState(EvaluatedTransformState const& state, bool use_fa
 std::optional<EvaluatedTransformState> StateFromParameters(
 	EvaluatedTransformState const& source,
 	Parameters const& parameters,
-	bool use_fay) {
+	ImplicitModel model) {
 	for (double const value : parameters) {
 		if (!std::isfinite(value))
 			return std::nullopt;
@@ -672,25 +840,46 @@ std::optional<EvaluatedTransformState> StateFromParameters(
 	auto state = source;
 	state.origin.reset();
 	state.position = {parameters[0], parameters[1]};
-	state.scale_x = 100.0 * std::exp(parameters[2]);
-	state.scale_y = 100.0 * std::exp(parameters[3]);
-	state.shear_x = use_fay ? 0.0 : parameters[4];
-	state.shear_y = use_fay ? parameters[4] : 0.0;
-	state.rotation_z = parameters[5] * RadiansToDegrees;
-	state.rotation_x = parameters[6] * RadiansToDegrees;
-	state.rotation_y = parameters[7] * RadiansToDegrees;
+	if (model.preserve_scale) {
+		state.scale_x = source.scale_x;
+		state.scale_y = source.scale_y;
+	}
+	else {
+		state.scale_x = 100.0 * std::exp(parameters[2]);
+		state.scale_y = 100.0 * std::exp(parameters[3]);
+	}
+	if (model.mode == ImplicitMode::LockedDoubleShear) {
+		if (!model.locked_rotation_z || !std::isfinite(*model.locked_rotation_z))
+			return std::nullopt;
+		state.shear_x = parameters[4];
+		state.shear_y = parameters[5];
+		state.rotation_z = *model.locked_rotation_z;
+		state.rotation_x = parameters[6] * RadiansToDegrees;
+		state.rotation_y = parameters[7] * RadiansToDegrees;
+	}
+	else {
+		state.shear_x = model.mode == ImplicitMode::Fay ? 0.0 : parameters[4];
+		state.shear_y = model.mode == ImplicitMode::Fay ? parameters[4] : 0.0;
+		state.rotation_z = parameters[5] * RadiansToDegrees;
+		state.rotation_x = parameters[6] * RadiansToDegrees;
+		state.rotation_y = parameters[7] * RadiansToDegrees;
+	}
 	if (!std::isfinite(state.scale_x) || !std::isfinite(state.scale_y))
 		return std::nullopt;
 	return state;
 }
 
+bool IsFixedImplicitParameter(std::size_t index, ImplicitModel model) {
+	return model.preserve_scale && (index == 2 || index == 3);
+}
+
 bool EvaluateParameters(
 	SolverInput const& input,
 	Parameters const& parameters,
-	bool use_fay,
+	ImplicitModel model,
 	ResidualVector& residual,
 	double& cost) {
-	auto const state = StateFromParameters(input.source.state, parameters, use_fay);
+	auto const state = StateFromParameters(input.source.state, parameters, model);
 	if (!state)
 		return false;
 	auto forward_input = input.source;
@@ -743,16 +932,18 @@ bool SolveLinear(LinearMatrix matrix, Parameters right, Parameters& solution) {
 std::optional<EvaluatedTransformState> OptimizeImplicitOrigin(
 	SolverInput const& input,
 	EvaluatedTransformState const& initial,
-	bool use_fay) {
-	Parameters parameters = ParametersFromState(initial, use_fay);
+	ImplicitModel model) {
+	Parameters parameters = ParametersFromState(initial, model);
 	ResidualVector residual {};
 	double cost = 0.0;
-	if (!EvaluateParameters(input, parameters, use_fay, residual, cost))
+	if (!EvaluateParameters(input, parameters, model, residual, cost))
 		return std::nullopt;
 	double damping = 1.0e-3;
 	for (int iteration = 0; iteration < 80; ++iteration) {
 		std::array<ResidualVector, ParameterCount> derivatives {};
 		for (std::size_t column = 0; column < ParameterCount; ++column) {
+			if (IsFixedImplicitParameter(column, model))
+				continue;
 			double const step = (column < 2 ? 1.0e-4 : 1.0e-6)
 				* std::max(1.0, std::abs(parameters[column]));
 			auto plus = parameters;
@@ -763,8 +954,8 @@ std::optional<EvaluatedTransformState> OptimizeImplicitOrigin(
 			ResidualVector minus_residual {};
 			double plus_cost = 0.0;
 			double minus_cost = 0.0;
-			bool const has_plus = EvaluateParameters(input, plus, use_fay, plus_residual, plus_cost);
-			bool const has_minus = EvaluateParameters(input, minus, use_fay, minus_residual, minus_cost);
+			bool const has_plus = EvaluateParameters(input, plus, model, plus_residual, plus_cost);
+			bool const has_minus = EvaluateParameters(input, minus, model, minus_residual, minus_cost);
 			if (!has_plus && !has_minus)
 				return std::nullopt;
 			for (std::size_t row = 0; row < CornerResidualCount; ++row) {
@@ -780,9 +971,15 @@ std::optional<EvaluatedTransformState> OptimizeImplicitOrigin(
 		LinearMatrix normal {};
 		Parameters gradient {};
 		for (std::size_t left = 0; left < ParameterCount; ++left) {
+			if (IsFixedImplicitParameter(left, model)) {
+				normal[left][left] = 1.0;
+				continue;
+			}
 			for (std::size_t row = 0; row < CornerResidualCount; ++row)
 				gradient[left] += derivatives[left][row] * residual[row];
 			for (std::size_t right = 0; right < ParameterCount; ++right) {
+				if (IsFixedImplicitParameter(right, model))
+					continue;
 				for (std::size_t row = 0; row < CornerResidualCount; ++row)
 					normal[left][right] += derivatives[left][row] * derivatives[right][row];
 			}
@@ -797,18 +994,23 @@ std::optional<EvaluatedTransformState> OptimizeImplicitOrigin(
 		auto trial = parameters;
 		double delta_norm = 0.0;
 		for (std::size_t index = 0; index < ParameterCount; ++index) {
+			if (IsFixedImplicitParameter(index, model))
+				continue;
 			trial[index] += delta[index];
 			delta_norm = std::max(delta_norm, std::abs(delta[index]));
 		}
 		trial[2] = std::clamp(trial[2], -12.0, 12.0);
 		trial[3] = std::clamp(trial[3], -12.0, 12.0);
 		trial[4] = std::clamp(trial[4], -1000.0, 1000.0);
-		trial[5] = std::remainder(trial[5], 2.0 * Pi);
+		if (model.mode == ImplicitMode::LockedDoubleShear)
+			trial[5] = std::clamp(trial[5], -1000.0, 1000.0);
+		else
+			trial[5] = std::remainder(trial[5], 2.0 * Pi);
 		trial[6] = std::remainder(trial[6], 2.0 * Pi);
 		trial[7] = std::remainder(trial[7], 2.0 * Pi);
 		ResidualVector trial_residual {};
 		double trial_cost = 0.0;
-		if (EvaluateParameters(input, trial, use_fay, trial_residual, trial_cost)
+		if (EvaluateParameters(input, trial, model, trial_residual, trial_cost)
 			&& trial_cost < cost) {
 			parameters = trial;
 			residual = trial_residual;
@@ -820,7 +1022,7 @@ std::optional<EvaluatedTransformState> OptimizeImplicitOrigin(
 			damping = std::min(1.0e12, damping * 10.0);
 		}
 	}
-	return StateFromParameters(input.source.state, parameters, use_fay);
+	return StateFromParameters(input.source.state, parameters, model);
 }
 
 }
@@ -835,6 +1037,10 @@ char const* DescribeSolverError(SolverError error) {
 		case SolverError::NoFeasibleCandidate: return "no quantized Perspective tag candidate meets the error budget";
 	}
 	return "unknown Perspective solver error";
+}
+
+int ClampPerspectiveDecimalPlaces(int value) {
+	return std::clamp(value, kMinPerspectiveDecimalPlaces, kMaxPerspectiveDecimalPlaces);
 }
 
 char const* DescribeResidualError(ResidualError error) {
@@ -879,6 +1085,17 @@ std::string FormatAssPoint(Vec2 point, int maximum_decimals) {
 	return "(" + x + "," + y + ")";
 }
 
+bool MatchesPerspectiveRepresentationPolicy(
+	EvaluatedTransformState const& state,
+	PerspectiveRepresentationPolicy policy) {
+	if (policy == PerspectiveRepresentationPolicy::Automatic)
+		return true;
+	return !state.origin
+		&& state.shear_y == 0.0
+		&& state.rotation_x == 0.0
+		&& state.rotation_y == 0.0;
+}
+
 ResidualResult MeasurePerspectiveResidual(
 	ForwardInput const& candidate,
 	Quad const& target,
@@ -909,6 +1126,14 @@ SolverResult SolvePerspectiveTags(SolverInput const& input) {
 	if (!HasValidResidualSamples(input.source.bounds))
 		return {SolverError::InvalidSource, GeometryError::None,
 			ForwardError::InvalidBounds};
+	if (input.locked_rotation_z) {
+		if (!std::isfinite(*input.locked_rotation_z))
+			return {SolverError::InvalidSource, GeometryError::None,
+				ForwardError::NonFiniteState};
+		if (std::abs(*input.locked_rotation_z) > MaxTransformParameter)
+			return {SolverError::InvalidSource, GeometryError::None,
+				ForwardError::TransformParameterOutOfRange};
+	}
 	auto const current_forward = ForwardQuad(input.source);
 	auto projection_context = current_forward;
 	if (!projection_context) {
@@ -947,39 +1172,80 @@ SolverResult SolvePerspectiveTags(SolverInput const& input) {
 		}
 	}
 
-	if (auto const affine = ExactAffine(target_transform.value, input.source.bounds.rectangle)) {
+	if (auto const affine = FitAffine(input.target, input.source.bounds.rectangle)) {
 		if (auto const candidate = TranslationCandidate(*affine, input.source))
 			raw_candidates.emplace_back(CandidateFamily::Translation, *candidate);
 		if (auto const candidate = SimilarityCandidate(*affine, input.source))
 			raw_candidates.emplace_back(CandidateFamily::Similarity, *candidate);
 		if (auto const candidate = DecomposeAffine(*affine, input.source, false))
 			raw_candidates.emplace_back(CandidateFamily::AffineFax, *candidate);
-		if (auto const candidate = DecomposeAffine(*affine, input.source, true))
-			raw_candidates.emplace_back(CandidateFamily::AffineFay, *candidate);
+		if (input.representation_policy
+			== PerspectiveRepresentationPolicy::Automatic) {
+			if (auto const candidate = DecomposeAffine(*affine, input.source, true))
+				raw_candidates.emplace_back(CandidateFamily::AffineFay, *candidate);
+		}
 	}
 
-	Vec2 const source_center {
-		(input.source.bounds.rectangle.left + input.source.bounds.rectangle.right) / 2.0,
-		(input.source.bounds.rectangle.top + input.source.bounds.rectangle.bottom) / 2.0,
-	};
-	if (auto const local_affine = LocalAffine(target_transform.value, source_center)) {
-		for (bool const use_fay : {false, true}) {
-			if (auto const initial = DecomposeAffine(*local_affine, input.source, use_fay)) {
-				if (auto const candidate = OptimizeImplicitOrigin(input, *initial, use_fay)) {
-				raw_candidates.emplace_back(
-					use_fay ? CandidateFamily::ProjectiveImplicitFay
-						: CandidateFamily::ProjectiveImplicitFax,
-					*candidate);
+	if (input.representation_policy
+		== PerspectiveRepresentationPolicy::Automatic) {
+		Vec2 const source_center {
+			(input.source.bounds.rectangle.left + input.source.bounds.rectangle.right) / 2.0,
+			(input.source.bounds.rectangle.top + input.source.bounds.rectangle.bottom) / 2.0,
+		};
+		if (auto const local_affine = LocalAffine(target_transform.value, source_center)) {
+			bool const preserve_scale =
+				input.scale_policy == PerspectiveScalePolicy::Preserve;
+			if (input.locked_rotation_z) {
+				if (auto const initial = DecomposeLockedAffine(
+					*local_affine, input.source, *input.locked_rotation_z)) {
+					ImplicitModel const model {
+						ImplicitMode::LockedDoubleShear, input.locked_rotation_z,
+						preserve_scale};
+					if (auto const candidate = OptimizeImplicitOrigin(input, *initial, model))
+						raw_candidates.emplace_back(
+							CandidateFamily::ProjectiveImplicitLockedDoubleShear,
+							*candidate);
+				}
+			}
+			else {
+				for (ImplicitMode const mode : {ImplicitMode::Fax, ImplicitMode::Fay}) {
+					bool const use_fay = mode == ImplicitMode::Fay;
+					if (auto const initial = DecomposeAffine(
+						*local_affine, input.source, use_fay)) {
+						if (auto const candidate = OptimizeImplicitOrigin(
+							input, *initial, {mode, std::nullopt, preserve_scale})) {
+							raw_candidates.emplace_back(
+								use_fay ? CandidateFamily::ProjectiveImplicitFay
+									: CandidateFamily::ProjectiveImplicitFax,
+								*candidate);
+						}
+					}
 				}
 			}
 		}
+		if (auto const explicit_candidate = ExplicitOriginCandidate(input, projection_context))
+			raw_candidates.emplace_back(
+				CandidateFamily::ProjectiveExplicitOrigin, *explicit_candidate);
 	}
-	if (auto const explicit_candidate = ExplicitOriginCandidate(input, projection_context))
-		raw_candidates.emplace_back(
-			CandidateFamily::ProjectiveExplicitOrigin, *explicit_candidate);
 
 	std::optional<SolverCandidate> best;
-	for (auto const& [family, state] : raw_candidates) {
+	for (auto const& [family, raw_state] : raw_candidates) {
+		auto state = raw_state;
+		if (input.scale_policy == PerspectiveScalePolicy::Preserve) {
+			if (!NearlyEqual(state.scale_x, input.source.state.scale_x)
+				|| !NearlyEqual(state.scale_y, input.source.state.scale_y))
+				continue;
+			state.scale_x = input.source.state.scale_x;
+			state.scale_y = input.source.state.scale_y;
+		}
+		if (input.locked_rotation_z) {
+			if (!EquivalentRotation(state.rotation_z, *input.locked_rotation_z))
+				continue;
+			state.rotation_z = *input.locked_rotation_z;
+		}
+		if (!MatchesPerspectiveRepresentationPolicy(
+			state, input.representation_policy))
+			continue;
 		auto candidate = QuantizeCandidate(input, target_transform.value, family, state);
 		if (!candidate)
 			continue;

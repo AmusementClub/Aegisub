@@ -75,33 +75,42 @@ enum class SavedVisualTool {
 	VectorClip,
 };
 
-SavedVisualTool DetectVisualTool(VideoDisplay *display) {
+struct SavedVisualToolState {
+	SavedVisualTool tool = SavedVisualTool::None;
+	int submode = -1;
+};
+
+SavedVisualToolState DetectVisualTool(VideoDisplay *display) {
 	if (!display)
-		return SavedVisualTool::None;
+		return {};
+
+	auto const state = [display](SavedVisualTool tool) {
+		return SavedVisualToolState {tool, display->GetToolSubMode()};
+	};
 	if (display->ToolIsType(typeid(VisualToolCross)))
-		return SavedVisualTool::Cross;
+		return state(SavedVisualTool::Cross);
 	if (display->ToolIsType(typeid(VisualToolDrag)))
-		return SavedVisualTool::Drag;
+		return state(SavedVisualTool::Drag);
 	if (display->ToolIsType(typeid(VisualToolMeasure)))
-		return SavedVisualTool::Measure;
+		return state(SavedVisualTool::Measure);
 	if (display->ToolIsType(typeid(VisualToolRotateZ)))
-		return SavedVisualTool::RotateZ;
+		return state(SavedVisualTool::RotateZ);
 	if (display->ToolIsType(typeid(VisualToolRotateXY)))
-		return SavedVisualTool::RotateXY;
+		return state(SavedVisualTool::RotateXY);
 	if (display->ToolIsType(typeid(VisualToolScale)))
-		return SavedVisualTool::Scale;
+		return state(SavedVisualTool::Scale);
 	if (display->ToolIsType(typeid(VisualToolClip)))
-		return SavedVisualTool::Clip;
+		return state(SavedVisualTool::Clip);
 	if (display->ToolIsType(typeid(VisualToolVectorClip)))
-		return SavedVisualTool::VectorClip;
-	return SavedVisualTool::None;
+		return state(SavedVisualTool::VectorClip);
+	return {};
 }
 
-void RestoreVisualTool(VideoDisplay *display, agi::Context *context, SavedVisualTool tool) {
+void RestoreVisualTool(VideoDisplay *display, agi::Context *context, SavedVisualToolState state) {
 	if (!display || !context)
 		return;
 
-	switch (tool) {
+	switch (state.tool) {
 		case SavedVisualTool::Cross:
 			display->SetTool(agi::make_unique<VisualToolCross>(display, context));
 			break;
@@ -129,6 +138,9 @@ void RestoreVisualTool(VideoDisplay *display, agi::Context *context, SavedVisual
 		case SavedVisualTool::None:
 			break;
 	}
+
+	if (state.submode >= 0)
+		display->SetToolSubMode(state.submode);
 }
 }
 

@@ -36,6 +36,7 @@
 #include "video_display.h"
 #include "video_overlay_draw_context.h"
 #include "visual_tool_clip.h"
+#include "visual_tool_commit_policy.h"
 #include "visual_tool_drag.h"
 #include "visual_tool_vector_clip.h"
 
@@ -194,18 +195,21 @@ void VisualToolBase::OnCommit(int type, AssDialogue const* changed) {
 		needs_render = true;
 	}
 
-	bool needs_file_refresh = false;
-	if (type & (AssFile::COMMIT_STYLES | AssFile::COMMIT_ORDER | AssFile::COMMIT_DIAG_ADDREM | AssFile::COMMIT_DIAG_META | AssFile::COMMIT_DIAG_TIME))
-		needs_file_refresh = true;
-	else if (type & (AssFile::COMMIT_DIAG_TEXT | AssFile::COMMIT_EXTRADATA)) {
-		if (!changed)
-			needs_file_refresh = true;
-		else {
-			needs_file_refresh = changed == active_line
-				|| changed == new_active_line
-				|| IsDisplayed(changed);
-		}
-	}
+	bool const changed_line_relevant = visual_tool_commit_policy::UsesChangedLineFilter(type)
+		&& changed
+		&& (changed == active_line
+			|| changed == new_active_line
+			|| IsDisplayed(changed));
+	bool const refresh_any_external_commit = !local_commit
+		&& !coordinate_system_changed
+		&& ShouldRefreshOnAnyExternalCommit();
+	bool const needs_file_refresh = visual_tool_commit_policy::ShouldRefreshFile({
+		type,
+		local_commit,
+		refresh_any_external_commit,
+		changed != nullptr,
+		changed_line_relevant,
+	});
 
 	if (needs_file_refresh) {
 		active_line = new_active_line;
@@ -404,7 +408,7 @@ void VisualToolBase::SetDisplayArea(int x, int y, int w, int h) {
 	video_res = Vector2D(w, h);
 
 	bool const interaction_cancelled = CancelInteraction(true);
-	OnCoordinateSystemsChanged();
+	OnDisplayAreaChanged();
 	if (interaction_cancelled)
 		parent->RenderNow();
 }

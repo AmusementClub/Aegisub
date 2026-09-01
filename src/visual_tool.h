@@ -79,9 +79,15 @@ class VisualToolBase {
 
 	/// Called when the script, video or screen resolutions change
 	virtual void OnCoordinateSystemsChanged() { DoRefresh(); }
+	/// Called when only the canvas-space video rectangle changes. Tools which
+	/// store canvas-space state retain the coordinate-system refresh behavior.
+	virtual void OnDisplayAreaChanged() { OnCoordinateSystemsChanged(); }
 
 	/// Called when the file changes and the tool needs to resync from script state
 	virtual void OnFileChanged() { DoRefresh(); }
+	/// Transient tools can request a refresh for external commits which the
+	/// generic active/displayed-line filter would otherwise ignore.
+	virtual bool ShouldRefreshOnAnyExternalCommit() const { return false; }
 
 	/// Called when the frame number changes
 	virtual void OnFrameChanged() { }

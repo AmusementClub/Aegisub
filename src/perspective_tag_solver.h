@@ -41,6 +41,7 @@ enum class CandidateFamily {
 	AffineFay,
 	ProjectiveImplicitFax,
 	ProjectiveImplicitFay,
+	ProjectiveImplicitLockedDoubleShear,
 	ProjectiveExplicitOrigin,
 };
 
@@ -60,6 +61,7 @@ struct CandidateScore {
 	int changed_tag_count = 0;
 	int explicit_origin_penalty = 0;
 	int perspective_penalty = 0;
+	int non_fax_shear_penalty = 0;
 	std::size_t token_count = 0;
 	double condition_penalty = 0.0;
 	int family_rank = 0;
@@ -74,11 +76,36 @@ struct SolverCandidate {
 	double max_error = 0.0;
 };
 
+enum class PerspectiveScalePolicy {
+	Preserve,
+	Fit,
+};
+
+enum class PerspectiveRepresentationPolicy {
+	Automatic,
+	FaxFrzOnly,
+};
+
+constexpr int kMinPerspectiveDecimalPlaces = 0;
+constexpr int kMaxPerspectiveDecimalPlaces = 6;
+constexpr int kDefaultPerspectiveDecimalPlaces = 2;
+
+[[nodiscard]] int ClampPerspectiveDecimalPlaces(int value);
+
 struct SolverInput {
 	ForwardInput source;
 	Quad target;
 	OutputCoordinateMapping output_mapping;
 	double max_error = 0.1;
+	// Optional renderer-facing orientation lock. Vertical CJK faces use a
+	// semantic base rotation which must survive geometry decomposition.
+	std::optional<double> locked_rotation_z;
+	PerspectiveScalePolicy scale_policy = PerspectiveScalePolicy::Fit;
+	PerspectiveRepresentationPolicy representation_policy =
+		PerspectiveRepresentationPolicy::Automatic;
+	// Upper bound on digits after the decimal point in generated tags.
+	// Per-field caps still apply (position/scale 4, rotation 5, shear 6).
+	int maximum_decimals = kMaxPerspectiveDecimalPlaces;
 };
 
 enum class ResidualError {
@@ -121,6 +148,9 @@ struct SolverResult {
 [[nodiscard]] char const* DescribeResidualError(ResidualError error);
 [[nodiscard]] std::string FormatAssNumber(double value, int maximum_decimals);
 [[nodiscard]] std::string FormatAssPoint(Vec2 point, int maximum_decimals);
+[[nodiscard]] bool MatchesPerspectiveRepresentationPolicy(
+	EvaluatedTransformState const& state,
+	PerspectiveRepresentationPolicy policy);
 // Measures a re-evaluated candidate against a target quad in final output
 // pixels. The candidate's bounds supply all source-space residual samples.
 [[nodiscard]] ResidualResult MeasurePerspectiveResidual(

@@ -225,9 +225,15 @@ if(GTEST_FOUND)
         tests/tests/option.cpp
         tests/tests/path.cpp
         tests/tests/paste_over_policy.cpp
+        tests/tests/perspective_ass_bounds.cpp
+        tests/tests/perspective_apply_plan.cpp
+        tests/tests/perspective_libass_render.cpp
+        tests/tests/perspective_ass_state.cpp
         tests/tests/perspective_forward.cpp
         tests/tests/perspective_quad_geometry.cpp
+        tests/tests/perspective_quad_edit_state.cpp
         tests/tests/perspective_tag_solver.cpp
+        tests/tests/perspective_visual_tool_options.cpp
         tests/tests/perf_trace.cpp
         tests/tests/presentation_contract.cpp
         tests/tests/project_session_ops.cpp
@@ -281,6 +287,7 @@ if(GTEST_FOUND)
         tests/tests/visual_guide_interaction.cpp
         tests/tests/visual_guide_model.cpp
         tests/tests/visual_guide_overlay.cpp
+        tests/tests/visual_tool_commit_policy.cpp
         tests/tests/navigation_preview_policy.cpp
         tests/tests/deadline_pacing_policy.cpp
         tests/tests/video_subtitle_update_policy.cpp
@@ -563,6 +570,7 @@ if(GTEST_FOUND)
     endif()
     target_link_libraries(gtest-run PRIVATE aegisub_core aegisub_features libaegisub luajit CLI11::CLI11 "GTest::GTest" "Iconv::Iconv" pugixml::pugixml "ZLIB::ZLIB" "Boost::locale" ${wxWidgets_LIBRARIES})
     target_include_directories(gtest-run PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc")
+    target_include_directories(gtest-run PRIVATE "${PROJECT_SOURCE_DIR}/vendor")
     aegisub_enable_highway(gtest-run)
     if(WIN32)
         target_link_libraries(gtest-run PRIVATE Psapi)

@@ -680,6 +680,11 @@
 				"Scale Step Large" : 10,
 				"Origin Step" : 1,
 				"Origin Step Large" : 10
+			},
+			"Perspective" : {
+				"Decimal Places" : 2,
+				"Fax Frz Only" : false,
+				"Fit Text" : true
 			}
 		},
 		"Align to Video" : {

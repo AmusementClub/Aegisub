@@ -649,6 +649,13 @@ void BuildVideoPage(OptionPage *p) {
 	binder->AddBool(_("Show keyframes in slider"), "Video/Slider/Show Keyframes");
 	binder->AddBool(_("Only show visual tools when mouse is over video"), "Tool/Visual/Autohide");
 	binder->AddInt(_("Visual tools coordinate font size"), "Tool/Visual/Coordinate Font Size", 6, 72);
+	auto *perspective_decimals = binder->AddInt(
+		_("Perspective decimal places"),
+		"Tool/Visual/Perspective/Decimal Places",
+		0, 6);
+	perspective_decimals->SetHelpString(_(
+		"Maximum digits after the decimal point in generated Perspective tags. "
+		"The default is 2. Use 0 for integers, or increase up to 6 if Apply cannot fit the target."));
 	binder->AddBool(_("Seek video to line start on selection change"), "Video/Subtitle Sync");
 	binder->AddBool(_("Automatically open audio when opening video"), "Video/Open Audio");
 

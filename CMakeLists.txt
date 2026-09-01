@@ -758,8 +758,12 @@ set(AEGISUB_CORE_SOURCES
     src/core_host_context.cpp
     src/ebu_export_settings.cpp
     src/numeric_utils.cpp
+    src/perspective_ass_bounds.cpp
+    src/perspective_apply_plan.cpp
+    src/perspective_ass_state.cpp
     src/perspective_forward.cpp
     src/perspective_quad_geometry.cpp
+    src/perspective_quad_edit_state.cpp
     src/perspective_tag_solver.cpp
     src/translation_service.cpp
     # ASS data model

@@ -74,7 +74,7 @@ namespace {
 		CMD_ICON(visual_measure)
 		STR_MENU("Measure")
 		STR_DISP("Measure")
-		STR_HELP("Create and edit temporary measurement and axis guides")
+		STR_HELP("Measure with temporary guides or draw a Perspective target for subtitles")
 	};
 
 	struct visual_mode_rotate_z final : public visual_tool_command<VisualToolRotateZ> {

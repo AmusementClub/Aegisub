@@ -29,7 +29,6 @@ namespace {
 
 constexpr double CameraDistanceBase = 312.5;
 constexpr double DegreesToRadians = 3.1415926535897932384626433832795 / 180.0;
-constexpr double MaxTransformParameter = 1.0e7;
 
 struct Vec3 {
 	double x = 0.0;

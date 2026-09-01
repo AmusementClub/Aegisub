@@ -27,6 +27,8 @@
 
 namespace perspective {
 
+constexpr double MaxTransformParameter = 1.0e7;
+
 struct Resolution {
 	double width = 0.0;
 	double height = 0.0;

@@ -72,6 +72,14 @@ void AddSubtitleCommit(
 		rows.push_back(line ? line->Row : -1);
 	updates.AddIncrementalRows(rows);
 }
+
+/// How long the playback-start gate waits before hinting at the wait in the
+/// status bar
+constexpr int PlaybackStartWaitNoticeMs = 300;
+/// How long the playback-start gate waits for the first frame before giving
+/// up and letting the audio clock run (the picture snaps forward once the
+/// stalled read completes)
+constexpr int PlaybackStartFallbackMs = 10000;
 }
 
 VideoController::VideoController(agi::Context *c)
@@ -98,6 +106,9 @@ void VideoController::ResetPlaybackState() {
 	playback_end_ms = 0;
 	playback_uses_audio_authority = false;
 	playback_seek_frame_pending = -1;
+	playback_start_pending = false;
+	playback_start_frame = -1;
+	playback_start_wait_notice_shown = false;
 }
 
 void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {
@@ -523,8 +534,6 @@ void VideoController::JumpToFrame(int n) {
 			Stop();
 			return;
 		}
-		playback_start_time = std::chrono::steady_clock::now();
-		perf_trace::ResetVideoPlaybackInterval();
 	}
 }
 
@@ -657,21 +666,80 @@ bool VideoController::PreparePlayback(PlaybackMode mode, int start_frame, int ra
 			ResetPlaybackState();
 			return false;
 		}
-		core.audioController->PlayRange(TimeRange(start_ms, playback_end_ms));
 	}
 	else {
 		end_frame = provider->GetFrameCount();
-		core.audioController->PlayToEnd(start_ms);
 	}
-	playback_uses_audio_authority = core.audioController->IsPlaying();
+
+	// Arm the playback-start gate: hold the audio clock until the first
+	// frame of the range is delivered. After a long pause the first read can
+	// stall on cold storage for seconds, and audio running ahead of a frozen
+	// picture desyncs playback for the whole stall.
+	if (core.audioController->IsPlaying())
+		core.audioController->Stop();
+	playback_uses_audio_authority = false;
+	// Clamp to a frame the provider can actually deliver: PlayLine start
+	// frames extrapolate past the video range for lines timed outside it,
+	// and waiting on an undeliverable frame would hold the gate until the
+	// fallback. Seek paths clamp the same way before requesting.
+	playback_start_frame = mid(0, start_frame, provider->GetFrameCount() - 1);
+	playback_start_pending = true;
+	playback_pending_since = std::chrono::steady_clock::now();
+	playback_start_wait_notice_shown = false;
+	if (FrameAlreadyDelivered(playback_start_frame))
+		ResolvePendingPlaybackStart();
 	return true;
 }
 
 void VideoController::StartPlaybackTimer() {
-	playback_start_time = std::chrono::steady_clock::now();
-	perf_trace::ResetVideoPlaybackInterval();
-	perf_trace::TracePlayStart(frame_n, start_ms);
 	playback_timer->Start(10);
+}
+
+void VideoController::ResolvePendingPlaybackStart() {
+	if (!playback_start_pending)
+		return;
+	playback_start_pending = false;
+
+	auto const now = std::chrono::steady_clock::now();
+	auto const waited_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+		now - playback_pending_since).count();
+	HidePlaybackStartWaitNotice();
+
+	auto core = context->GetCore();
+	start_ms = TimeAtFrame(playback_start_frame);
+	if (playback_mode == PlaybackMode::LineRange)
+		core.audioController->PlayRange(TimeRange(start_ms, playback_end_ms));
+	else
+		core.audioController->PlayToEnd(start_ms);
+	playback_start_time = std::chrono::steady_clock::now();
+	playback_uses_audio_authority = core.audioController->IsPlaying();
+	perf_trace::TracePlayStart(playback_start_frame, start_ms);
+	perf_trace::ResetVideoPlaybackInterval();
+	perf_trace::ObserveVideoUiDuration(
+		"video_controller.playback_start_gate",
+		static_cast<double>(waited_ms),
+		playback_uses_audio_authority ? 1 : 0);
+}
+
+bool VideoController::FrameAlreadyDelivered(int frame) const {
+	if (presented_frame_n == frame)
+		return true;
+	for (auto const& packet : recent_render_packets)
+		if (packet.frame_number == frame)
+			return true;
+	return false;
+}
+
+void VideoController::ShowPlaybackStartWaitNotice() {
+	playback_start_wait_notice_shown = true;
+	context->ShowStatus(from_wx(_("Waiting for video frames...")), 3000);
+}
+
+void VideoController::HidePlaybackStartWaitNotice() {
+	if (!playback_start_wait_notice_shown)
+		return;
+	playback_start_wait_notice_shown = false;
+	context->ShowStatus("", 1000);
 }
 
 void VideoController::StartPlayback(PlaybackMode mode, int range_end_ms) {
@@ -732,6 +800,7 @@ void VideoController::StopPlayback(bool clear_interactive_seek_preview) {
 		auto core = context->GetCore();
 		core.audioController->Stop();
 	}
+	HidePlaybackStartWaitNotice();
 	ResetPlaybackState();
 }
 
@@ -748,6 +817,17 @@ void VideoController::OnPlayTimer() {
 	auto core = context->GetCore();
 	if (playback_seek_frame_pending >= 0)
 		return;
+
+	if (playback_start_pending) {
+		auto const waited = duration_cast<milliseconds>(
+								steady_clock::now() - playback_pending_since)
+								.count();
+		if (!playback_start_wait_notice_shown && waited >= PlaybackStartWaitNoticeMs)
+			ShowPlaybackStartWaitNotice();
+		if (waited >= PlaybackStartFallbackMs)
+			ResolvePendingPlaybackStart();
+		return;
+	}
 
 	int authority_time_ms = start_ms + duration_cast<milliseconds>(steady_clock::now() - playback_start_time).count();
 	if (playback_uses_audio_authority) {
@@ -886,6 +966,9 @@ void VideoController::DeliverFrameReady(VideoRenderPacket packet, double time) {
 		playback_seek_frame_pending = -1;
 	else if (playback_seek_frame_pending >= 0)
 		return;
+
+	if (playback_start_pending && packet.frame_number == playback_start_frame)
+		ResolvePendingPlaybackStart();
 
 	RememberRecentRenderPacket(packet);
 	FrameReady(packet, time);

@@ -308,3 +308,69 @@ TEST(video_color_pick, rejects_degenerate_geometry_for_mapping) {
 	EXPECT_EQ(-1, mapped.first);
 	EXPECT_EQ(-1, mapped.second);
 }
+
+TEST(video_color_pick, extracts_a_centered_zoom_region_with_pitch_padding) {
+	auto frame = MakeFrame(16, 16, 12);
+	for (int y = 0; y < 16; ++y)
+		for (int x = 0; x < 16; ++x)
+			SetPixel(frame, x, y, static_cast<unsigned char>(x * 7), static_cast<unsigned char>(y * 11), 3);
+
+	auto const region = aegisub::color_pick::ExtractZoomRegion(frame, 8, 8, 1);
+	ASSERT_EQ(9u, region.size());
+	for (int dy = -1; dy <= 1; ++dy) {
+		for (int dx = -1; dx <= 1; ++dx) {
+			auto const& cell = region[static_cast<size_t>(dy + 1) * 3 + (dx + 1)];
+			EXPECT_TRUE(ChannelsNear(cell, (8 + dx) * 7, (8 + dy) * 11, 3, 0));
+		}
+	}
+	EXPECT_TRUE(ChannelsNear(region[4], 8 * 7, 8 * 11, 3, 0));
+}
+
+TEST(video_color_pick, zoom_region_reads_a_flipped_frame_in_display_order) {
+	auto frame = MakeFrame(5, 5);
+	frame.flipped = true;
+	// Colour the display rows the radius-1 window at the centre covers.
+	FillSolid(frame, 200, 20, 20, 0, 1, 4, 1); // display row 1 red
+	FillSolid(frame, 20, 20, 200, 0, 3, 4, 3); // display row 3 blue
+
+	auto const region = aegisub::color_pick::ExtractZoomRegion(frame, 2, 2, 1);
+	ASSERT_EQ(9u, region.size());
+	for (int dx = 0; dx < 3; ++dx) {
+		EXPECT_TRUE(ChannelsNear(region[dx], 200, 20, 20, 0));
+		EXPECT_TRUE(ChannelsNear(region[6 + dx], 20, 20, 200, 0));
+	}
+}
+
+TEST(video_color_pick, zoom_region_clamps_at_frame_edges) {
+	auto frame = MakeFrame(8, 8);
+	FillSolid(frame, 255, 0, 0, 0, 0, 0, 7); // column 0 red
+	FillSolid(frame, 0, 0, 255, 1, 0, 7, 7); // the rest blue
+
+	// Centre on column 0: the dx=-1 cells clamp onto it, and the centre
+	// column is that red column itself.
+	auto const region = aegisub::color_pick::ExtractZoomRegion(frame, 0, 4, 1);
+	ASSERT_EQ(9u, region.size());
+	for (int dy = 0; dy < 3; ++dy) {
+		EXPECT_TRUE(ChannelsNear(region[dy * 3], 255, 0, 0, 0));
+		EXPECT_TRUE(ChannelsNear(region[dy * 3 + 1], 255, 0, 0, 0));
+		EXPECT_TRUE(ChannelsNear(region[dy * 3 + 2], 0, 0, 255, 0));
+	}
+}
+
+TEST(video_color_pick, zoom_region_rejects_unusable_frames_and_radius) {
+	auto empty = MakeFrame(8, 8);
+	empty.data.clear();
+	EXPECT_TRUE(aegisub::color_pick::ExtractZoomRegion(empty, 4, 4, 2).empty());
+
+	auto short_pitch = MakeFrame(8, 8);
+	short_pitch.pitch = 4;
+	EXPECT_TRUE(aegisub::color_pick::ExtractZoomRegion(short_pitch, 4, 4, 2).empty());
+
+	auto truncated = MakeFrame(8, 8);
+	truncated.data.resize(truncated.data.size() / 2);
+	EXPECT_TRUE(aegisub::color_pick::ExtractZoomRegion(truncated, 4, 4, 2).empty());
+
+	auto frame = MakeFrame(8, 8);
+	FillSolid(frame, 9, 9, 9);
+	EXPECT_TRUE(aegisub::color_pick::ExtractZoomRegion(frame, 4, 4, -1).empty());
+}

@@ -6,6 +6,7 @@
 #include <libaegisub/color.h>
 
 #include <utility>
+#include <vector>
 
 namespace aegisub::color_pick {
 
@@ -67,6 +68,15 @@ struct Result {
 /// width*4) returns an empty Result{} without attempting anything. A valid
 /// frame with out-of-range coordinates uses only the clamped fallback window.
 Result PickColor(VideoFrame const& frame, int x, int y, Options const& options = {});
+
+/// Nearest-neighbour magnifier source grid: the (2*radius+1)^2 raw-frame
+/// colours around storage pixel (x, y) in top-down display order (a flipped
+/// frame's rows are un-flipped), with cells past the frame edge reading the
+/// clamped border pixel so the grid stays square at the borders and its centre
+/// is always the pixel under the pointer. Alpha is always zero, matching
+/// PickColor's output. A structurally unusable frame (same rule as PickColor)
+/// or a negative radius returns an empty grid.
+std::vector<agi::Color> ExtractZoomRegion(VideoFrame const& frame, int x, int y, int radius);
 
 /// Map a point in the provider's displayed space — the coordinate space of the
 /// video display and of VideoProvider::GetWidth/GetHeight, i.e. the visible

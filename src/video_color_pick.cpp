@@ -476,6 +476,30 @@ Result PickColor(VideoFrame const& frame, int x, int y, Options const& options) 
 	return result;
 }
 
+std::vector<agi::Color> ExtractZoomRegion(VideoFrame const& frame, int x, int y, int radius) {
+	std::vector<agi::Color> region;
+	int const width = static_cast<int>(frame.width);
+	int const height = static_cast<int>(frame.height);
+	if (radius < 0 || frame.data.empty() || width <= 0 || height <= 0 || frame.pitch < static_cast<size_t>(width) * 4 || frame.data.size() < frame.pitch * frame.height)
+		return region;
+
+	int const extent = 2 * radius + 1;
+	region.resize(static_cast<size_t>(extent) * extent);
+	for (int dy = -radius; dy <= radius; ++dy) {
+		for (int dx = -radius; dx <= radius; ++dx) {
+			// Edge cells read the clamped border pixel so the grid stays square
+			// and its centre is always the pixel under the pointer.
+			Rgb const rgb = PixelAt(
+				frame,
+				ClampInt(x + dx, 0, width - 1),
+				ClampInt(y + dy, 0, height - 1));
+			region[static_cast<size_t>(dy + radius) * extent + (dx + radius)] =
+				agi::Color(rgb[0], rgb[1], rgb[2], 0);
+		}
+	}
+	return region;
+}
+
 std::pair<int, int> MapDisplayPointToStorage(SourceFrameGeometry const& geometry, double x, double y) {
 	auto const display = GetSourceFrameDisplayOutputRect(geometry);
 	if (display.width <= 0 || display.height <= 0)

@@ -120,4 +120,8 @@ struct HomographyResult {
 [[nodiscard]] HomographyResult MakeHomography(Rect const& source, Quad const& target);
 [[nodiscard]] std::optional<Vec2> QuadCenter(Quad const& quad);
 
+// Parameter interval of a segment inside the viewport, for bounded overlay
+// generation. An empty intersection has no interval.
+[[nodiscard]] std::optional<std::array<double, 2>> ClipSegmentRange(
+	Vec2 first, Vec2 last, Rect viewport);
 }

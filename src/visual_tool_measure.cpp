@@ -735,10 +735,7 @@ void VisualToolMeasure::ClearPerspectivePreview() {
 void VisualToolMeasure::UpdatePerspectivePreview() {
 	// Reset before any early return: every exit path must leave the Apply gate
 	// closed unless the solve below explicitly proves the target reachable.
-	perspective_solve_state = PerspectiveSolveState::NotReady;
-	perspective_no_feasible_reason = perspective::NoFeasibleReason::None;
-	perspective_no_feasible_metrics.reset();
-	perspective_preview.reset();
+	ClearPerspectivePreview();
 	// A diagnostic from Apply or from rebinding is more specific than anything
 	// this can say, so only the solver-owned slot is refreshed here.
 	bool const owns_diagnostic = perspective_diagnostic.empty()
@@ -912,7 +909,8 @@ void VisualToolMeasure::UpdatePerspectiveInteraction() {
 				c->ShowStatus(perspective_diagnostic);
 			}
 			else {
-				UpdatePerspectivePreview();
+				ClearPerspectivePreview();
+				perspective_solve_state = PerspectiveSolveState::Pending;
 			}
 		}
 		else if (perspective_creation) {
@@ -1543,12 +1541,22 @@ void VisualToolMeasure::DrawPerspectivePreview(
 	// The draw context has no dash primitive, so the segments are stepped by
 	// hand in canvas pixels.
 	double const dash = 6.0 * UiScale();
+	perspective::Rect const visible{
+		.left = -dash, .top = -dash, .right = canvas_size.X() + dash, .bottom = canvas_size.Y() + dash};
 	auto const stroke = [&](Vector2D from, Vector2D to) {
+		auto const range = perspective::ClipSegmentRange(
+			{.x = from.X(), .y = from.Y()}, {.x = to.X(), .y = to.Y()}, visible);
+		if (!range)
+			return;
 		Vector2D const delta = to - from;
 		double const length = std::hypot(delta.X(), delta.Y());
 		if (!(length > 0.0))
 			return;
-		for (double at = 0.0; at < length; at += dash * 2.0) {
+		// Keep the dash phase anchored at the original endpoint while skipping
+		// all offscreen segments, even at extreme zoom or source coordinates.
+		double const begin = std::floor((*range)[0] * length / (dash * 2.0)) * dash * 2.0;
+		double const limit = (*range)[1] * length;
+		for (double at = begin; at < limit; at += dash * 2.0) {
 			double const end = std::min(at + dash, length);
 			context.DrawLine(
 				from + delta * (at / length), from + delta * (end / length));
@@ -1733,6 +1741,10 @@ void VisualToolMeasure::DrawPerspective(VideoOverlayDrawContext& context) {
 
 void VisualToolMeasure::DrawWithContext(VideoOverlayDrawContext& context) {
 	if (submode == SubMode::PerspectiveQuad) {
+		if (perspective_solve_state == PerspectiveSolveState::Pending) {
+			UpdatePerspectivePreview();
+			UpdateToolbarState();
+		}
 		DrawPerspective(context);
 		return;
 	}

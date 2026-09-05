@@ -419,4 +419,24 @@ std::optional<Vec2> QuadCenter(Quad const& quad) {
 	return center;
 }
 
+std::optional<std::array<double, 2>> ClipSegmentRange(
+	Vec2 first, Vec2 last, Rect viewport) {
+	if (!IsFinite(first) || !IsFinite(last))
+		return std::nullopt;
+	std::array<double, 2> range{0.0, 1.0};
+	auto const clip_axis = [&](double position, double delta, double low, double high) {
+		if (delta == 0.0)
+			return position >= low && position <= high;
+		double begin = (low - position) / delta;
+		double end = (high - position) / delta;
+		if (begin > end)
+			std::swap(begin, end);
+		range[0] = std::max(range[0], begin);
+		range[1] = std::min(range[1], end);
+		return range[0] <= range[1];
+	};
+	if (!clip_axis(first.x, last.x - first.x, viewport.left, viewport.right) || !clip_axis(first.y, last.y - first.y, viewport.top, viewport.bottom))
+		return std::nullopt;
+	return range;
+}
 }

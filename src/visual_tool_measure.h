@@ -75,6 +75,7 @@ class VisualToolMeasure final : public VisualToolBase {
 	// stays the final authority either way.
 	enum class PerspectiveSolveState {
 		NotReady,
+		Pending,
 		Feasible,
 		Infeasible,
 	};
@@ -157,7 +158,8 @@ class VisualToolMeasure final : public VisualToolBase {
 		VideoOverlayDrawContext& context, perspective::Quad const& quad);
 	/// Re-solves the current target and caches the reachable shape plus, when the
 	/// target is out of reach entirely, the reason. Solver-only on purpose: this
-	/// runs on every mouse move, so it must not stage an AssFile or measure text.
+	/// runs before drawing or on explicit actions, without staging an AssFile
+	/// or measuring text. Mouse motions share one pending solve per redraw.
 	void UpdatePerspectivePreview();
 	void ClearPerspectivePreview();
 	/// Why the target cannot be reached, phrased from the solver's own

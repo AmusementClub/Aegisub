@@ -32,6 +32,25 @@ TEST(perspective_quad_geometry, accepts_clockwise_convex_quad_in_y_down_coordina
 	EXPECT_LT(center->x, 180.0);
 }
 
+TEST(perspective_quad_geometry, clip_segment_bounds_large_overlay_work_without_changing_direction) {
+	Rect const viewport{.left = 0.0, .top = 0.0, .right = 100.0, .bottom = 80.0};
+	auto const across = ClipSegmentRange({.x = -1.0e8, .y = 40.0}, {.x = 1.0e8, .y = 40.0}, viewport);
+	ASSERT_TRUE(across);
+	EXPECT_NEAR(0.5, (*across)[0], 1.0e-12);
+	EXPECT_NEAR(0.5000005, (*across)[1], 1.0e-12);
+	auto const backwards = ClipSegmentRange({.x = 1.0e8, .y = 40.0}, {.x = -1.0e8, .y = 40.0}, viewport);
+	ASSERT_TRUE(backwards);
+	EXPECT_NEAR(0.4999995, (*backwards)[0], 1.0e-12);
+	EXPECT_NEAR(0.5, (*backwards)[1], 1.0e-12);
+	EXPECT_FALSE(ClipSegmentRange({.x = -10.0, .y = 81.0}, {.x = 110.0, .y = 81.0}, viewport));
+	auto const inside = ClipSegmentRange({.x = 10.0, .y = 20.0}, {.x = 20.0, .y = 30.0}, viewport);
+	ASSERT_TRUE(inside);
+	EXPECT_EQ((std::array<double, 2>{0.0, 1.0}), *inside);
+	auto const corner = ClipSegmentRange({.x = -10.0, .y = -10.0}, {.x = 10.0, .y = 10.0}, viewport);
+	ASSERT_TRUE(corner);
+	EXPECT_EQ((std::array<double, 2>{0.5, 1.0}), *corner);
+}
+
 TEST(perspective_quad_geometry, rejects_reversed_winding_without_reordering_corners) {
 	Quad const reversed {{{0.0, 0.0}, {0.0, 1.0}, {1.0, 1.0}, {1.0, 0.0}}};
 	EXPECT_EQ(GeometryError::WrongWinding, ValidateQuad(reversed).error);

@@ -258,6 +258,11 @@ char const* DescribeForwardError(ForwardError error) {
 }
 
 ForwardResult ForwardQuad(ForwardInput const& input) {
+	return ForwardQuad(input, input.state);
+}
+
+ForwardResult ForwardQuad(
+	ForwardInput const& input, EvaluatedTransformState const& state) {
 	if (auto const bounds_error = BoundsError(input.bounds.kind);
 		bounds_error != ForwardError::None)
 		return {bounds_error};
@@ -267,20 +272,20 @@ ForwardResult ForwardQuad(ForwardInput const& input) {
 		return {ForwardError::InvalidBounds};
 	if (!IsFiniteAndSafe(input.bounds.alignment_offset))
 		return {ForwardError::InvalidBounds};
-	if (auto const state_error = ValidateState(input.state);
+	if (auto const state_error = ValidateState(state);
 		state_error != ForwardError::None)
 		return {state_error};
 	auto const resolution = ResolveLayoutResolution(input);
 	if (resolution.error != ForwardError::None)
 		return {resolution.error};
 
-	Vec2 const origin = input.state.origin.value_or(input.state.position);
+	Vec2 const origin = state.origin.value_or(state.position);
 	Quad const source_quad = MakeQuad(input.bounds.rectangle);
 	std::array<Vec2, 4> projected;
 	std::array<double, 4> denominators {};
 	for (std::size_t index = 0; index < source_quad.size(); ++index) {
 		auto const transformed = TransformPoint(
-			source_quad[index], input.bounds, input.state, origin,
+			source_quad[index], input.bounds, state, origin,
 			resolution.camera_distance, denominators[index]);
 		if (!transformed)
 			return {ForwardError::ProjectionDomain};
@@ -325,5 +330,4 @@ ForwardResult ForwardQuad(ForwardInput const& input) {
 	return {ForwardError::None, GeometryError::None, quad, homography.value,
 			resolution.value, resolution.camera_distance};
 }
-
 }

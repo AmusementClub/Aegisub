@@ -1061,6 +1061,20 @@ TEST(perspective_tag_solver, drawing_control_samples_extend_residual_domain) {
 	EXPECT_GT(with_controls.max_error, rectangle_only.max_error);
 }
 
+TEST(perspective_tag_solver, residual_scan_keeps_the_last_sample_and_tiny_output_scales) {
+	auto source = BaseInput();
+	source.bounds.residual_samples = {{.x = 500.0, .y = 80.0}};
+	auto desired = source.state;
+	desired.scale_x = 150.0;
+	auto const target = TargetFrom(source, desired);
+	auto const ordinary = MeasurePerspectiveResidual(source, target, {.scale_x = 1.0, .scale_y = 1.0});
+	ASSERT_TRUE(ordinary);
+	EXPECT_NEAR(250.0, ordinary.max_error, 1.0e-9);
+	auto const tiny = MeasurePerspectiveResidual(source, target, {.scale_x = 1.0e-200, .scale_y = 1.0e-200});
+	ASSERT_TRUE(tiny);
+	EXPECT_NEAR(250.0, tiny.max_error / 1.0e-200, 1.0e-9);
+}
+
 TEST(perspective_tag_solver, a_dragged_corner_under_fax_frz_only_settles_for_the_nearest_affine) {
 	auto source = BaseInput();
 	auto affine_state = source.state;

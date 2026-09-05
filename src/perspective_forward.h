@@ -130,5 +130,8 @@ struct ForwardResult {
 
 [[nodiscard]] char const* DescribeForwardError(ForwardError error);
 [[nodiscard]] ForwardResult ForwardQuad(ForwardInput const& input);
-
+// Projects an override state while reusing the immutable resolutions and
+// bounds in input. Solver trial states must not copy residual_samples.
+[[nodiscard]] ForwardResult ForwardQuad(
+	ForwardInput const& input, EvaluatedTransformState const& state);
 }

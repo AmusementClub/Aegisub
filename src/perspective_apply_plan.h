@@ -79,7 +79,6 @@ struct PerspectiveSourceFingerprint {
 struct PerspectiveSourceSnapshot {
 	PerspectiveSourceFingerprint fingerprint;
 	EffectiveAssState state;
-	BaseBounds bounds;
 	ForwardInput forward_input;
 	// The current subtitle transform is only an optional editing aid. Capture
 	// and Apply remain available when it cannot be projected.

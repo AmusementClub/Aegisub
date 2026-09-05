@@ -201,7 +201,7 @@ TEST(perspective_apply_plan, ordinary_text_capture_and_apply_round_trip) {
 		fixture.file, *fixture.line, fixture.context, FixedTextExtents);
 	ASSERT_TRUE(capture) << DescribePerspectivePlanError(capture.error);
 	ASSERT_TRUE(capture.source->current_quad);
-	EXPECT_EQ(BoundsKind::Text, capture.source->bounds.kind);
+	EXPECT_EQ(BoundsKind::Text, capture.source->forward_input.bounds.kind);
 	Quad const target {{{240.0, 160.0}, {400.0, 160.0},
 		{400.0, 224.0}, {240.0, 224.0}}};
 	PerspectiveQuadEditState state;
@@ -1028,7 +1028,7 @@ TEST(perspective_apply_plan, capture_and_apply_do_not_require_a_current_quad) {
 	ASSERT_TRUE(capture) << DescribePerspectivePlanError(capture.error);
 	ASSERT_FALSE(capture.source->current_quad);
 	EXPECT_EQ(AssApplyBlocker::None, capture.source->apply_blocker);
-	EXPECT_EQ(BoundsKind::Text, capture.source->bounds.kind);
+	EXPECT_EQ(BoundsKind::Text, capture.source->forward_input.bounds.kind);
 	EXPECT_EQ(ForwardError::DegenerateScale,
 		ForwardQuad(capture.source->forward_input).error);
 

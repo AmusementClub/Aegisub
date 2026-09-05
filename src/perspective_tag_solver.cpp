@@ -25,6 +25,7 @@
 #include <cmath>
 #include <limits>
 #include <numbers>
+#include <span>
 #include <string_view>
 #include <system_error>
 #include <tuple>
@@ -213,27 +214,64 @@ std::vector<Vec2> ResidualSamples(
 	return samples;
 }
 
-std::optional<double> MaxResidual(
-	ForwardResult const& candidate,
-	Homography const& target,
-	BaseBounds const& bounds,
-	EvaluatedTransformState const& source,
-	OutputCoordinateMapping mapping) {
-	double maximum = 0.0;
-	for (auto const sample : ResidualSamples(bounds, source)) {
-		auto const actual = candidate.transform.Map(sample);
-		auto const expected = target.Map(sample);
-		if (!actual || !expected)
-			return std::nullopt;
-		double const dx = (actual->x - expected->x) * mapping.scale_x;
-		double const dy = (actual->y - expected->y) * mapping.scale_y;
-		double const residual = std::hypot(dx, dy);
-		if (!std::isfinite(residual))
-			return std::nullopt;
-		maximum = std::max(maximum, residual);
+class ResidualReference {
+	std::span<Vec2 const> samples;
+	OutputCoordinateMapping mapping;
+	std::vector<Vec2> projected;
+	std::optional<Matrix3> matrix;
+
+	public:
+	ResidualReference(std::span<Vec2 const> samples, OutputCoordinateMapping mapping)
+		: samples(samples), mapping(mapping), projected(samples.size()) {
 	}
-	return maximum;
-}
+
+	bool Reset(Homography const& target) {
+		if (matrix && matrix->Values() == target.Matrix().Values())
+			return true;
+		matrix.reset();
+		for (std::size_t index = 0; index < samples.size(); ++index) {
+			auto const point = target.Map(samples[index]);
+			if (!point)
+				return false;
+			projected[index] = *point;
+		}
+		matrix = target.Matrix();
+		return true;
+	}
+
+	// Over-budget trials still validate every projection, but need no further
+	// distances. Final errors keep the full scan and subnormal-scale precision.
+	[[nodiscard]] std::optional<double> Measure(
+		ForwardResult const& candidate,
+		double stop_after = std::numeric_limits<double>::infinity()) const {
+		double maximum_squared = 0.0;
+		double subnormal_maximum = 0.0;
+		bool exceeds_budget = false;
+		Vec2 worst;
+		double const stop_squared = stop_after * stop_after;
+		for (std::size_t index = 0; index < samples.size(); ++index) {
+			auto const actual = candidate.transform.Map(samples[index]);
+			if (!actual)
+				return std::nullopt;
+			if (exceeds_budget)
+				continue;
+			double const dx = (actual->x - projected[index].x) * mapping.scale_x;
+			double const dy = (actual->y - projected[index].y) * mapping.scale_y;
+			double const squared = dx * dx + dy * dy;
+			if (!std::isfinite(squared))
+				return std::nullopt;
+			if (squared < std::numeric_limits<double>::min() && (dx != 0.0 || dy != 0.0))
+				subnormal_maximum = std::max(subnormal_maximum, std::hypot(dx, dy));
+			if (squared > maximum_squared) {
+				maximum_squared = squared;
+				worst = {.x = dx, .y = dy};
+			}
+			exceeds_budget = maximum_squared > stop_squared
+				&& std::hypot(worst.x, worst.y) > stop_after;
+		}
+		return std::max(subnormal_maximum, std::hypot(worst.x, worst.y));
+	}
+};
 
 bool IsValidOutputMapping(OutputCoordinateMapping mapping) {
 	return std::isfinite(mapping.scale_x)
@@ -253,8 +291,7 @@ bool HasValidResidualSamples(BaseBounds const& bounds) {
 		});
 }
 
-ForwardInput CanonicalizeCurrentGeometry(ForwardInput input) {
-	auto& state = input.state;
+EvaluatedTransformState CanonicalizeCurrentGeometry(EvaluatedTransformState state) {
 	state.position = {};
 	state.origin.reset();
 	state.scale_x = 100.0;
@@ -264,21 +301,18 @@ ForwardInput CanonicalizeCurrentGeometry(ForwardInput input) {
 	state.rotation_x = 0.0;
 	state.rotation_y = 0.0;
 	state.rotation_z = 0.0;
-	return input;
+	return state;
 }
 
 std::optional<double> StateResidual(
 	SolverInput const& input,
-	Homography const& target,
-	EvaluatedTransformState const& state) {
-	auto forward_input = input.source;
-	forward_input.state = state;
-	auto const forward = ForwardQuad(forward_input);
+	ResidualReference const& reference,
+	EvaluatedTransformState const& state,
+	double stop_after = std::numeric_limits<double>::infinity()) {
+	auto const forward = ForwardQuad(input.source, state);
 	if (!forward)
 		return std::nullopt;
-	return MaxResidual(
-		forward, target, input.source.bounds, input.source.state,
-		input.output_mapping);
+	return reference.Measure(forward, stop_after);
 }
 
 SerializedTransformState Serialize(
@@ -392,34 +426,47 @@ bool BetterScore(CandidateScore const& left, CandidateScore const& right) {
 			right.residual);
 }
 
-template<typename Apply>
+template <typename Apply>
 void CompactField(
 	EvaluatedTransformState& state,
 	EvaluatedTransformState const& raw,
 	int maximum_decimals,
 	Apply&& apply,
 	SolverInput const& input,
-	Homography const& reference) {
+	ResidualReference const& reference) {
 	for (int decimals = 0; decimals <= maximum_decimals; ++decimals) {
 		auto trial = state;
 		apply(trial, raw, decimals);
-		auto const residual = StateResidual(input, reference, trial);
+		auto const residual = StateResidual(input, reference, trial, input.max_error);
 		if (residual && *residual <= input.max_error) {
-			state = std::move(trial);
+			state = trial;
 			return;
 		}
 	}
 }
 
-// Rounding is judged against the model's own quad, not the drawn one. A model
-// that only comes close to the drawn quad still deserves the shortest digits
-// that reproduce *it*; measuring against the drawn quad instead would spend the
-// whole budget on a shortfall the digits cannot fix and force full precision.
-struct QuantizationReference {
-	Homography transform;
-	double snap_error = 0.0;
-	bool snapped = false;
-};
+void CompactScalar(
+	EvaluatedTransformState& state,
+	EvaluatedTransformState const& raw,
+	double EvaluatedTransformState::*field,
+	int maximum_decimals,
+	SolverInput const& input,
+	ResidualReference const& reference) {
+	for (int decimals = 0; decimals <= maximum_decimals; ++decimals) {
+		double const value = Quantize(raw.*field, decimals);
+		// The current state already passed the budget; unchanged fields need
+		// no additional projection or residual scan.
+		if (value == state.*field)
+			return;
+		auto trial = state;
+		trial.*field = value;
+		auto const residual = StateResidual(input, reference, trial, input.max_error);
+		if (residual && *residual <= input.max_error) {
+			state = trial;
+			return;
+		}
+	}
+}
 
 int SnapBucket(double snap_error, double unit) {
 	if (!(unit > 0.0) || !std::isfinite(snap_error) || snap_error <= 0.0)
@@ -429,30 +476,6 @@ int SnapBucket(double snap_error, double unit) {
 		return std::numeric_limits<int>::max();
 	return static_cast<int>(
 		std::min<double>(bucket, std::numeric_limits<int>::max()));
-}
-
-std::optional<QuantizationReference> ResolveQuantizationReference(
-	SolverInput const& input,
-	Homography const& target,
-	EvaluatedTransformState const& raw) {
-	auto forward_input = input.source;
-	forward_input.state = raw;
-	auto const forward = ForwardQuad(forward_input);
-	if (!forward)
-		return std::nullopt;
-	auto const snap_error = MaxResidual(
-		forward, target, input.source.bounds, input.source.state,
-		input.output_mapping);
-	if (!snap_error)
-		return std::nullopt;
-	// Every measurable model is a candidate now: the best one wins by score
-	// and its shortfall is reported and drawn, not used to refuse the drag.
-	if (*snap_error <= input.max_error) {
-		return QuantizationReference{
-			.transform = target, .snap_error = *snap_error, .snapped = false};
-	}
-	return QuantizationReference{
-		.transform = forward.transform, .snap_error = *snap_error, .snapped = true};
 }
 
 // Where a quantization attempt stopped. The distinction is what the UI
@@ -495,19 +518,27 @@ QuantizeOutcome RejectedQuantization(double rounding_error, double budget) {
 
 QuantizeOutcome QuantizeCandidate(
 	SolverInput const& input,
-	Homography const& target,
+	ResidualReference const& target,
 	CandidateFamily family,
-	EvaluatedTransformState const& raw) {
-	auto const fit = ResolveQuantizationReference(input, target, raw);
-	if (!fit)
+	EvaluatedTransformState const& raw,
+	ResidualReference& model_reference) {
+	auto const forward = ForwardQuad(input.source, raw);
+	if (!forward)
 		return StageRejection(QuantizeStage::ModelRejected);
-	auto const& reference = *fit;
+	auto const snap_error = target.Measure(forward);
+	if (!snap_error)
+		return StageRejection(QuantizeStage::ModelRejected);
+	bool const snapped = *snap_error > input.max_error;
 	// Doing nothing is only an answer when nothing was needed. NoOp skips
 	// digit rounding entirely, so without this gate it outlives every real
 	// family whenever coarse decimals kill them, and "wins" with the line
 	// left exactly where it was, however far that is from the target.
-	if (family == CandidateFamily::NoOp && reference.snapped)
+	if (family == CandidateFamily::NoOp && snapped)
 		return StageRejection(QuantizeStage::ModelRejected);
+	// A snapped model's digits are measured against its own geometry.
+	if (snapped && !model_reference.Reset(forward.transform))
+		return StageRejection(QuantizeStage::ModelRejected);
+	auto const& reference = snapped ? model_reference : target;
 	auto state = raw;
 	int const maximum_decimals = ClampPerspectiveDecimalPlaces(input.maximum_decimals);
 	int const position_decimals = FieldDecimals(maximum_decimals, kPositionDecimals);
@@ -545,48 +576,48 @@ QuantizeOutcome QuantizeCandidate(
 		}
 		state.rotation_z = Quantize(raw.rotation_z, rotation_decimals);
 	}
-	auto residual = StateResidual(input, reference.transform, state);
+	auto residual = StateResidual(input, reference, state);
 	if (!residual)
 		return StageRejection(QuantizeStage::QuantizationRejected);
 	if (*residual > input.max_error)
 		return RejectedQuantization(*residual, input.max_error);
 
 	if (family != CandidateFamily::NoOp) {
-		CompactField(state, raw, position_decimals, [](auto& value, auto const& original, int decimals) { value.position = {Quantize(original.position.x, decimals), Quantize(original.position.y, decimals)}; }, input, reference.transform);
+		CompactField(state, raw, position_decimals, [](auto& value, auto const& original, int decimals) { value.position = {Quantize(original.position.x, decimals), Quantize(original.position.y, decimals)}; }, input, reference);
 		if (raw.origin && !restricted) {
-			CompactField(state, raw, position_decimals, [](auto& value, auto const& original, int decimals) { value.origin = Vec2{Quantize(original.origin->x, decimals), Quantize(original.origin->y, decimals)}; }, input, reference.transform);
+			CompactField(state, raw, position_decimals, [](auto& value, auto const& original, int decimals) { value.origin = Vec2{Quantize(original.origin->x, decimals), Quantize(original.origin->y, decimals)}; }, input, reference);
 		}
 		if (input.scale_policy == PerspectiveScalePolicy::Fit) {
-			CompactField(state, raw, scale_decimals, [](auto& value, auto const& original, int decimals) { value.scale_x = Quantize(original.scale_x, decimals); }, input, reference.transform);
-			CompactField(state, raw, scale_decimals, [](auto& value, auto const& original, int decimals) { value.scale_y = Quantize(original.scale_y, decimals); }, input, reference.transform);
+			CompactScalar(state, raw, &EvaluatedTransformState::scale_x, scale_decimals, input, reference);
+			CompactScalar(state, raw, &EvaluatedTransformState::scale_y, scale_decimals, input, reference);
 		}
 		if (!multiline)
-			CompactField(state, raw, shear_decimals, [](auto& value, auto const& original, int decimals) { value.shear_x = Quantize(original.shear_x, decimals); }, input, reference.transform);
+			CompactScalar(state, raw, &EvaluatedTransformState::shear_x, shear_decimals, input, reference);
 		if (!restricted && !multiline)
-			CompactField(state, raw, shear_decimals, [](auto& value, auto const& original, int decimals) { value.shear_y = Quantize(original.shear_y, decimals); }, input, reference.transform);
+			CompactScalar(state, raw, &EvaluatedTransformState::shear_y, shear_decimals, input, reference);
 		if (!restricted) {
-			CompactField(state, raw, rotation_decimals, [](auto& value, auto const& original, int decimals) { value.rotation_x = Quantize(original.rotation_x, decimals); }, input, reference.transform);
-			CompactField(state, raw, rotation_decimals, [](auto& value, auto const& original, int decimals) { value.rotation_y = Quantize(original.rotation_y, decimals); }, input, reference.transform);
+			CompactScalar(state, raw, &EvaluatedTransformState::rotation_x, rotation_decimals, input, reference);
+			CompactScalar(state, raw, &EvaluatedTransformState::rotation_y, rotation_decimals, input, reference);
 		}
-		CompactField(state, raw, rotation_decimals, [](auto& value, auto const& original, int decimals) { value.rotation_z = Quantize(original.rotation_z, decimals); }, input, reference.transform);
+		CompactScalar(state, raw, &EvaluatedTransformState::rotation_z, rotation_decimals, input, reference);
 	}
 
-	auto const quantization_error = StateResidual(input, reference.transform, state);
+	auto const quantization_error = StateResidual(input, reference, state);
 	if (!quantization_error)
 		return StageRejection(QuantizeStage::QuantizationRejected);
 	if (*quantization_error > input.max_error)
 		return RejectedQuantization(*quantization_error, input.max_error);
 	// Total is measured against the drawn quad, so it stays comparable with the
 	// value the staged verification recomputes after the tags are written.
-	auto const total_error = StateResidual(input, target, state);
+	auto const total_error = snapped ? StateResidual(input, target, state) : quantization_error;
 	if (!total_error)
 		return StageRejection(QuantizeStage::QuantizationRejected);
 	auto serialized = Serialize(state, maximum_decimals);
 	auto score = ScoreCandidate(
 		input.source.state, state, serialized, family, *total_error);
-	score.snapped = reference.snapped ? 1 : 0;
-	score.snap_bucket = reference.snapped
-							? SnapBucket(reference.snap_error, input.max_error)
+	score.snapped = snapped ? 1 : 0;
+	score.snap_bucket = snapped
+							? SnapBucket(*snap_error, input.max_error)
 							: 0;
 	SolverCandidate candidate{
 		.family = family,
@@ -594,7 +625,7 @@ QuantizeOutcome QuantizeCandidate(
 		.serialized = serialized,
 		.score = score,
 		.max_error = *total_error,
-		.snap_error = reference.snap_error,
+		.snap_error = *snap_error,
 		.quantization_error = *quantization_error,
 	};
 	return {std::move(candidate), QuantizeStage::Succeeded};
@@ -879,17 +910,18 @@ std::optional<EvaluatedTransformState> SimilarityCandidate(
 
 std::optional<EvaluatedTransformState> ExplicitOriginCandidate(
 	SolverInput const& input,
+	Quad const& target,
 	ForwardResult const& projection_context) {
-	auto const center = QuadCenter(input.target);
+	auto const center = QuadCenter(target);
 	if (!center)
 		return std::nullopt;
-	auto q0 = input.target[0] - *center;
-	auto q1 = input.target[1] - *center;
-	auto q2 = input.target[2] - *center;
-	auto q3 = input.target[3] - *center;
-	Vec2 const diagonal = input.target[2] - input.target[0];
-	Vec2 const side2 = input.target[1] - input.target[2];
-	Vec2 const side3 = input.target[3] - input.target[2];
+	auto q0 = target[0] - *center;
+	auto q1 = target[1] - *center;
+	auto q2 = target[2] - *center;
+	auto q3 = target[3] - *center;
+	Vec2 const diagonal = target[2] - target[0];
+	Vec2 const side2 = target[1] - target[2];
+	Vec2 const side3 = target[3] - target[2];
 	double z1 = 0.0;
 	double z3 = 0.0;
 	if (!Solve2x2(side2.x, side3.x, side2.y, side3.y,
@@ -1064,6 +1096,7 @@ bool IsFixedImplicitParameter(std::size_t index, ImplicitModel model) {
 
 bool EvaluateParameters(
 	SolverInput const& input,
+	Quad const& target,
 	Parameters const& parameters,
 	ImplicitModel model,
 	ResidualVector& residual,
@@ -1071,17 +1104,15 @@ bool EvaluateParameters(
 	auto const state = StateFromParameters(input.source.state, parameters, model);
 	if (!state)
 		return false;
-	auto forward_input = input.source;
-	forward_input.state = *state;
-	auto const forward = ForwardQuad(forward_input);
+	auto const forward = ForwardQuad(input.source, *state);
 	if (!forward)
 		return false;
 	cost = 0.0;
-	for (std::size_t index = 0; index < input.target.size(); ++index) {
+	for (std::size_t index = 0; index < target.size(); ++index) {
 		residual[index * 2] =
-			(forward.quad[index].x - input.target[index].x) * input.output_mapping.scale_x;
+			(forward.quad[index].x - target[index].x) * input.output_mapping.scale_x;
 		residual[index * 2 + 1] =
-			(forward.quad[index].y - input.target[index].y) * input.output_mapping.scale_y;
+			(forward.quad[index].y - target[index].y) * input.output_mapping.scale_y;
 		cost += residual[index * 2] * residual[index * 2]
 			+ residual[index * 2 + 1] * residual[index * 2 + 1];
 	}
@@ -1130,6 +1161,7 @@ bool SolveLinear(LinearMatrix matrix, Parameters right, Parameters& solution) {
 
 std::optional<EvaluatedTransformState> OptimizeImplicitOrigin(
 	SolverInput const& input,
+	Quad const& target,
 	EvaluatedTransformState const& initial,
 	ImplicitModel model) {
 	Parameters parameters = ParametersFromState(initial);
@@ -1142,7 +1174,7 @@ std::optional<EvaluatedTransformState> OptimizeImplicitOrigin(
 	}
 	ResidualVector residual {};
 	double cost = 0.0;
-	if (!EvaluateParameters(input, parameters, model, residual, cost))
+	if (!EvaluateParameters(input, target, parameters, model, residual, cost))
 		return std::nullopt;
 	double damping = 1.0e-3;
 	for (int iteration = 0; iteration < 80; ++iteration) {
@@ -1160,8 +1192,8 @@ std::optional<EvaluatedTransformState> OptimizeImplicitOrigin(
 			ResidualVector minus_residual {};
 			double plus_cost = 0.0;
 			double minus_cost = 0.0;
-			bool const has_plus = EvaluateParameters(input, plus, model, plus_residual, plus_cost);
-			bool const has_minus = EvaluateParameters(input, minus, model, minus_residual, minus_cost);
+			bool const has_plus = EvaluateParameters(input, target, plus, model, plus_residual, plus_cost);
+			bool const has_minus = EvaluateParameters(input, target, minus, model, minus_residual, minus_cost);
 			if (!has_plus && !has_minus)
 				return std::nullopt;
 			for (std::size_t row = 0; row < CornerResidualCount; ++row) {
@@ -1226,15 +1258,15 @@ std::optional<EvaluatedTransformState> OptimizeImplicitOrigin(
 			trial[8] = std::remainder(trial[8], 2.0 * Pi);
 		ResidualVector trial_residual {};
 		double trial_cost = 0.0;
-		if (EvaluateParameters(input, trial, model, trial_residual, trial_cost)
-			&& trial_cost < cost) {
+		if (EvaluateParameters(input, target, trial, model, trial_residual, trial_cost) && trial_cost < cost) {
 			parameters = trial;
 			residual = trial_residual;
 			cost = trial_cost;
 			damping = std::max(1.0e-12, damping / 3.0);
 			if (delta_norm <= 1.0e-10 || cost <= 1.0e-18)
 				break;
-		} else {
+		}
+		else {
 			damping = std::min(1.0e12, damping * 10.0);
 		}
 	}
@@ -1450,9 +1482,11 @@ ResidualResult MeasurePerspectiveResidual(
 	auto const target_transform = MakeHomography(candidate.bounds.rectangle, target);
 	if (!target_transform)
 		return {ResidualError::InvalidTarget, target_transform.error};
-	auto const residual = MaxResidual(
-		forward, target_transform.value, candidate.bounds, candidate.state,
-		output_mapping);
+	auto const samples = ResidualSamples(candidate.bounds, candidate.state);
+	ResidualReference reference(samples, output_mapping);
+	if (!reference.Reset(target_transform.value))
+		return {.error = ResidualError::ProjectionDomain};
+	auto const residual = reference.Measure(forward);
 	if (!residual)
 		return {ResidualError::ProjectionDomain};
 	return {ResidualError::None, GeometryError::None, ForwardError::None, *residual};
@@ -1473,7 +1507,8 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 	auto const current_forward = ForwardQuad(request.source);
 	auto projection_context = current_forward;
 	if (!projection_context) {
-		projection_context = ForwardQuad(CanonicalizeCurrentGeometry(request.source));
+		projection_context = ForwardQuad(
+			request.source, CanonicalizeCurrentGeometry(request.source.state));
 		if (!projection_context)
 			return {SolverError::InvalidSource, GeometryError::None,
 				projection_context.error};
@@ -1485,6 +1520,12 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 		return {SolverError::InvalidOutputMapping};
 	if (!std::isfinite(request.max_error) || request.max_error <= 0.0)
 		return {.error = SolverError::InvalidErrorBudget};
+	// Residual samples are immutable for one solve. Build them once instead of
+	// reallocating custom drawing samples for every candidate trial.
+	auto const residual_samples = ResidualSamples(
+		request.source.bounds, request.source.state);
+	ResidualReference target_reference(residual_samples, request.output_mapping);
+	ResidualReference model_reference(residual_samples, request.output_mapping);
 
 	// Under Preserve the drawn size carries no information -- turning off Fit
 	// Text says "do not change my font size", not "my hand-drawn box is already
@@ -1567,10 +1608,8 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 							   Quad const& target) {
 		// The refit optimizer must aim at the same quad the finished candidate
 		// is judged against, or the fit and the acceptance check disagree.
-		SolverInput family_input = request;
-		family_input.target = target;
-		if (auto const candidate = OptimizeImplicitOrigin(family_input, seed, model))
-			raw_candidates.push_back({family, *candidate, family_input.target});
+		if (auto const candidate = OptimizeImplicitOrigin(request, target, seed, model))
+			raw_candidates.push_back({.family = family, .state = *candidate, .effective_target = target});
 	};
 
 	if (auto const affine = FitAffine(
@@ -1704,8 +1743,6 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 		auto const generate_projective = [&](Quad const& target,
 											 Homography const& target_transform,
 											 bool size_blind) {
-			SolverInput projective_input = request;
-			projective_input.target = target;
 			// The drawn quad rescaled to the area a fitted state actually
 			// produces, or nullopt when size-blindness is off or the state
 			// cannot be probed. This is the next pass's aim: the size the
@@ -1714,9 +1751,7 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 				-> std::optional<Quad> {
 				if (!size_blind)
 					return std::nullopt;
-				auto probe = request.source;
-				probe.state = state;
-				auto const probed = ForwardQuad(probe);
+				auto const probed = ForwardQuad(request.source, state);
 				if (!probed)
 					return std::nullopt;
 				double const drawn_area = std::abs(SignedArea(drawn_target));
@@ -1768,10 +1803,8 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 							.locked_rotation_z = request.locked_rotation_z};
 						run_family(CandidateFamily::ProjectiveImplicitLockedDoubleShear,
 								   [&](Quad const& aim) {
-									   SolverInput pass_input = request;
-									   pass_input.target = aim;
 									   return OptimizeImplicitOrigin(
-										   pass_input, *initial, model);
+										   request, aim, *initial, model);
 								   });
 					}
 				}
@@ -1790,10 +1823,8 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 							run_family(use_fay ? CandidateFamily::ProjectiveImplicitFay
 											   : CandidateFamily::ProjectiveImplicitFax,
 									   [&](Quad const& aim) {
-										   SolverInput pass_input = request;
-										   pass_input.target = aim;
 										   return OptimizeImplicitOrigin(
-											   pass_input, *initial, model);
+											   request, aim, *initial, model);
 									   });
 						}
 					}
@@ -1805,9 +1836,7 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 			if (!multiline) {
 				run_family(CandidateFamily::ProjectiveExplicitOrigin,
 						   [&](Quad const& aim) {
-							   SolverInput pass_input = request;
-							   pass_input.target = aim;
-							   return ExplicitOriginCandidate(pass_input, projection_context);
+							   return ExplicitOriginCandidate(request, aim, projection_context);
 						   });
 			}
 		};
@@ -1896,9 +1925,7 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 		std::pair<std::size_t, std::size_t> held {};
 		if (request.edge_anchor != PerspectiveEdgeAnchor::None) {
 			held = EdgeAnchorEndpoints(request.edge_anchor);
-			auto anchor_input = request.source;
-			anchor_input.state = state;
-			auto const raw_landed = ForwardQuad(anchor_input);
+			auto const raw_landed = ForwardQuad(request.source, state);
 			if (raw_landed
 				&& HeldEdgeError(
 					   raw_landed.quad, request.target, held,
@@ -1908,8 +1935,12 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 				continue;
 			}
 		}
+		if (!target_reference.Reset(judging_transform.value)) {
+			++model_stage_deaths;
+			continue;
+		}
 		auto outcome = QuantizeCandidate(
-			request, judging_transform.value, raw.family, state);
+			request, target_reference, raw.family, state, model_reference);
 		if (!outcome.candidate) {
 			if (outcome.stage == QuantizeStage::QuantizationRejected) {
 				++quantization_stage_deaths;
@@ -1920,9 +1951,7 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 			continue;
 		}
 		if (request.edge_anchor != PerspectiveEdgeAnchor::None) {
-			auto anchor_input = request.source;
-			anchor_input.state = outcome.candidate->state;
-			auto const landed = ForwardQuad(anchor_input);
+			auto const landed = ForwardQuad(request.source, outcome.candidate->state);
 			if (!landed) {
 				++model_stage_deaths;
 				continue;

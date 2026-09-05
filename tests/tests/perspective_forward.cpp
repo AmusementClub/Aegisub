@@ -40,6 +40,31 @@ TEST(perspective_forward, identity_forward_honors_all_nine_alignments) {
 	}
 }
 
+TEST(perspective_forward, state_override_matches_a_rebound_input_without_mutating_source) {
+	auto input = IdentityInput();
+	auto trial = input.state;
+	trial.position = {.x = 145.0, .y = 175.0};
+	trial.rotation_z = 23.0;
+	trial.rotation_x = 15.0;
+	trial.rotation_y = -12.0;
+	for (bool const explicit_origin : {false, true}) {
+		SCOPED_TRACE(explicit_origin);
+		trial.origin = explicit_origin ? std::optional<Vec2>(Vec2{.x = 170.0, .y = 190.0}) : std::nullopt;
+		auto rebound = input;
+		rebound.state = trial;
+		auto const expected = ForwardQuad(rebound);
+		auto const actual = ForwardQuad(input, trial);
+		ASSERT_TRUE(expected) << DescribeForwardError(expected.error);
+		ASSERT_TRUE(actual) << DescribeForwardError(actual.error);
+		for (std::size_t index = 0; index < expected.quad.size(); ++index)
+			ExpectVecNear(expected.quad[index], actual.quad[index]);
+	}
+	EXPECT_DOUBLE_EQ(100.0, input.state.position.x);
+	EXPECT_DOUBLE_EQ(200.0, input.state.position.y);
+	trial.scale_x = 0.0;
+	EXPECT_EQ(ForwardError::DegenerateScale, ForwardQuad(input, trial).error);
+}
+
 TEST(perspective_forward, drawing_bounds_are_transformed_from_their_real_origin) {
 	auto input = IdentityInput();
 	input.bounds = {{10.0, 20.0, 110.0, 70.0}, BoundsKind::Drawing};

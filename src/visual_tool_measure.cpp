@@ -807,9 +807,8 @@ void VisualToolMeasure::UpdatePerspectivePreview() {
 	// not the candidate snapped: under Preserve the candidate's own target is
 	// area-normalized, so a "not snapped" result can still sit far from the
 	// drawn quad, and the drawn preview is the only honest report of that.
-	auto forward_input = perspective_source->forward_input;
-	forward_input.state = solved.candidate->state;
-	auto const forward = perspective::ForwardQuad(forward_input);
+	auto const forward = perspective::ForwardQuad(
+		perspective_source->forward_input, solved.candidate->state);
 	if (!forward)
 		return;
 	perspective_preview = forward.quad;

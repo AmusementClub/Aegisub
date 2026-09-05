@@ -413,7 +413,7 @@ PerspectiveCaptureResult CapturePerspectiveSource(
 		result.apply_blocker = state.apply_blocker;
 		return result;
 	}
-	auto const bounds = EvaluateAssBaseBounds({&line, &state.value, text_extents});
+	auto bounds = EvaluateAssBaseBounds({.line = &line, .state = &state.value, .text_extents = text_extents});
 	if (!bounds) {
 		PerspectiveCaptureResult result;
 		result.error = PerspectivePlanError::BoundsEvaluationFailed;
@@ -427,18 +427,17 @@ PerspectiveCaptureResult CapturePerspectiveSource(
 	input.play_resolution = context.play_resolution;
 	input.layout_resolution = context.layout_resolution;
 	input.video_storage_resolution = context.video_storage_resolution;
-	input.bounds = bounds.value;
+	input.bounds = std::move(bounds.value);
 	input.state = state.value.transform;
 	auto const forward = ForwardQuad(input);
 
 	PerspectiveCaptureResult result;
-	result.source = PerspectiveSourceSnapshot {
-		FingerprintSource(file, line, context),
-		state.value,
-		bounds.value,
-		input,
-		forward ? std::optional<Quad>(forward.quad) : std::nullopt,
-		state.apply_blocker,
+	result.source = PerspectiveSourceSnapshot{
+		.fingerprint = FingerprintSource(file, line, context),
+		.state = state.value,
+		.forward_input = std::move(input),
+		.current_quad = forward ? std::optional<Quad>(forward.quad) : std::nullopt,
+		.apply_blocker = state.apply_blocker,
 	};
 	result.apply_blocker = state.apply_blocker;
 	return result;
@@ -583,7 +582,7 @@ PerspectivePlanResult BuildPerspectiveMutationPlan(
 		result.bounds_font = staged_bounds.font_name;
 		return result;
 	}
-	if (!SameBounds(staged_bounds.value, captured.source->bounds))
+	if (!SameBounds(staged_bounds.value, captured.source->forward_input.bounds))
 		return PlanFailure(PerspectivePlanError::StagedBoundsMismatch);
 	ForwardInput staged_input;
 	staged_input.play_resolution = current_context.play_resolution;

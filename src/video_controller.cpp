@@ -111,15 +111,14 @@ void VideoController::ResetPlaybackState() {
 	playback_mode = PlaybackMode::None;
 	playback_end_ms = 0;
 	playback_uses_audio_authority = false;
-	playback_seek_frame_pending = -1;
 	playback_start_pending = false;
 	playback_start_frame = -1;
 	playback_start_wait_notice_shown = false;
 }
 
 void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {
-	Stop();
 	paused_prefetch_timer->Stop();
+	StopPlayback(true, false);
 	ResetVisualSubtitleInteraction();
 	provider = new_provider;
 	presented_frame_n = -1;
@@ -518,7 +517,6 @@ void VideoController::NavigateToKeyframe(std::vector<int> const& keyframes, int 
 
 void VideoController::JumpToFrame(int n) {
 	if (!provider) return;
-	bool const resume_pending_for_interactive_seek = interactive_seek_preview_active && interactive_seek_preview_resume_playback;
 	ClearInspectionStepState();
 	ClearInteractiveSeekPreviewState();
 
@@ -528,7 +526,6 @@ void VideoController::JumpToFrame(int n) {
 
 	frame_n = mid(0, n, provider->GetFrameCount() - 1);
 	ClearLatePreviewFrameAcceptance();
-	playback_seek_frame_pending = (was_playing || resume_pending_for_interactive_seek) ? frame_n : -1;
 	perf_trace::TraceSeek(frame_n, was_playing);
 	bool const delivered_from_cache = !was_playing && TrySeekAndDeliverRecentRenderPacket(frame_n);
 	if (!delivered_from_cache) {
@@ -588,10 +585,17 @@ void VideoController::PreviewToFrameLatest(int n) {
 	if (was_playing)
 		StopPlayback(!keep_playback_paused_for_preview);
 
-	frame_n = mid(0, n, provider->GetFrameCount() - 1);
+	int const target_frame = mid(0, n, provider->GetFrameCount() - 1);
+	// Audio positions have finer resolution than video frames. Small mouse
+	// movements within one frame must not supersede its pending preview.
+	if (keep_playback_paused_for_preview && target_frame == frame_n)
+		return;
+	frame_n = target_frame;
 	perf_trace::TraceSeek(frame_n, was_playing);
-	RequestFrame(true);
-	Seek(frame_n);
+	if (!TrySeekAndDeliverRecentRenderPacket(frame_n)) {
+		RequestFrame(true);
+		Seek(frame_n);
+	}
 
 	if (was_playing && !keep_playback_paused_for_preview && PreparePlayback(resume_mode, frame_n, resume_end_ms))
 		StartPlaybackTimer();
@@ -601,6 +605,8 @@ void VideoController::BeginInteractiveSeekPreview() {
 	if (!provider || interactive_seek_preview_active)
 		return;
 
+	paused_prefetch_timer->Stop();
+	provider->CancelFramePrefetch();
 	interactive_seek_preview_active = true;
 	interactive_seek_preview_resume_playback = IsPlaying();
 	interactive_seek_preview_resume_mode = playback_mode;
@@ -619,9 +625,19 @@ void VideoController::CommitInteractiveSeekPreviewToTime(int ms, agi::vfr::Time 
 	auto const resume_mode = interactive_seek_preview_resume_mode;
 	int const resume_end_ms = interactive_seek_preview_resume_end_ms;
 
-	JumpToTime(ms, end);
+	int const target_frame = mid(0, FrameAtTime(ms, end), provider->GetFrameCount() - 1);
+	if (interactive_seek_preview_active && target_frame == frame_n) {
+		// Releasing at the preview target commits the request already in flight.
+		// Reissuing it would invalidate its result and make the playback-start
+		// gate wait for a second render of the very same frame.
+		ClearInteractiveSeekPreviewState();
+	}
+	else
+		JumpToFrame(target_frame);
 	if (resume_playback && PreparePlayback(resume_mode, frame_n, resume_end_ms))
 		StartPlaybackTimer();
+	else
+		SchedulePausedFramePrefetch();
 }
 
 void VideoController::CancelInteractiveSeekPreview() {
@@ -635,6 +651,8 @@ void VideoController::CancelInteractiveSeekPreview() {
 
 	if (provider && resume_playback && PreparePlayback(resume_mode, frame_n, resume_end_ms))
 		StartPlaybackTimer();
+	else
+		SchedulePausedFramePrefetch();
 }
 
 void VideoController::JumpToTime(int ms, agi::vfr::Time end) {
@@ -663,6 +681,8 @@ bool VideoController::PreparePlayback(PlaybackMode mode, int start_frame, int ra
 	if (!provider || mode == PlaybackMode::None)
 		return false;
 
+	paused_prefetch_timer->Stop();
+	provider->CancelFramePrefetch();
 	auto core = context->GetCore();
 	start_ms = TimeAtFrame(start_frame);
 	playback_mode = mode;
@@ -702,6 +722,28 @@ void VideoController::StartPlaybackTimer() {
 	playback_timer->Start(10);
 }
 
+void VideoController::PrimeNextPlaybackFrame() {
+	if (playback_start_pending
+		|| !provider
+		|| frame_n != playback_start_frame
+		|| presented_frame_n != playback_start_frame)
+		return;
+
+	int const next_frame = frame_n + 1;
+	if (next_frame >= end_frame || next_frame >= provider->GetFrameCount())
+		return;
+
+	// Warm only the provider's source cache. Advancing frame_n here would make
+	// the next playback tick request the start frame again until the audio clock
+	// crosses its frame boundary.
+	provider->PrefetchFrames(next_frame, 1);
+	perf_trace::ObserveVideoUiDuration(
+		"video_controller.playback_prime",
+		0.0,
+		playback_start_frame,
+		next_frame);
+}
+
 void VideoController::ResolvePendingPlaybackStart() {
 	if (!playback_start_pending)
 		return;
@@ -726,15 +768,15 @@ void VideoController::ResolvePendingPlaybackStart() {
 		"video_controller.playback_start_gate",
 		static_cast<double>(waited_ms),
 		playback_uses_audio_authority ? 1 : 0);
+	PrimeNextPlaybackFrame();
 }
 
 bool VideoController::FrameAlreadyDelivered(int frame) const {
-	if (presented_frame_n == frame)
-		return true;
-	for (auto const& packet : recent_render_packets)
-		if (packet.frame_number == frame)
-			return true;
-	return false;
+	// A recent packet is reusable for a paused seek, but it is not evidence
+	// that a frame requested while playing has reached the display. Treating
+	// the packet cache as delivered starts audio before the seek result arrives;
+	// the late result then moves the controller back to the target frame.
+	return presented_frame_n == frame;
 }
 
 void VideoController::ShowPlaybackStartWaitNotice() {
@@ -755,7 +797,6 @@ void VideoController::StartPlayback(PlaybackMode mode, int range_end_ms) {
 
 	ClearInspectionStepState();
 	ClearInteractiveSeekPreviewState();
-	playback_seek_frame_pending = -1;
 	if (provider)
 		provider->CancelPendingFrameRequests();
 	ClearLatePreviewFrameAcceptance();
@@ -763,7 +804,8 @@ void VideoController::StartPlayback(PlaybackMode mode, int range_end_ms) {
 	if (!PreparePlayback(mode, frame_n, range_end_ms))
 		return;
 
-	RequestFrame();
+	if (playback_start_pending)
+		RequestFrame();
 	StartPlaybackTimer();
 }
 
@@ -790,11 +832,21 @@ void VideoController::PlayLine() {
 	if (!PreparePlayback(PlaybackMode::LineRange, startFrame, curline->End))
 		return;
 
-	JumpToFrame(startFrame);
+	if (playback_start_pending) {
+		JumpToFrame(startFrame);
+	}
+	else {
+		// PreparePlayback resolved the gate from the frame already on screen.
+		// Keep the navigation notification, but do not request that frame again.
+		frame_n = mid(0, startFrame, provider->GetFrameCount() - 1);
+		context->GetCore().ass->Properties.video_position = frame_n;
+		perf_trace::TraceSeek(frame_n, false);
+		Seek(frame_n);
+	}
 	StartPlaybackTimer();
 }
 
-void VideoController::StopPlayback(bool clear_interactive_seek_preview) {
+void VideoController::StopPlayback(bool clear_interactive_seek_preview, bool schedule_paused_prefetch) {
 	ClearInspectionStepState();
 	if (clear_interactive_seek_preview)
 		ClearInteractiveSeekPreviewState();
@@ -809,7 +861,8 @@ void VideoController::StopPlayback(bool clear_interactive_seek_preview) {
 	}
 	HidePlaybackStartWaitNotice();
 	ResetPlaybackState();
-	SchedulePausedFramePrefetch();
+	if (schedule_paused_prefetch)
+		SchedulePausedFramePrefetch();
 }
 
 void VideoController::Stop() {
@@ -823,9 +876,6 @@ bool VideoController::IsPlaying() const {
 void VideoController::OnPlayTimer() {
 	using namespace std::chrono;
 	auto core = context->GetCore();
-	if (playback_seek_frame_pending >= 0)
-		return;
-
 	if (playback_start_pending) {
 		auto const waited = duration_cast<milliseconds>(
 								steady_clock::now() - playback_pending_since)
@@ -865,7 +915,7 @@ void VideoController::OnPlayTimer() {
 }
 
 void VideoController::SchedulePausedFramePrefetch() {
-	if (!provider || IsPlaying())
+	if (!provider || IsPlaying() || playback_start_pending || interactive_seek_preview_active)
 		return;
 
 	paused_prefetch_timer->Stop();
@@ -873,7 +923,7 @@ void VideoController::SchedulePausedFramePrefetch() {
 }
 
 void VideoController::OnPausedPrefetchTimer() {
-	if (!provider || IsPlaying() || playback_start_pending)
+	if (!provider || IsPlaying() || playback_start_pending || interactive_seek_preview_active)
 		return;
 
 	// Only warm ahead of a frame that actually made it to the display, so a
@@ -932,17 +982,23 @@ int VideoController::FrameAtTime(int time, agi::vfr::Time type) const {
 }
 
 void VideoController::HandleVideoError(std::string const& message) {
-	playback_seek_frame_pending = -1;
-	ClearInspectionStepState();
-	ClearInteractiveSeekPreviewState();
+	if (playback_start_pending || IsPlaying())
+		StopPlayback(true, false);
+	else {
+		ClearInspectionStepState();
+		ClearInteractiveSeekPreviewState();
+	}
 	ClearRecentRenderPacketCache();
 	LOG_E("video_controller") << "Failed seeking video. The video file may be corrupt or incomplete. Error: " << message;
 }
 
 void VideoController::HandleSubtitlesError(std::string const& message) {
-	playback_seek_frame_pending = -1;
-	ClearInspectionStepState();
-	ClearInteractiveSeekPreviewState();
+	if (playback_start_pending || IsPlaying())
+		StopPlayback(true, false);
+	else {
+		ClearInspectionStepState();
+		ClearInteractiveSeekPreviewState();
+	}
 	ClearRecentRenderPacketCache();
 	LOG_E("video_controller") << "Failed rendering subtitles. Error: " << message;
 }
@@ -979,8 +1035,10 @@ bool VideoController::TrySeekAndDeliverRecentRenderPacket(int frame) {
 		recent_render_packets.push_front(packet);
 		double const packet_time = packet.time;
 		context->GetCore().ass->Properties.video_position = frame;
-		if (provider)
+		if (provider) {
+			provider->CancelPendingFrameRequests();
 			provider->SetCurrentFrameContext(frame, packet_time);
+		}
 		Seek(frame);
 		DeliverFrameReady(std::move(packet), packet_time);
 		return true;
@@ -999,21 +1057,18 @@ void VideoController::DeliverFrameReady(VideoRenderPacket packet, double time) {
 		context->GetCore().ass->Properties.video_position = frame_n;
 		Seek(frame_n);
 	}
-	if (playback_seek_frame_pending == packet.frame_number)
-		playback_seek_frame_pending = -1;
-	else if (playback_seek_frame_pending >= 0)
-		return;
-
-	if (playback_start_pending && packet.frame_number == playback_start_frame)
-		ResolvePendingPlaybackStart();
-
 	RememberRecentRenderPacket(packet);
 	FrameReady(packet, time);
+	// Audio startup synchronously prepares output buffers and notifies the
+	// spectrum display. Present the ready video before waiting for that work.
+	if (playback_start_pending && packet.frame_number == playback_start_frame)
+		ResolvePendingPlaybackStart();
 }
 
 void VideoController::NotifyFramePresented(int frame_number) {
 	presented_frame_n = frame_number;
 	FramePresented(frame_number);
+	PrimeNextPlaybackFrame();
 	if (inspection_step_in_flight && frame_number == inspection_step_frame) {
 		inspection_step_in_flight = false;
 		inspection_step_frame = -1;

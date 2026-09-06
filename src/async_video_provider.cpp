@@ -933,7 +933,6 @@ void AsyncVideoProvider::LoadSubtitles(
 		subtitle_source_lines = CaptureSubtitleSourceLines(*new_subs);
 		pending_overlay_upload_continuity_invalidation = true;
 		pending_check_updated = false;
-		pending_force_current_frame_render |= options.force_current_frame_render;
 		MergeSubtitleUpdateOptions(pending_subtitle_update_options, options);
 	}
 	ScheduleProcessing();
@@ -991,9 +990,8 @@ void AsyncVideoProvider::UpdateSubtitles(
 			subtitle_source_lines = CaptureSubtitleSourceLines(*new_subs);
 		}
 		pending_overlay_upload_continuity_invalidation = true;
-		if (!has_pending_frame)
+		if (pending_frame_kind != PendingFrameKind::Request)
 			pending_check_updated = true;
-		pending_force_current_frame_render |= options.force_current_frame_render;
 		MergeSubtitleUpdateOptions(pending_subtitle_update_options, options);
 	}
 	ScheduleProcessing();
@@ -1004,8 +1002,7 @@ void AsyncVideoProvider::RequestFrame(int new_frame, double new_time, bool super
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		pending_time = new_time;
 		pending_frame_number = new_frame;
-		has_pending_frame = true;
-		pending_normal_frame_request = true;
+		pending_frame_kind = PendingFrameKind::Request;
 		pending_check_updated = false;
 		if (supersede_in_flight)
 			++request_version;
@@ -1016,11 +1013,10 @@ void AsyncVideoProvider::RequestFrame(int new_frame, double new_time, bool super
 void AsyncVideoProvider::CancelPendingFrameRequests() noexcept {
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
-		has_pending_frame = false;
+		pending_frame_kind = PendingFrameKind::None;
 		pending_frame_number = -1;
 		pending_time = -1.;
 		pending_check_updated = false;
-		pending_normal_frame_request = false;
 		request_version.fetch_add(1, std::memory_order_relaxed);
 	}
 }
@@ -1041,21 +1037,21 @@ void AsyncVideoProvider::PrefetchFrames(int first_frame, int count) noexcept {
 	worker->Async([this] { ProcessPrefetch(); });
 }
 
+void AsyncVideoProvider::CancelFramePrefetch() noexcept {
+	std::scoped_lock lock(pending_mutex);
+	prefetch_next_frame = -1;
+	prefetch_end_frame = -1;
+}
+
 void AsyncVideoProvider::ProcessPrefetch() {
 	int frame = -1;
-	bool more_frames = false;
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
-		bool const stale =
-			prefetch_shutdown || prefetch_request_version != request_version.load(std::memory_order_relaxed) || prefetch_content_version != content_version.load(std::memory_order_relaxed);
-		bool const interactive_work_queued =
-			has_pending_frame || has_pending_current_frame_context || has_pending_color_space || pending_subs || !pending_changed_lines.empty();
-		if (stale || interactive_work_queued || prefetch_next_frame < 0 || prefetch_next_frame >= prefetch_end_frame) {
+		if (!CanContinuePrefetchLocked()) {
 			prefetch_scheduled = false;
 			return;
 		}
 		frame = prefetch_next_frame++;
-		more_frames = prefetch_next_frame < prefetch_end_frame;
 	}
 
 	if (!source_provider->HasFrameCache()) {
@@ -1095,11 +1091,23 @@ void AsyncVideoProvider::ProcessPrefetch() {
 		// drain and runs while the object is still alive.
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		prefetch_scheduled = false;
-		if (more_frames && !prefetch_shutdown) {
+		if (CanContinuePrefetchLocked()) {
 			prefetch_scheduled = true;
 			worker->Async([this] { ProcessPrefetch(); });
 		}
 	}
+}
+
+bool AsyncVideoProvider::CanContinuePrefetchLocked() const noexcept {
+	return !prefetch_shutdown
+		&& prefetch_request_version == request_version.load(std::memory_order_relaxed)
+		&& prefetch_content_version == content_version.load(std::memory_order_relaxed)
+		&& pending_frame_kind == PendingFrameKind::None
+		&& !has_pending_color_space
+		&& !pending_subs
+		&& pending_changed_lines.empty()
+		&& prefetch_next_frame >= 0
+		&& prefetch_next_frame < prefetch_end_frame;
 }
 
 bool AsyncVideoProvider::IsCurrent(VideoRenderDeliveryVersion version) const noexcept {
@@ -1115,9 +1123,11 @@ bool AsyncVideoProvider::IsCurrent(VideoRenderPacket const& packet, int expected
 void AsyncVideoProvider::SetCurrentFrameContext(int current_frame, double current_time) throw() {
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
-		pending_current_frame_number = current_frame;
-		pending_current_time = current_time;
-		has_pending_current_frame_context = true;
+		if (pending_frame_kind != PendingFrameKind::Request) {
+			pending_frame_number = current_frame;
+			pending_time = current_time;
+			pending_frame_kind = PendingFrameKind::CurrentContext;
+		}
 	}
 	ScheduleProcessing();
 }
@@ -1210,8 +1220,7 @@ bool AsyncVideoProvider::ProcessPending() {
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		if (!pending_subs
 			&& pending_changed_lines.empty()
-			&& !has_pending_frame
-			&& !has_pending_current_frame_context
+			&& pending_frame_kind == PendingFrameKind::None
 			&& !has_pending_color_space) {
 			processing_scheduled = false;
 			return false;
@@ -1223,35 +1232,32 @@ bool AsyncVideoProvider::ProcessPending() {
 		pending_overlay_upload_continuity_invalidation = false;
 		work.check_updated = pending_check_updated;
 		pending_check_updated = false;
-		work.force_current_frame_render = pending_force_current_frame_render;
-		pending_force_current_frame_render = false;
 		work.subtitle_update_options = pending_subtitle_update_options;
 		pending_subtitle_update_options = {};
-		bool const normal_frame_request = pending_normal_frame_request;
-		pending_normal_frame_request = false;
-		if (has_pending_frame) {
+		PendingFrameKind const pending_kind = pending_frame_kind;
+		if (pending_kind == PendingFrameKind::Request) {
 			work.has_frame = true;
 			work.frame_number = pending_frame_number;
 			work.time = pending_time;
-			has_pending_frame = false;
-			has_pending_current_frame_context = false;
 		}
-		else if (has_pending_current_frame_context) {
+		else if (pending_kind == PendingFrameKind::CurrentContext) {
 			work.has_current_frame_context = true;
-			work.current_frame_number = pending_current_frame_number;
-			work.current_time = pending_current_time;
+			work.current_frame_number = pending_frame_number;
+			work.current_time = pending_time;
 			if (work.subs || !work.changed_lines.empty()) {
 				work.has_frame = true;
-				work.frame_number = pending_current_frame_number;
-				work.time = pending_current_time;
+				work.frame_number = pending_frame_number;
+				work.time = pending_time;
 			}
-			has_pending_current_frame_context = false;
 		}
 		else if ((work.subs || !work.changed_lines.empty()) && frame_number >= 0) {
 			work.has_frame = true;
 			work.frame_number = frame_number;
 			work.time = time;
 		}
+		pending_frame_kind = PendingFrameKind::None;
+		pending_frame_number = -1;
+		pending_time = -1.;
 		if (has_pending_color_space) {
 			work.has_color_space = true;
 			work.color_space = pending_color_space;
@@ -1261,14 +1267,13 @@ bool AsyncVideoProvider::ProcessPending() {
 		work.delivery_version.provider = provider_version;
 		work.delivery_version.request = request_version.load(std::memory_order_relaxed);
 		work.delivery_version.content = content_version.load(std::memory_order_relaxed);
-		work.delivery_class = normal_frame_request
+		work.delivery_class = pending_kind == PendingFrameKind::Request
 			? VideoRenderDeliveryClass::EveryFrame
 			: work.subtitle_update_options.delivery_class;
-		work.visual_interaction_id = normal_frame_request
+		work.visual_interaction_id = pending_kind == PendingFrameKind::Request
 			? 0
 			: work.subtitle_update_options.visual_interaction_id;
-		work.force_current_frame_render = work.force_current_frame_render
-			|| work.subtitle_update_options.force_current_frame_render;
+		work.force_current_frame_render = work.subtitle_update_options.force_current_frame_render;
 	}
 
 	if (work.has_color_space)

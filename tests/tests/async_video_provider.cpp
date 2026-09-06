@@ -1008,6 +1008,95 @@ TEST(async_video_provider, cancel_pending_frame_requests_drops_in_flight_render)
 	EXPECT_EQ((std::vector<int>{1, 2}), state->requested_frames);
 }
 
+TEST(async_video_provider, cancelling_prefetch_stops_after_running_decode) {
+	auto state = std::make_shared<VideoProviderState>();
+	EventRecorder recorder;
+	AsyncVideoProvider provider(
+		CreateCacheVideoProvider(agi::make_unique<FakeVideoProvider>(state), 1024),
+		agi::make_unique<FakeSubtitlesProvider>(), recorder);
+	ScopedVideoProviderBlock block(state);
+
+	provider.PrefetchFrames(10, 4);
+	ASSERT_TRUE(block.WaitUntilBlocked());
+	provider.CancelFramePrefetch();
+	block.Release();
+	// The running prefetch posts its successor behind this worker barrier.
+	provider.CollectMemoryStats();
+	provider.CollectMemoryStats();
+
+	EXPECT_TRUE(recorder.Snapshot().empty());
+	{
+		std::scoped_lock lock(state->mutex);
+		EXPECT_EQ((std::vector<int>{10}), state->requested_frames);
+	}
+	provider.RequestFrame(10, 1000);
+	ASSERT_TRUE(recorder.WaitForCount(1));
+	EXPECT_EQ(10, recorder.Snapshot().front().frame_number);
+	std::scoped_lock lock(state->mutex);
+	EXPECT_EQ((std::vector<int>{10}), state->requested_frames);
+}
+
+TEST(async_video_provider, cancelling_prefetch_preserves_in_flight_preview_delivery) {
+	auto state = std::make_shared<VideoProviderState>();
+	EventRecorder recorder;
+	AsyncVideoProvider provider(
+		CreateCacheVideoProvider(agi::make_unique<FakeVideoProvider>(state), 1024),
+		agi::make_unique<FakeSubtitlesProvider>(), recorder);
+	ScopedVideoProviderBlock block(state);
+
+	provider.RequestFrame(20, 2000);
+	ASSERT_TRUE(block.WaitUntilBlocked());
+	provider.PrefetchFrames(21, 4);
+	provider.CancelFramePrefetch();
+	block.Release();
+	ASSERT_TRUE(recorder.WaitForCount(1));
+	provider.CollectMemoryStats();
+
+	auto const frames = recorder.Snapshot();
+	ASSERT_EQ(1u, frames.size());
+	EXPECT_EQ(20, frames.front().frame_number);
+	EXPECT_EQ(2000, frames.front().time);
+	std::scoped_lock lock(state->mutex);
+	EXPECT_EQ((std::vector<int>{20}), state->requested_frames);
+}
+
+TEST(async_video_provider, prefetch_does_not_repost_after_interactive_request_arrives) {
+	auto state = std::make_shared<VideoProviderState>();
+	EventRecorder recorder;
+	AsyncVideoProvider provider(
+		CreateCacheVideoProvider(agi::make_unique<FakeVideoProvider>(state), 1024),
+		agi::make_unique<FakeSubtitlesProvider>(), recorder);
+	ScopedVideoProviderBlock block(state);
+
+	provider.PrefetchFrames(10, 4);
+	ASSERT_TRUE(block.WaitUntilBlocked());
+	provider.RequestFrame(20, 2000);
+	block.Release();
+
+	ASSERT_TRUE(recorder.WaitForCount(1));
+	provider.CollectMemoryStats();
+	std::scoped_lock lock(state->mutex);
+	EXPECT_EQ((std::vector<int>{10, 20}), state->requested_frames);
+}
+
+TEST(async_video_provider, prefetch_does_not_repost_after_request_version_changes) {
+	auto state = std::make_shared<VideoProviderState>();
+	EventRecorder recorder;
+	AsyncVideoProvider provider(
+		CreateCacheVideoProvider(agi::make_unique<FakeVideoProvider>(state), 1024),
+		agi::make_unique<FakeSubtitlesProvider>(), recorder);
+	ScopedVideoProviderBlock block(state);
+
+	provider.PrefetchFrames(10, 4);
+	ASSERT_TRUE(block.WaitUntilBlocked());
+	provider.CancelPendingFrameRequests();
+	block.Release();
+
+	provider.CollectMemoryStats();
+	std::scoped_lock lock(state->mutex);
+	EXPECT_EQ((std::vector<int>{10}), state->requested_frames);
+}
+
 TEST(async_video_provider, load_subtitles_invalidates_stale_render_result) {
 	auto state = std::make_shared<VideoProviderState>();
 	state->block_next = true;
@@ -2269,6 +2358,37 @@ TEST(async_video_provider, current_frame_context_does_not_render_without_content
 
 	std::lock_guard<std::mutex> lock(state->mutex);
 	EXPECT_EQ((std::vector<int>{ 2 }), state->requested_frames);
+}
+
+TEST(async_video_provider, cached_seek_context_replaces_cancelled_preview_requests) {
+	auto state = std::make_shared<VideoProviderState>();
+	EventRecorder recorder;
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		agi::make_unique<FakeSubtitlesProvider>(), recorder);
+	auto subtitles = MakeSubtitleFile("before");
+	provider.LoadSubtitles(&subtitles);
+	ScopedVideoProviderBlock block(state);
+	provider.RequestFrame(7, 7000);
+	ASSERT_TRUE(block.WaitUntilBlocked());
+	provider.RequestFrame(8, 8000);
+
+	// The controller displays a cached packet for frame 3 immediately.
+	provider.CancelPendingFrameRequests();
+	provider.SetCurrentFrameContext(3, 3000);
+	block.Release();
+	provider.CollectMemoryStats();
+	EXPECT_TRUE(recorder.Snapshot().empty());
+
+	subtitles.Events.front().Text = "after";
+	provider.UpdateSubtitles(&subtitles, &subtitles.Events.front());
+	ASSERT_TRUE(recorder.WaitForCount(1));
+	auto const frames = recorder.Snapshot();
+	ASSERT_EQ(1u, frames.size());
+	EXPECT_EQ(3, frames.front().frame_number);
+	EXPECT_EQ(3000, frames.front().time);
+	std::scoped_lock lock(state->mutex);
+	EXPECT_EQ((std::vector<int>{7, 3}), state->requested_frames);
 }
 
 TEST(async_video_provider, request_frame_overrides_pending_current_frame_context) {

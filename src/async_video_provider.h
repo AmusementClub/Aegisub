@@ -215,13 +215,13 @@ class AsyncVideoProvider {
 	std::vector<std::pair<const AssDialogue*, int>> subtitle_source_lines;
 	bool pending_overlay_upload_continuity_invalidation = false;
 	bool pending_check_updated = false;
-	bool pending_force_current_frame_render = false;
 	VideoSubtitleUpdateOptions pending_subtitle_update_options;
-	bool pending_normal_frame_request = false;
-	bool has_pending_current_frame_context = false;
-	int pending_current_frame_number = -1;
-	double pending_current_time = -1.;
-	bool has_pending_frame = false;
+	enum class PendingFrameKind : std::uint8_t {
+		None,
+		CurrentContext,
+		Request,
+	};
+	PendingFrameKind pending_frame_kind = PendingFrameKind::None;
 	int pending_frame_number = -1;
 	double pending_time = -1.;
 	bool has_pending_color_space = false;
@@ -266,6 +266,7 @@ private:
 	void ScheduleProcessing();
 	bool ProcessPending();
 	void ProcessPrefetch();
+	bool CanContinuePrefetchLocked() const noexcept;
 	bool IsReentrantWorkerCall() const;
 
 public:
@@ -318,6 +319,10 @@ public:
 	/// single prefetch decode, and the prefetch aborts as soon as a newer
 	/// request or content version arrives. No-op without a frame cache.
 	void PrefetchFrames(int first_frame, int count) noexcept;
+
+	/// Stop idle prefetch without invalidating an interactive frame request.
+	/// A decode already running finishes, but no further frames are prefetched.
+	void CancelFramePrefetch() noexcept;
 
 	/// @brief Synchronously get a CPU-readable BGRA frame
 	/// @brief frame Frame number

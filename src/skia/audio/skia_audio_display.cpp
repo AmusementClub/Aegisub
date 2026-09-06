@@ -240,6 +240,8 @@ std::size_t ConfiguredSpectrumMemoryBudgetBytes() noexcept {
 	return static_cast<std::size_t>(configured_mebibytes) * bytes_per_mebibyte;
 }
 
+constexpr auto PlaybackOverlayRefreshInterval = std::chrono::milliseconds(50);
+
 #if wxCHECK_VERSION(3, 1, 1)
 int gl_attributes[] = {
 	WX_GL_RGBA,
@@ -350,6 +352,8 @@ struct SkiaAudioDisplay::Impl {
 	bool deferred_failure_injection_armed = false;
 	bool has_present_timestamp = false;
 	std::chrono::steady_clock::time_point last_present;
+	bool has_playback_overlay_refresh = false;
+	std::chrono::steady_clock::time_point last_playback_overlay_refresh;
 	int presentation_display = wxNOT_FOUND;
 	int presentation_refresh_rate = 60;
 	int playback_position_ms = -1;
@@ -365,6 +369,34 @@ struct SkiaAudioDisplay::Impl {
 
 	SkiaGlContextToken ContextToken() const noexcept {
 		return { context.get(), context_generation };
+	}
+
+	bool IsVideoPlaybackActive() const {
+		if (!project_context)
+			return false;
+		auto const core = project_context->GetCore();
+		return core.videoController && core.videoController->IsPlaying();
+	}
+
+	bool ShouldRefreshPlaybackOverlay(bool force) {
+		if (!IsVideoPlaybackActive()) {
+			has_playback_overlay_refresh = false;
+			return true;
+		}
+
+		auto const now = std::chrono::steady_clock::now();
+		if (!force
+			&& has_playback_overlay_refresh
+			&& now - last_playback_overlay_refresh < PlaybackOverlayRefreshInterval)
+			return false;
+
+		last_playback_overlay_refresh = now;
+		has_playback_overlay_refresh = true;
+		return true;
+	}
+
+	void ResetPlaybackOverlayRefresh() noexcept {
+		has_playback_overlay_refresh = false;
 	}
 
 	void InvalidatePresentation() {
@@ -1612,6 +1644,7 @@ void SkiaAudioDisplay::OnPlaybackStop() {
 		return;
 	perf_trace::AudioUiDurationScope trace("audio_display.cursor_update", 1, 0);
 	impl->playback_position_ms = -1;
+	impl->ResetPlaybackOverlayRefresh();
 	impl->mouse_position_ms = -1;
 	impl->mouse_position_x = -1;
 	Invalidate(Change::Cursor);
@@ -1643,10 +1676,17 @@ void SkiaAudioDisplay::OnTimingDataChanged() {
 }
 
 void SkiaAudioDisplay::OnMarkerMoved() {
-	if (impl) {
-		Invalidate(Change::Marker);
+	if (!impl)
+		return;
+	bool const force_refresh = impl->timeline_dragging
+		|| impl->scrollbar_dragging
+		|| !impl->dragged_markers.empty()
+		|| impl->middle_seek_active;
+	bool const refresh_due = impl->ShouldRefreshPlaybackOverlay(force_refresh);
+	// Keep the latest marker state dirty while only the GL repaint is throttled.
+	Invalidate(Change::Marker);
+	if (refresh_due)
 		RequestRepaint(true);
-	}
 }
 
 void SkiaAudioDisplay::OnSelectionChanged() {

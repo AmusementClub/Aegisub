@@ -116,7 +116,6 @@ class VideoController final {
 	PlaybackMode playback_mode = PlaybackMode::None;
 	int playback_end_ms = 0;
 	bool playback_uses_audio_authority = false;
-	int playback_seek_frame_pending = -1;
 	/// Playback is armed but its first frame has not been delivered yet. The
 	/// audio clock is held back until then so a stalled video read (cold
 	/// storage after a long pause) cannot desync playback from the picture.
@@ -197,10 +196,11 @@ class VideoController final {
 	void PlayInspectionStepAudio(bool play_audio, int delta);
 	void RequestPendingInspectionStepTarget();
 	void StepSingleFrame(int delta);
-	void StopPlayback(bool clear_interactive_seek_preview);
+	void StopPlayback(bool clear_interactive_seek_preview, bool schedule_paused_prefetch = true);
 	void StartPlayback(PlaybackMode mode, int range_end_ms = 0);
 	bool PreparePlayback(PlaybackMode mode, int start_frame, int range_end_ms = 0);
 	void StartPlaybackTimer();
+	void PrimeNextPlaybackFrame();
 	void ResolvePendingPlaybackStart();
 	bool FrameAlreadyDelivered(int frame) const;
 	void ShowPlaybackStartWaitNotice();

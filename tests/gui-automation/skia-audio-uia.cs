@@ -100,7 +100,8 @@ sealed record DriverOptions(
         || Scenario.Equals("video-playback-audio-scroll", StringComparison.OrdinalIgnoreCase)
         || Scenario.Equals("video-playback-audio-scrollbar-drag", StringComparison.OrdinalIgnoreCase)
         || Scenario.Equals("audio-middle-seek-cursor", StringComparison.OrdinalIgnoreCase)
-        || Scenario.Equals("audio-spectrum-middle-seek-cursor", StringComparison.OrdinalIgnoreCase);
+        || Scenario.Equals("audio-spectrum-middle-seek-cursor", StringComparison.OrdinalIgnoreCase)
+        || Scenario.Equals("audio-spectrum-playback-middle-seek", StringComparison.OrdinalIgnoreCase);
 
     public bool IsFocusColourScenario =>
         Scenario.Equals("audio-waveform-focus-colour", StringComparison.OrdinalIgnoreCase)
@@ -243,13 +244,14 @@ sealed record DriverOptions(
         || scenario.Equals("video-playback-audio-scroll", StringComparison.OrdinalIgnoreCase)
         || scenario.Equals("video-playback-audio-scrollbar-drag", StringComparison.OrdinalIgnoreCase)
         || scenario.Equals("audio-middle-seek-cursor", StringComparison.OrdinalIgnoreCase)
-        || scenario.Equals("audio-spectrum-middle-seek-cursor", StringComparison.OrdinalIgnoreCase);
+        || scenario.Equals("audio-spectrum-middle-seek-cursor", StringComparison.OrdinalIgnoreCase)
+        || scenario.Equals("audio-spectrum-playback-middle-seek", StringComparison.OrdinalIgnoreCase);
 
     public static void PrintHelp()
     {
         Console.WriteLine("Aegisub background UIA driver");
         Console.WriteLine("  --exe PATH                         Aegisub.exe");
-        Console.WriteLine("  --scenario NAME                    audio-waveform-scroll, audio-scrollbar-drag, video-crosshair-sweep, video-playback-audio-scroll, video-playback-audio-scrollbar-drag, audio-spectrum-scroll, audio-spectrum-scrollbar-drag, audio-cursor-marker, audio-spectrum-cursor-marker, audio-playback-cursor, audio-spectrum-playback-cursor, audio-playback-marker-drag, audio-spectrum-playback-marker-drag, audio-middle-seek-cursor, audio-spectrum-middle-seek-cursor, audio-cursor-state-matrix, audio-waveform-focus-colour, audio-spectrum-focus-colour, audio-waveform-dpi-transition, audio-spectrum-dpi-transition, audio-waveform-runtime-fallback, audio-spectrum-runtime-fallback, audio-waveform-playback-scroll, audio-spectrum-playback-scroll, all");
+        Console.WriteLine("  --scenario NAME                    audio-waveform-scroll, audio-scrollbar-drag, video-crosshair-sweep, video-playback-audio-scroll, video-playback-audio-scrollbar-drag, audio-spectrum-scroll, audio-spectrum-scrollbar-drag, audio-cursor-marker, audio-spectrum-cursor-marker, audio-playback-cursor, audio-spectrum-playback-cursor, audio-playback-marker-drag, audio-spectrum-playback-marker-drag, audio-middle-seek-cursor, audio-spectrum-middle-seek-cursor, audio-spectrum-playback-middle-seek, audio-cursor-state-matrix, audio-waveform-focus-colour, audio-spectrum-focus-colour, audio-waveform-dpi-transition, audio-spectrum-dpi-transition, audio-waveform-runtime-fallback, audio-spectrum-runtime-fallback, audio-waveform-playback-scroll, audio-spectrum-playback-scroll, all");
         Console.WriteLine("  --duration-seconds N               active scenario duration (default 30)");
         Console.WriteLine("  --warmup-seconds N                 warmup before input (default 5)");
         Console.WriteLine("  --scroll-delta N                   wheel delta magnitude for scroll scenarios (default 120)");
@@ -544,6 +546,10 @@ sealed class AegisubSession : IDisposable
                     await RunMiddleSeekCursorAsync();
                     middleSeekCursorRan = true;
                     break;
+                case "audio-spectrum-playback-middle-seek":
+                    await EnableSpectrumAsync();
+                    await RunPlaybackMiddleSeekAsync();
+                    break;
                 case "audio-cursor-state-matrix":
                     await RunCursorStateMatrixAsync();
                     cursorStateMatrixRan = true;
@@ -833,6 +839,36 @@ sealed class AegisubSession : IDisposable
         if (firstReenterTarget != audioCanvas || secondReenterTarget != audioCanvas)
             throw new InvalidDataException("Middle-seek re-entry pointer did not land on the Audio Display canvas");
         await Task.Delay(300);
+    }
+
+    private async Task RunPlaybackMiddleSeekAsync()
+    {
+        if (!options.AllowGlobalInput)
+            throw new InvalidOperationException(
+                "audio playback middle seek requires --allow-global-input so native middle-button state is real");
+
+        EnsureForeground();
+        WaitForVideoCanvas();
+        WaitForAudioCanvas();
+        var centerY = audioCanvasRect.Top + Math.Max(20, audioCanvasRect.Height / 2);
+        var playbackStartX = audioCanvasRect.Left + Math.Max(10, audioCanvasRect.Width / 5);
+        var lookbackX = playbackStartX - Math.Max(4, audioCanvasRect.Width / 50);
+
+        Console.WriteLine("uia.playback_middle_seek.phase=playback");
+        if (!TryInvokeVideoPlayback())
+            throw new InvalidOperationException("Could not invoke the Video Play command through background UIA");
+        await Task.Delay(1500);
+
+        Console.WriteLine("uia.playback_middle_seek.phase=lookback");
+        MovePointer(new WinPoint(playbackStartX, centerY));
+        SendMiddleMouseButton(true);
+        await Task.Delay(40);
+        MovePointer(new WinPoint(lookbackX, centerY));
+        await Task.Delay(120);
+        SendMiddleMouseButton(false);
+        await Task.Delay(2000);
+        if (!TryInvokeVideoStop())
+            Console.WriteLine("uia.playback_middle_seek.stop=unverified");
     }
 
     private async Task RunCursorStateMatrixAsync()

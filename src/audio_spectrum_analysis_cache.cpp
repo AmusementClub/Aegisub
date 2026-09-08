@@ -97,6 +97,9 @@ void AudioSpectrumAnalysisCache::ClearLocked() {
 void AudioSpectrumAnalysisCache::RecreateCache() {
 	std::lock_guard<std::mutex> lock(cache_mutex);
 	ClearLocked();
+	// Keep allocation size with the cache metadata so eviction does not need
+	// the FFT build lock while a provider read is in flight.
+	cache_block_bytes = sizeof(float) * BinCount();
 	DestroyFftResources();
 
 	if (!source || source->GetSampleRate() <= 0 || source->GetNumSamples() <= 0 || derivation_size == 0) {
@@ -190,17 +193,15 @@ void AudioSpectrumAnalysisCache::SetResolution(size_t new_derivation_size, size_
 }
 
 void AudioSpectrumAnalysisCache::Age(size_t max_size) {
-	if (max_size == 0)
+	if (max_size == 0) {
 		StopScheduler();
-	std::lock_guard<std::mutex> build_lock(build_mutex);
-	std::lock_guard<std::mutex> lock(cache_mutex);
-	if (max_size > 0) {
-		max_cache_bytes = std::max(BlockBytes(), max_size);
-		TrimLocked();
-	}
-	else {
+		std::scoped_lock lock(build_mutex, cache_mutex);
 		ClearLocked();
+		return;
 	}
+	std::scoped_lock lock(cache_mutex);
+	max_cache_bytes = std::max(BlockBytes(), max_size);
+	TrimLocked();
 }
 
 bool AudioSpectrumAnalysisCache::IsReady() const {

@@ -1603,6 +1603,31 @@ TEST(lagi_audio_display, spectrum_analysis_cache_latest_range_drops_obsolete_res
 	EXPECT_GE(metrics.stale_drops, 1u);
 }
 
+TEST(lagi_audio_display, spectrum_analysis_cache_nonzero_age_does_not_wait_for_inflight_prefetch) {
+	ScopedTestDeadline deadline("spectrum nonzero cache aging");
+	BlockingSpectrumProvider provider;
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioSpectrumAnalysisCache cache;
+	cache.SetSource(source.get());
+	cache.SetResolution(9, 7);
+
+	cache.Prefetch(0, 0);
+	ASSERT_TRUE(WaitForBlockingProvider(provider));
+	auto age = std::async(std::launch::async, [&] { cache.Age(1); });
+	if (age.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+		provider.Release();
+		FAIL() << "nonzero spectrum cache aging waited for the in-flight provider read";
+	}
+	age.get();
+	auto const block_bytes = sizeof(float) * (size_t{1} << 9);
+	EXPECT_EQ(block_bytes, cache.GetMetricsSnapshot().cache_budget_bytes);
+	EXPECT_EQ(0u, cache.GetMetricsSnapshot().prefetch_builds);
+	provider.Release();
+	ASSERT_TRUE(WaitForSpectrumPrefetchBuilds(cache, 1));
+	EXPECT_NE(nullptr, cache.GetIfReady(0));
+	EXPECT_EQ(block_bytes, cache.GetMetricsSnapshot().cache_bytes);
+}
+
 TEST(lagi_audio_display, spectrum_analysis_cache_provider_detach_drops_inflight_prefetch) {
 	ScopedTestDeadline deadline("spectrum provider detach");
 	BlockingSpectrumProvider provider;

@@ -67,6 +67,7 @@ private:
 	size_t derivation_size = 0;
 	size_t derivation_dist = 0;
 	size_t block_count = 0;
+	size_t cache_block_bytes = sizeof(float);
 	size_t max_cache_bytes = 64 * 1024 * 1024;
 	size_t current_cache_bytes = 0;
 	size_t current_cache_entries = 0;
@@ -126,7 +127,7 @@ private:
 	size_t BinCount() const { return static_cast<size_t>(1) << derivation_size; }
 	size_t WindowSampleCount() const { return static_cast<size_t>(2) << derivation_size; }
 	size_t HopSampleCount() const { return static_cast<size_t>(1) << derivation_dist; }
-	size_t BlockBytes() const { return sizeof(float) * BinCount(); }
+	size_t BlockBytes() const { return cache_block_bytes; }
 
 	void RecreateCache();
 	void StopScheduler();

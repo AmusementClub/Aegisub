@@ -21,6 +21,13 @@
 	},
 
 
+	"Discord" : {
+		"Enabled" : false,
+		"Application ID" : "1546931732245123245",
+		"Application Name" : "Aegisub",
+		"Large Image Key" : "aegisub"
+	},
+
 	"Audio" : {
 		"Auto" : {
 			"Commit" : false,

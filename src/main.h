@@ -46,6 +46,7 @@
 #endif
 
 class FrameMain;
+class DiscordPresence;
 namespace agi {
 	struct Context;
 }
@@ -71,6 +72,10 @@ class AegisubApp : public wxApp {
 	agi::ui::UiActivationScope ui_activation;
 public:
 	AegisubApp();
+	~AegisubApp() override;
+#ifdef WITH_DISCORD_PRESENCE
+	[[nodiscard]] DiscordPresence* GetDiscordPresence() const { return discord_presence.get(); }
+#endif
 
 	agi::Context& NewProjectContext();
 	void CloseAll();
@@ -88,6 +93,9 @@ public:
 	;
 
 private:
+#ifdef WITH_DISCORD_PRESENCE
+	std::unique_ptr<DiscordPresence> discord_presence;
+#endif
 	std::unique_ptr<AppRuntime> runtime;
 	std::optional<AppLaunchPlan> launch_plan;
 	std::unique_ptr<AutomationRuntimeProfile> automation_profile;

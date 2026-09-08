@@ -25,6 +25,7 @@
 #include "audio_renderer_waveform.h"
 #include "command/command.h"
 #include "compat.h"
+#include "discord_presence.h"
 #include "help_button.h"
 #include "hotkey_data_view_model.h"
 #include "include/aegisub/audio_player.h"
@@ -32,6 +33,7 @@
 #include "include/aegisub/subtitles_provider.h"
 #include "include/aegisub/toolbar.h"
 #include "libresrc/libresrc.h"
+#include "main.h"
 #include "options.h"
 #include "perf_trace.h"
 #include "persist_location.h"
@@ -108,27 +110,25 @@ void NormalizeAudioDisplayDormantOptions() {
 
 class TokenizedDirProperty final : public wxLongStringProperty {
 	Preferences *prefs = nullptr;
-public:
-	TokenizedDirProperty(Preferences *prefs, wxString const& label, wxString const& name, wxString const& value)
-	: wxLongStringProperty(label, name, value)
-	, prefs(prefs) { }
 
-protected:
+	public:
+	TokenizedDirProperty(Preferences *prefs, wxString const& label, wxString const& name, wxString const& value)
+		: wxLongStringProperty(label, name, value), prefs(prefs) {}
+
+	protected:
 	bool DisplayEditorDialog(wxPropertyGrid *pg, wxVariant& value) override {
 		auto const token_path = from_wx(value.GetString());
 		auto const current_path = config::path
-			? config::path->Decode(token_path)
-			: agi::fs::PathFromString(token_path);
-		auto path = prefs->RequestSelectDirectory({
-			from_wx(_("Please choose the folder:")),
-			agi::fs::PathToString(FindExistingDialogDirectory(current_path))
-		});
+									  ? config::path->Decode(token_path)
+									  : agi::fs::PathFromString(token_path);
+		auto path = prefs->RequestSelectDirectory({from_wx(_("Please choose the folder:")),
+												   agi::fs::PathToString(FindExistingDialogDirectory(current_path))});
 		if (path.empty())
 			return false;
 
 		auto const encoded = config::path
-			? config::path->Encode(path)
-			: agi::fs::PathToString(path);
+								 ? config::path->Encode(path)
+								 : agi::fs::PathToString(path);
 		value = to_wx(encoded);
 		return true;
 	}
@@ -137,35 +137,32 @@ protected:
 class TokenizedFileProperty final : public wxLongStringProperty {
 	Preferences *prefs = nullptr;
 	wxString wildcard;
-public:
-	TokenizedFileProperty(Preferences *prefs, wxString const& label, wxString const& name, wxString const& value, wxString const& wildcard)
-	: wxLongStringProperty(label, name, value)
-	, prefs(prefs)
-	, wildcard(wildcard) { }
 
-protected:
+	public:
+	TokenizedFileProperty(Preferences *prefs, wxString const& label, wxString const& name, wxString const& value, wxString const& wildcard)
+		: wxLongStringProperty(label, name, value), prefs(prefs), wildcard(wildcard) {}
+
+	protected:
 	bool DisplayEditorDialog(wxPropertyGrid *pg, wxVariant& value) override {
 		auto const token_path = from_wx(value.GetString());
 		auto const current_path = config::path
-			? config::path->Decode(token_path)
-			: agi::fs::PathFromString(token_path);
+									  ? config::path->Decode(token_path)
+									  : agi::fs::PathFromString(token_path);
 		wxFileName current(current_path.wstring());
 		auto const existing_dir = FindExistingDialogDirectory(current_path);
-		auto path = prefs->RequestOpenFile({
-			from_wx(_("Please choose the file:")),
-			"",
-			current.IsOk() ? from_wx(current.GetFullName()) : std::string(),
-			"",
-			from_wx(wildcard),
-			agi::fs::PathToString(existing_dir),
-			true
-		});
+		auto path = prefs->RequestOpenFile({from_wx(_("Please choose the file:")),
+											"",
+											current.IsOk() ? from_wx(current.GetFullName()) : std::string(),
+											"",
+											from_wx(wildcard),
+											agi::fs::PathToString(existing_dir),
+											true});
 		if (path.empty())
 			return false;
 
 		auto const encoded = config::path
-			? config::path->Encode(path)
-			: agi::fs::PathToString(path);
+								 ? config::path->Encode(path)
+								 : agi::fs::PathToString(path);
 		value = to_wx(encoded);
 		return true;
 	}
@@ -176,7 +173,7 @@ class PropertyGridOptionBinder {
 	wxPropertyGrid *grid;
 	std::unordered_map<wxPGProperty *, std::function<void(wxVariant const&)>> updaters;
 
-	template<typename OptionValue, typename Value>
+	template <typename OptionValue, typename Value>
 	void QueueOptionChange(std::string const& name, Value value) {
 		prefs->SetOption(agi::make_unique<OptionValue>(name, std::move(value)));
 	}
@@ -215,10 +212,9 @@ class PropertyGridOptionBinder {
 		grid->SetVerticalSpacing(page->FromDIP(2));
 	}
 
-public:
+	public:
 	explicit PropertyGridOptionBinder(OptionPage *page)
-	: prefs(page->parent)
-	{
+		: prefs(page->parent) {
 		static bool editors_registered = false;
 		if (!editors_registered) {
 			wxPropertyGrid::RegisterAdditionalEditors();
@@ -433,7 +429,7 @@ void BuildGeneralPage(OptionPage *p) {
 	p->CellSkip(general);
 
 	p->OptionAdd(general, _("Toolbar Icon Size"), "App/Toolbar Icon Size");
-	wxString autoload_modes[] = { _("Never"), _("Always"), _("Ask") };
+	wxString autoload_modes[] = {_("Never"), _("Always"), _("Ask")};
 	wxArrayString autoload_modes_arr(3, autoload_modes);
 	p->OptionChoice(general, _("Automatically load linked files"), autoload_modes_arr, "App/Auto/Load Linked Files");
 	p->OptionAdd(general, _("Undo Levels"), "Limits/Undo Levels", 2, 10000);
@@ -492,6 +488,31 @@ void BuildGeneralPage(OptionPage *p) {
 	p->SetSizerAndFit(p->sizer);
 }
 
+#ifdef WITH_DISCORD_PRESENCE
+void BuildDiscordPage(OptionPage *p) {
+	auto connection = p->PageSizer(_("Connection"));
+	p->OptionAdd(connection, _("Connect to Discord"), "Discord/Enabled");
+	p->CellSkip(connection);
+	p->OptionAdd(connection, _("Application ID"), "Discord/Application ID");
+	auto display = p->PageSizer(_("Display"));
+	p->OptionAdd(display, _("Application display name"), "Discord/Application Name");
+	p->OptionAdd(display, _("Large image asset key"), "Discord/Large Image Key");
+
+	auto *status = new wxStaticText(p, wxID_ANY, wxEmptyString);
+	status->SetMinSize(p->FromDIP(wxSize(400, 40)));
+	p->sizer->Add(status, 0, wxEXPAND | wxALL, p->FromDIP(5));
+	auto update_status = [status] {
+		auto *presence = wxGetApp().GetDiscordPresence();
+		status->SetLabel(presence ? wxGetTranslation(to_wx(presence->GetStatus())) : _("Disconnected"));
+	};
+	update_status();
+	auto timer = std::make_shared<wxTimer>(p);
+	p->Bind(wxEVT_TIMER, [timer, update_status](wxTimerEvent&) { update_status(); }, timer->GetId());
+	timer->Start(1000);
+	p->SetSizerAndFit(p->sizer);
+}
+#endif
+
 void BuildGeneralDefaultStylesPage(OptionPage *p) {
 	auto staticbox = new wxStaticBoxSizer(wxVERTICAL, p, _("Default style catalogs"));
 	p->sizer->Add(staticbox, 0, wxEXPAND, 5);
@@ -502,7 +523,7 @@ void BuildGeneralDefaultStylesPage(OptionPage *p) {
 	instructions->Wrap(400);
 	staticbox->Add(instructions, 0, wxALL, 5);
 	staticbox->AddSpacer(16);
-	
+
 	auto general = new wxFlexGridSizer(2, 5, 5);
 	general->AddGrowableCol(0, 1);
 	staticbox->Add(general, 1, wxEXPAND, 5);
@@ -513,7 +534,7 @@ void BuildGeneralDefaultStylesPage(OptionPage *p) {
 	// Always include one named "Default" even if it doesn't exist (ensure there is at least one on the list)
 	catalogs_set.insert("Default");
 	// Include all catalogs named in the existing configuration
-	static const char *formats[] = { "ASS", "MicroDVD", "SRT", "TTXT", "TXT" };
+	static const char *formats[] = {"ASS", "MicroDVD", "SRT", "TTXT", "TXT"};
 	for (auto formatname : formats)
 		catalogs_set.insert(OPT_GET("Subtitle Format/" + std::string(formatname) + "/Default Style Catalog")->GetString());
 	// Sorted version
@@ -587,7 +608,7 @@ void BuildAudioPage(OptionPage *p) {
 	binder->AddInt(_("Line boundary thickness (px)"), "Audio/Line Boundaries Thickness", 1, 5);
 	binder->AddInt(_("Maximum snap distance (px)"), "Audio/Snap/Distance", 0, 25);
 
-	const wxString dtl_arr[] = { _("Don't show"), _("Show previous"), _("Show previous and next"), _("Show all") };
+	const wxString dtl_arr[] = {_("Don't show"), _("Show previous"), _("Show previous and next"), _("Show all")};
 	wxArrayString choice_dtl(4, dtl_arr);
 	binder->AddChoice(_("Show inactive lines"), choice_dtl, "Audio/Inactive Lines Display Mode");
 	binder->AddBool(_("Include commented inactive lines"), "Audio/Display/Draw/Inactive Comments");
@@ -600,27 +621,26 @@ void BuildAudioPage(OptionPage *p) {
 	binder->AddBool(_("Seconds boundaries"), "Audio/Display/Draw/Seconds");
 	binder->AddChoice(_("Waveform Style"), AudioWaveformRenderer::GetWaveformStyles(), "Audio/Display/Waveform Style");
 
-	const wxString sq_arr[4] = { _("Regular quality"), _("Better quality"), _("High quality"), _("Insane quality") };
+	const wxString sq_arr[4] = {_("Regular quality"), _("Better quality"), _("High quality"), _("Insane quality")};
 	wxArrayString sq_choice(4, sq_arr);
 	binder->AddChoice(_("Spectrum Quality"), sq_choice, "Audio/Renderer/Spectrum/Quality");
 
-	const wxString sif_arr[2] = { _("Provider s16 mono"), _("Float32 per-channel") };
+	const wxString sif_arr[2] = {_("Provider s16 mono"), _("Float32 per-channel")};
 	wxArrayString sif_choice(2, sif_arr);
 	binder->AddChoice(_("Spectrum Input Format"), sif_choice, "Audio/Renderer/Spectrum/Input Format");
 
-	const wxString scm_arr[2] = { _("Legacy linear"), _("Frequency curve") };
+	const wxString scm_arr[2] = {_("Legacy linear"), _("Frequency curve")};
 	wxArrayString scm_choice(2, scm_arr);
 	binder->AddChoice(_("Spectrum Computation Mode"), scm_choice, "Audio/Renderer/Spectrum/Computation Mode");
 
 	const wxString smm_arr[3] = {
 		_("Time-domain downmix"),
 		_("Strongest channel per frequency bin"),
-		_("Average channel energy per frequency bin")
-	};
+		_("Average channel energy per frequency bin")};
 	wxArrayString smm_choice(3, smm_arr);
 	binder->AddChoice(_("Spectrum Mono Mix Method"), smm_choice, "Audio/Renderer/Spectrum/Mono Mix Mode");
 
-	const wxString sc_arr[5] = { _("Linear"), _("Extended"), _("Medium"), _("Compressed"), _("Logarithmic") };
+	const wxString sc_arr[5] = {_("Linear"), _("Extended"), _("Medium"), _("Compressed"), _("Logarithmic")};
 	wxArrayString sc_choice(5, sc_arr);
 	binder->AddChoice(_("Spectrum Frequency Mapping"), sc_choice, "Audio/Renderer/Spectrum/FreqCurve");
 
@@ -649,8 +669,7 @@ void BuildVideoPage(OptionPage *p) {
 		_("Zooms the video (reversed)"),
 		_("Pans the video"),
 		_("Pans the video (X/Y swapped)"),
-		_("Does nothing")
-	};
+		_("Does nothing")};
 	wxArrayString choice_scroll(7, cscroll_arr);
 	binder->AddChoice(_("Scrolling on the video display"), choice_scroll, "Video/Scroll Action");
 	binder->AddChoice(_("Ctrl+Scrolling on the video display"), choice_scroll, "Video/Ctrl Scroll Action");
@@ -660,14 +679,13 @@ void BuildVideoPage(OptionPage *p) {
 		wxS("12.5%"), wxS("25%"), wxS("37.5%"), wxS("50%"), wxS("62.5%"), wxS("75%"),
 		wxS("87.5%"), wxS("100%"), wxS("112.5%"), wxS("125%"), wxS("137.5%"), wxS("150%"),
 		wxS("162.5%"), wxS("175%"), wxS("187.5%"), wxS("200%"), wxS("212.5%"), wxS("225%"),
-		wxS("237.5%"), wxS("250%"), wxS("262.5%"), wxS("275%"), wxS("287.5%"), wxS("300%")
-	};
+		wxS("237.5%"), wxS("250%"), wxS("262.5%"), wxS("275%"), wxS("287.5%"), wxS("300%")};
 	wxArrayString choice_zoom(24, czoom_arr);
 	binder->AddChoice(_("Default Zoom"), choice_zoom, "Video/Default Zoom");
 
 	binder->AddInt(_("Fast jump step in frames"), "Video/Slider/Fast Jump Step", 0, INT_MAX);
 
-	const wxString cscr_arr[3] = { wxS("?video"), wxS("?script"), wxS(".") };
+	const wxString cscr_arr[3] = {wxS("?video"), wxS("?script"), wxS(".")};
 	wxArrayString scr_res(3, cscr_arr);
 	binder->AddChoice(_("Screenshot save path"), scr_res, "Path/Screenshot");
 
@@ -795,8 +813,7 @@ void BuildInterfacePage(OptionPage *p) {
 	const wxString context_policy_labels[] = {
 		_("Always follow category setting"),
 		_("Exempt recognized valid contexts"),
-		_("Never mark as errors")
-	};
+		_("Never mark as errors")};
 	wxArrayString context_policy_choices(3, context_policy_labels);
 	auto *join_policy = binder->AddChoice(_("Join control context policy"), context_policy_choices, "Subtitle/Edit Box/Character Markers/Error/Join Control Context Policy");
 	auto *variation_selector_policy = binder->AddChoice(_("Variation selector context policy"), context_policy_choices, "Subtitle/Edit Box/Character Markers/Error/Variation Selector Context Policy");
@@ -947,7 +964,7 @@ void BuildBackupPage(OptionPage *p) {
 	wxControl *cb = p->OptionAdd(save, _("Enable"), "App/Auto/Save");
 	p->CellSkip(save);
 	p->EnableIfChecked(cb,
-		p->OptionAdd(save, _("Interval in seconds"), "App/Auto/Save Every Seconds", 1));
+					   p->OptionAdd(save, _("Interval in seconds"), "App/Auto/Save Every Seconds", 1));
 	p->OptionBrowse(save, _("Path"), "Path/Auto/Save", cb, true);
 	p->OptionAdd(save, _("Autosave after every change"), "App/Auto/Save on Every Change");
 
@@ -977,11 +994,11 @@ void BuildAutomationPage(OptionPage *p) {
 	p->OptionAdd(general, _("Include path"), "Path/Automation/Include");
 	p->OptionAdd(general, _("Auto-load path"), "Path/Automation/Autoload");
 
-	const wxString tl_arr[6] = { _("0: Fatal"), _("1: Error"), _("2: Warning"), _("3: Hint"), _("4: Debug"), _("5: Trace") };
+	const wxString tl_arr[6] = {_("0: Fatal"), _("1: Error"), _("2: Warning"), _("3: Hint"), _("4: Debug"), _("5: Trace")};
 	wxArrayString tl_choice(6, tl_arr);
 	p->OptionChoice(general, _("Trace level"), tl_choice, "Automation/Trace Level");
 
-	const wxString ar_arr[4] = { _("No scripts"), _("Subtitle-local scripts"), _("Global autoload scripts"), _("All scripts") };
+	const wxString ar_arr[4] = {_("No scripts"), _("Subtitle-local scripts"), _("Global autoload scripts"), _("All scripts")};
 	wxArrayString ar_choice(4, ar_arr);
 	p->OptionChoice(general, _("Autoreload on Export"), ar_choice, "Automation/Autoreload Mode");
 
@@ -998,7 +1015,7 @@ void BuildAutomationPage(OptionPage *p) {
 void BuildAdvancedPage(OptionPage *p) {
 	auto general = p->PageSizer(_("General"));
 
-	auto warning = new wxStaticText(p, wxID_ANY ,_("Changing these settings might result in bugs and/or crashes.  Do not touch these unless you know what you're doing."));
+	auto warning = new wxStaticText(p, wxID_ANY, _("Changing these settings might result in bugs and/or crashes.  Do not touch these unless you know what you're doing."));
 	warning->SetFont(wxFont(12, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
 	p->sizer->Fit(p);
 	warning->Wrap(400);
@@ -1022,7 +1039,7 @@ void BuildAdvancedAudioPage(OptionPage *p) {
 	binder->AddChoice(_("Audio player"), apl_choice, "Audio/Player");
 
 	binder->AddCategory(_("Cache"));
-	const wxString ct_arr[3] = { _("None (Not recommended with Avisynth)"), _("RAM"), _("Hard Disk") };
+	const wxString ct_arr[3] = {_("None (Not recommended with Avisynth)"), _("RAM"), _("Hard Disk")};
 	wxArrayString ct_choice(3, ct_arr);
 	binder->AddChoice(_("Cache type"), ct_choice, "Audio/Cache/Type");
 	binder->AddDirectory(_("Path"), "Audio/Cache/HD/Location");
@@ -1032,7 +1049,7 @@ void BuildAdvancedAudioPage(OptionPage *p) {
 
 #ifdef WITH_AVISYNTH
 	binder->AddCategory(wxS("Avisynth"));
-	const wxString adm_arr[4] = { wxS("None"), wxS("ConvertToMono"), wxS("GetLeftChannel"), wxS("GetRightChannel") };
+	const wxString adm_arr[4] = {wxS("None"), wxS("ConvertToMono"), wxS("GetLeftChannel"), wxS("GetRightChannel")};
 	wxArrayString adm_choice(4, adm_arr);
 	binder->AddChoice(_("Avisynth down-mixer"), adm_choice, "Audio/Downmixer");
 	binder->AddInt(_("Force sample rate"), "Provider/Audio/AVS/Sample Rate", 0, INT_MAX);
@@ -1041,7 +1058,7 @@ void BuildAdvancedAudioPage(OptionPage *p) {
 #ifdef WITH_FFMS2
 	binder->AddCategory(wxS("FFmpegSource"));
 
-	const wxString error_modes[] = { _("Ignore"), _("Clear"), _("Stop"), _("Abort") };
+	const wxString error_modes[] = {_("Ignore"), _("Clear"), _("Stop"), _("Abort")};
 	wxArrayString error_modes_choice(4, error_modes);
 	binder->AddChoice(_("Audio indexing error handling mode"), error_modes_choice, "Provider/Audio/FFmpegSource/Decode Error Handling");
 
@@ -1106,11 +1123,11 @@ void BuildAdvancedVideoPage(OptionPage *p) {
 	binder->AddBool(_("Allow pre-2.56a Avisynth"), "Provider/Avisynth/Allow Ancient");
 	binder->AddFile(_("Avisynth runtime library path"), "Provider/Avisynth/Runtime Path",
 #ifdef _WIN32
-		_("Dynamic libraries (*.dll)|*.dll|All files (*.*)|*.*")
+					_("Dynamic libraries (*.dll)|*.dll|All files (*.*)|*.*")
 #elif defined(__APPLE__)
-		_("Dynamic libraries (*.dylib)|*.dylib|All files (*.*)|*.*")
+					_("Dynamic libraries (*.dylib)|*.dylib|All files (*.*)|*.*")
 #else
-		_("Shared objects (*.so;*.so.*)|*.so;*.so.*|All files (*.*)|*.*")
+					_("Shared objects (*.so;*.so.*)|*.so;*.so.*|All files (*.*)|*.*")
 #endif
 	);
 	binder->AddInt(_("Avisynth memory limit"), "Provider/Avisynth/Memory Max", 0, INT_MAX);
@@ -1119,7 +1136,7 @@ void BuildAdvancedVideoPage(OptionPage *p) {
 #ifdef WITH_FFMS2
 	binder->AddCategory(wxS("FFmpegSource"));
 
-	const wxString log_levels[] = { wxS("Quiet"), wxS("Panic"), wxS("Fatal"), wxS("Error"), wxS("Warning"), wxS("Info"), wxS("Verbose"), wxS("Debug") };
+	const wxString log_levels[] = {wxS("Quiet"), wxS("Panic"), wxS("Fatal"), wxS("Error"), wxS("Warning"), wxS("Info"), wxS("Verbose"), wxS("Debug")};
 	wxArrayString log_levels_choice(8, log_levels);
 	binder->AddChoice(_("Debug log verbosity"), log_levels_choice, "Provider/FFmpegSource/Log Level");
 
@@ -1134,7 +1151,7 @@ void BuildAdvancedVideoPage(OptionPage *p) {
 
 #ifdef WITH_SCENECHANGE
 	binder->AddCategory(wxS("SceneChange"));
-	const wxString scenechange_backends[] = { wxS("auto"), wxS("scxvid"), wxS("wwxd") };
+	const wxString scenechange_backends[] = {wxS("auto"), wxS("scxvid"), wxS("wwxd")};
 	wxArrayString scenechange_backend_choices(3, scenechange_backends);
 	binder->AddChoice(_("SceneChange backend"), scenechange_backend_choices, "Provider/SceneChange/Backend");
 #endif
@@ -1159,11 +1176,9 @@ class CommandRenderer final : public wxDataViewCustomRenderer {
 		return view ? view->FromDIP(wxSize(80, 20)) : wxSize(80, 20);
 	}
 
-public:
+	public:
 	CommandRenderer()
-	: wxDataViewCustomRenderer(wxS("wxDataViewIconText"), wxDATAVIEW_CELL_EDITABLE)
-	, autocomplete(to_wx(cmd::get_registered_commands()))
-	{
+		: wxDataViewCustomRenderer(wxS("wxDataViewIconText"), wxDATAVIEW_CELL_EDITABLE), autocomplete(to_wx(cmd::get_registered_commands())) {
 	}
 
 	wxWindow *CreateEditorCtrl(wxWindow *parent, wxRect label_rect, wxVariant const& value) override {
@@ -1179,7 +1194,7 @@ public:
 		label_rect.x += iconWidth;
 		label_rect.width -= iconWidth;
 
-		wxTextCtrl* ctrl = new wxTextCtrl(parent, -1, text, label_rect.GetPosition(), label_rect.GetSize(), wxTE_PROCESS_ENTER);
+		wxTextCtrl *ctrl = new wxTextCtrl(parent, -1, text, label_rect.GetPosition(), label_rect.GetSize(), wxTE_PROCESS_ENTER);
 		ctrl->SetInsertionPointEnd();
 		ctrl->SelectAll();
 		ctrl->AutoComplete(autocomplete);
@@ -1211,14 +1226,14 @@ public:
 		return GetDefaultSize();
 	}
 
-	bool GetValueFromEditorCtrl(wxWindow* editor, wxVariant &var) override {
-		wxTextCtrl *text = static_cast<wxTextCtrl*>(editor);
+	bool GetValueFromEditorCtrl(wxWindow *editor, wxVariant& var) override {
+		wxTextCtrl *text = static_cast<wxTextCtrl *>(editor);
 		wxDataViewIconText iconText(text->GetValue(), value.GetIcon());
 		var << iconText;
 		return true;
 	}
 
-	bool GetValue(wxVariant &) const override { return false; }
+	bool GetValue(wxVariant&) const override { return false; }
 	bool HasEditorCtrl() const override { return true; }
 };
 
@@ -1256,12 +1271,9 @@ class CommandButtonDataViewModel final : public wxDataViewVirtualListModel {
 		has_pending_changes = false;
 	}
 
-public:
+	public:
 	explicit CommandButtonDataViewModel(Preferences *parent)
-	: wxDataViewVirtualListModel(static_cast<unsigned int>(LoadCommandButtonCommands().size()))
-	, parent(parent)
-	, commands(LoadCommandButtonCommands())
-	{
+		: wxDataViewVirtualListModel(static_cast<unsigned int>(LoadCommandButtonCommands().size())), parent(parent), commands(LoadCommandButtonCommands()) {
 	}
 
 	unsigned int GetColumnCount() const override { return 3; }
@@ -1269,7 +1281,7 @@ public:
 		return col == 1 ? wxS("wxDataViewIconText") : wxS("string");
 	}
 
-	void GetValueByRow(wxVariant &variant, unsigned row, unsigned col) const override {
+	void GetValueByRow(wxVariant& variant, unsigned row, unsigned col) const override {
 		if (row >= commands.size())
 			return;
 
@@ -1454,10 +1466,9 @@ class HotkeyRenderer final : public wxDataViewCustomRenderer {
 		return view ? view->FromDIP(wxSize(80, 20)) : wxSize(80, 20);
 	}
 
-public:
+	public:
 	HotkeyRenderer()
-	: wxDataViewCustomRenderer(wxS("string"), wxDATAVIEW_CELL_EDITABLE)
-	{ }
+		: wxDataViewCustomRenderer(wxS("string"), wxDATAVIEW_CELL_EDITABLE) {}
 
 	wxWindow *CreateEditorCtrl(wxWindow *parent, wxRect label_rect, wxVariant const& var) override {
 		ctrl = new wxTextCtrl(parent, -1, var.GetString(), label_rect.GetPosition(), label_rect.GetSize(), wxTE_PROCESS_ENTER);
@@ -1469,11 +1480,11 @@ public:
 		return ctrl;
 	}
 
-	void OnKeyDown(wxKeyEvent &evt) {
+	void OnKeyDown(wxKeyEvent& evt) {
 		ctrl->ChangeValue(to_wx(hotkey::keypress_to_str(evt.GetKeyCode(), evt.GetModifiers())));
 	}
 
-	void OnMouse(wxMouseEvent &evt) {
+	void OnMouse(wxMouseEvent& evt) {
 		auto combo = hotkey::mousepress_to_str(evt);
 		if (combo.empty()) {
 			evt.Skip();
@@ -1493,12 +1504,12 @@ public:
 		return true;
 	}
 
-	bool GetValueFromEditorCtrl(wxWindow*, wxVariant &var) override {
+	bool GetValueFromEditorCtrl(wxWindow *, wxVariant& var) override {
 		var = ctrl->GetValue();
 		return true;
 	}
 
-	bool GetValue(wxVariant &) const override { return false; }
+	bool GetValue(wxVariant&) const override { return false; }
 	wxSize GetSize() const override { return !value ? GetDefaultSize() : GetTextExtent(value); }
 	bool HasEditorCtrl() const override { return true; }
 };
@@ -1514,18 +1525,19 @@ class Interface_Hotkeys final : public OptionPage {
 
 	void OnNewButton(wxCommandEvent&);
 	void OnUpdateFilter(wxCommandEvent&);
-public:
+
+	public:
 	Interface_Hotkeys(wxTreebook *book, Preferences *parent);
 };
 
 /// Interface Hotkeys preferences subpage
 Interface_Hotkeys::Interface_Hotkeys(wxTreebook *book, Preferences *parent)
-: OptionPage(book, parent, _("Hotkeys"), OptionPage::PAGE_SUB)
-// Seed tool contexts that may have no defaults yet so users can bind commands.
-, model(new HotkeyDataViewModel(parent, {
-	"Visual Vector Clip",
-}))
-{
+	: OptionPage(book, parent, _("Hotkeys"), OptionPage::PAGE_SUB)
+	  // Seed tool contexts that may have no defaults yet so users can bind commands.
+	  ,
+	  model(new HotkeyDataViewModel(parent, {
+												"Visual Vector Clip",
+											})) {
 	quick_search = new wxSearchCtrl(this, -1);
 	auto new_button = new wxButton(this, -1, _("&New"));
 	auto edit_button = new wxButton(this, -1, _("&Edit"));
@@ -1612,11 +1624,11 @@ void Preferences::EnsureDeferredPageBuilt(int page) {
 
 	book->InvalidateBestSize();
 	book->Layout();
-	if (auto* sizer = GetSizer())
+	if (auto *sizer = GetSizer())
 		sizer->Layout();
 	Layout();
 	if (is_current_page) {
-		if (auto* sizer = GetSizer()) {
+		if (auto *sizer = GetSizer()) {
 			sizer->Fit(this);
 			auto const fitted_size = GetSize();
 			SetSize(std::max(old_size.x, fitted_size.x), std::max(old_size.y, fitted_size.y));
@@ -1672,12 +1684,12 @@ agi::InteractionResult Preferences::RequestInteraction(agi::InteractionRequest c
 	return agi::InteractionResult::Cancel;
 }
 
-void Preferences::OnOK(wxCommandEvent &event) {
+void Preferences::OnOK(wxCommandEvent& event) {
 	OnApply(event);
 	EndModal(0);
 }
 
-void Preferences::OnApply(wxCommandEvent &) {
+void Preferences::OnApply(wxCommandEvent&) {
 	for (auto const& change : pending_changes)
 		OPT_SET(change.first)->Set(change.second.get());
 	pending_changes.clear();
@@ -1691,12 +1703,10 @@ void Preferences::OnApply(wxCommandEvent &) {
 }
 
 void Preferences::OnResetDefault(wxCommandEvent&) {
-	if (RequestInteraction({
-		from_wx(_("Restore defaults?")),
-		from_wx(_("Are you sure that you want to restore the defaults? All your settings will be overridden.")),
-		agi::InteractionButtons::YesNo,
-		agi::InteractionIcon::Question
-	}) != agi::InteractionResult::Yes)
+	if (RequestInteraction({from_wx(_("Restore defaults?")),
+							from_wx(_("Are you sure that you want to restore the defaults? All your settings will be overridden.")),
+							agi::InteractionButtons::YesNo,
+							agi::InteractionIcon::Question}) != agi::InteractionResult::Yes)
 		return;
 
 	EnsureAllDeferredPagesBuilt();
@@ -1716,7 +1726,7 @@ void Preferences::OnResetDefault(wxCommandEvent&) {
 	EndModal(-1);
 }
 
-Preferences::Preferences(wxWindow *parent): wxDialog(parent, -1, _("Preferences"), wxDefaultPosition, wxSize(-1, -1), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER) {
+Preferences::Preferences(wxWindow *parent) : wxDialog(parent, -1, _("Preferences"), wxDefaultPosition, wxSize(-1, -1), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER) {
 	SetIcon(GETICON(options_button_16));
 	file_dialog_service = agi::MakePreferencesFileDialogService(this);
 	interaction_sink = agi::MakePreferencesInteractionSink(this);
@@ -1724,7 +1734,7 @@ Preferences::Preferences(wxWindow *parent): wxDialog(parent, -1, _("Preferences"
 	auto duration_ms = [](auto const& started) {
 		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
 	};
-	auto observe_phase = [&](char const* phase, auto&& callback) {
+	auto observe_phase = [&](char const *phase, auto&& callback) {
 		auto const started = std::chrono::steady_clock::now();
 		callback();
 		perf_trace::ObserveWindowOpenPhase("preferences", phase, duration_ms(started));
@@ -1737,8 +1747,8 @@ Preferences::Preferences(wxWindow *parent): wxDialog(parent, -1, _("Preferences"
 			tree->SetDoubleBuffered(true);
 	});
 
-	auto register_deferred_page = [&](char const* phase, wxString const& name, int style, auto builder) {
-		auto* page = new OptionPage(book, this, name, style);
+	auto register_deferred_page = [&](char const *phase, wxString const& name, int style, auto builder) {
+		auto *page = new OptionPage(book, this, name, style);
 		RegisterDeferredPageBuilder([&, page, phase, builder] {
 			auto const started = std::chrono::steady_clock::now();
 			builder(page);
@@ -1748,10 +1758,13 @@ Preferences::Preferences(wxWindow *parent): wxDialog(parent, -1, _("Preferences"
 
 	register_deferred_page("page_general", _("General"), OptionPage::PAGE_DEFAULT, BuildGeneralPage);
 	register_deferred_page("page_default_styles", _("Default styles"), OptionPage::PAGE_SUB, BuildGeneralDefaultStylesPage);
+#ifdef WITH_DISCORD_PRESENCE
+	register_deferred_page("page_discord", wxS("Discord"), OptionPage::PAGE_SUB, BuildDiscordPage);
+#endif
 	register_deferred_page("page_audio", _("Audio"), OptionPage::PAGE_DEFAULT, BuildAudioPage);
 	register_deferred_page("page_video", _("Video"), OptionPage::PAGE_DEFAULT, BuildVideoPage);
 	// Inserting pages here shifts Tool/Preferences/Page indices used by
-	// tests/gui-automation/skia-audio-uia.cs (Colors is currently page 6).
+	// tests/gui-automation/skia-audio-uia.cs (Colors is currently page 7).
 	register_deferred_page("page_visual_tools", _("Visual Tools"), OptionPage::PAGE_DEFAULT, BuildVisualToolsPage);
 	register_deferred_page("page_interface", _("Interface"), OptionPage::PAGE_DEFAULT, BuildInterfacePage);
 	register_deferred_page("page_interface_colours", _("Colors"), OptionPage::PAGE_SCROLL | OptionPage::PAGE_SUB, BuildInterfaceColoursPage);
@@ -1787,10 +1800,10 @@ Preferences::Preferences(wxWindow *parent): wxDialog(parent, -1, _("Preferences"
 	wxSizer *mainSizer = nullptr;
 	wxButton *defaultButton = nullptr;
 	observe_phase("dialog_chrome", [&] {
-		book->Bind(wxEVT_TREEBOOK_PAGE_CHANGING, [this](wxBookCtrlEvent &evt) {
+		book->Bind(wxEVT_TREEBOOK_PAGE_CHANGING, [this](wxBookCtrlEvent& evt) {
 			EnsureDeferredPageBuilt(evt.GetSelection());
 		});
-		book->Bind(wxEVT_TREEBOOK_PAGE_CHANGED, [this](wxBookCtrlEvent &evt) {
+		book->Bind(wxEVT_TREEBOOK_PAGE_CHANGED, [this](wxBookCtrlEvent& evt) {
 			OPT_SET("Tool/Preferences/Page")->SetInt(evt.GetSelection());
 		});
 

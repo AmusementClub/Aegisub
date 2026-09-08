@@ -19,6 +19,7 @@ endif()
 
 option(AEGISUB_LUAJIT_SHARED "Build bundled LuaJIT as a shared library on Windows" OFF)
 option(WITH_PLUGIN_BRIDGE "Build the optional Plugin Bridge and Automation support" OFF)
+option(WITH_DISCORD_PRESENCE "Build Discord Rich Presence support" ON)
 if(AEGISUB_LUAJIT_SHARED AND NOT WIN32)
     message(FATAL_ERROR "AEGISUB_LUAJIT_SHARED is currently only supported on Windows")
 endif()
@@ -1402,6 +1403,21 @@ set_source_files_properties(libaegisub/common/native_library.cpp PROPERTIES
 # aegisub_core carries the framework-agnostic core (PUBLIC libaegisub + boost/...).
 # libass is runtime-loaded (headers via BUILD_INTERFACE only); see aegisub_stage_libass_runtime.
 target_link_libraries(Aegisub PRIVATE ${CMAKE_DL_LIBS} aegisub_core aegisub_features luajit CLI11::CLI11)
+if(WITH_DISCORD_PRESENCE)
+    add_library(aegisub_discord_presence STATIC
+        src/discord_presence_model.cpp
+        src/discord_presence_client.cpp
+    )
+    target_compile_features(aegisub_discord_presence PUBLIC cxx_std_20)
+    target_include_directories(aegisub_discord_presence PUBLIC "${PROJECT_SOURCE_DIR}/src")
+    target_link_libraries(aegisub_discord_presence PUBLIC libaegisub)
+    if(WIN32)
+        target_link_libraries(aegisub_discord_presence PRIVATE ws2_32)
+    endif()
+    target_sources(Aegisub PRIVATE src/discord_presence.cpp)
+    target_compile_definitions(Aegisub PRIVATE WITH_DISCORD_PRESENCE=1)
+    target_link_libraries(Aegisub PRIVATE aegisub_discord_presence)
+endif()
 aegisub_stage_libass_runtime(Aegisub)
 aegisub_stage_libass_runtime(aegisub_core_c_api)
 target_compile_definitions(Aegisub PRIVATE CMAKE_BUILD AEGISUB_FONTCOLLECTOR_STATIC)

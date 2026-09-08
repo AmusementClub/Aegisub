@@ -17,6 +17,78 @@ msgstr ""
 "X-Poedit-SourceCharset: UTF-8\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 
+#: ../src/preferences.cpp
+msgid "Connection"
+msgstr "连接"
+
+#: ../src/preferences.cpp
+msgid "Connect to Discord"
+msgstr "连接 Discord"
+
+#: ../src/preferences.cpp
+msgid "Application ID"
+msgstr "应用 ID"
+
+#: ../src/preferences.cpp
+msgid "Application display name"
+msgstr "应用显示名称"
+
+#: ../src/preferences.cpp
+msgid "Large image asset key"
+msgstr "大图资源键"
+
+#: ../src/preferences.cpp
+msgid "Display"
+msgstr "显示"
+
+#: ../src/preferences.cpp ../src/discord_presence.cpp
+msgid "Disconnected"
+msgstr "未连接"
+
+#: ../src/discord_presence.cpp
+msgid "Enter a valid Discord Application ID"
+msgstr "请输入有效的 Discord 应用 ID"
+
+#: ../src/discord_presence.cpp
+msgid "Waiting for a subtitle session"
+msgstr "等待字幕会话"
+
+#: ../src/discord_presence_client.cpp
+msgid "Connecting to Discord"
+msgstr "正在连接 Discord"
+
+#: ../src/discord_presence_client.cpp
+msgid "Waiting for Discord"
+msgstr "等待 Discord 客户端"
+
+#: ../src/discord_presence_client.cpp
+msgid "Connected"
+msgstr "已连接"
+
+#: ../src/discord_presence_client.cpp
+msgid "Discord connection timed out"
+msgstr "连接 Discord 超时"
+
+#: ../src/discord_presence_client.cpp
+msgid "Discord update timed out"
+msgstr "更新 Discord 状态超时"
+
+#: ../src/discord_presence_client.cpp
+msgid "Discord is not accepting updates"
+msgstr "Discord 暂时无法接收状态更新"
+
+#: ../src/discord_presence_client.cpp
+msgid "Invalid Discord response"
+msgstr "Discord 响应无效"
+
+#: ../src/discord_presence_client.cpp
+msgid "Discord closed the connection"
+msgstr "Discord 已关闭连接"
+
+#: ../src/discord_presence_client.cpp
+msgid "Discord rejected the activity or Application ID"
+msgstr "Discord 拒绝了活动信息或应用 ID"
+
 #: ../automation/autoload/cleantags-autoload.lua:31
 msgid "Clean Tags"
 msgstr "Clean Tags - 整理特效标签"

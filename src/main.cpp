@@ -46,6 +46,7 @@
 #include "avisynth_provider_registration.h"
 #include "compat.h"
 #include "crash_writer.h"
+#include "discord_presence.h"
 #include "format.h"
 #include "frame_main.h"
 #include "gui_wx_runtime_entry_host.h"
@@ -114,6 +115,8 @@ AegisubApp::AegisubApp() {
 		"startup.wx_app.constructor",
 		std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
 }
+
+AegisubApp::~AegisubApp() = default;
 
 namespace {
 
@@ -269,6 +272,10 @@ bool AegisubApp::OnInit() {
 		observe_phase("startup.on_init.exception_message_setup");
 
 		StartupLog("Create main window");
+#ifdef WITH_DISCORD_PRESENCE
+		if (launch_plan->mode == AppLaunchMode::Gui)
+			discord_presence = std::make_unique<DiscordPresence>(startup_started);
+#endif
 		StartupLog("Possibly perform automatic updates check");
 		StartupLog("Parse command line");
 		auto const startup_sequence_started = std::chrono::steady_clock::now();
@@ -507,6 +514,9 @@ int AegisubApp::OnExit() {
 		}
 	};
 	record_exit_phase("exit.begin");
+#ifdef WITH_DISCORD_PRESENCE
+	discord_presence.reset();
+#endif
 	gui_test_close_scheduled = false;
 	record_exit_phase("exit.close-barrier-reset");
 	ui_activation.Deactivate();
@@ -538,12 +548,27 @@ int AegisubApp::OnExit() {
 
 agi::Context& AegisubApp::NewProjectContext() {
 	auto frame = new FrameMain;
+#ifdef WITH_DISCORD_PRESENCE
+	auto* subtitles = frame->context->GetCore().subsController.get();
+	if (discord_presence) {
+		discord_presence->Track(subtitles);
+		frame->Bind(wxEVT_ACTIVATE, [this, subtitles](wxActivateEvent& event) {
+			if (event.GetActive() && discord_presence)
+				discord_presence->Activate(subtitles);
+			event.Skip();
+		});
+	}
+#endif
 	frame->Bind(wxEVT_DESTROY, [=](wxWindowDestroyEvent& evt) {
 		if (evt.GetWindow() != frame) {
 			evt.Skip();
 			return;
 		}
 
+#ifdef WITH_DISCORD_PRESENCE
+		if (discord_presence)
+			discord_presence->Remove(subtitles);
+#endif
 		frames.erase(remove(begin(frames), end(frames), frame), end(frames));
 		if (frames.empty()) {
 			if (launch_plan && launch_plan->mode == AppLaunchMode::GuiTest && !gui_test_exit_code)

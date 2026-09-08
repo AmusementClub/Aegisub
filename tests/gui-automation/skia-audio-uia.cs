@@ -1952,7 +1952,7 @@ sealed class AegisubSession : IDisposable
         {
             config["Tool"] = new Dictionary<string, object>
             {
-                ["Preferences"] = new Dictionary<string, object> { ["Page"] = 6 }
+                ["Preferences"] = new Dictionary<string, object> { ["Page"] = 7 }
             };
             config["Colour"] = new Dictionary<string, object>
             {

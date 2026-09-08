@@ -225,8 +225,8 @@ class XAudio2Thread :public IXAudio2VoiceCallback {
 	/// Desired length in milliseconds to write ahead of the playback cursor
 	int wanted_latency;
 
-	/// System millisecond timestamp of last playback start, used to calculate playback position
-	std::atomic<ULONGLONG> last_playback_restart{0};
+	/// High-resolution playback origin; the video clock follows this position.
+	std::atomic<std::chrono::steady_clock::time_point> last_playback_restart{};
 
 	/// Start frame corresponding to last_playback_restart
 	std::atomic<int64_t> playback_start_frame{0};
@@ -591,7 +591,7 @@ void XAudio2Thread::Run() {
 				if (cancelled_playback_generation.load(std::memory_order_acquire) >= playback_generation)
 					goto stop_playback;
 				playback_start_frame.store(playback_begin_frame, std::memory_order_release);
-				last_playback_restart.store(GetTickCount64(), std::memory_order_release);
+				last_playback_restart.store(std::chrono::steady_clock::now(), std::memory_order_release);
 				if (FAILED(hr = pSourceVoice->Start()))
 					REPORT_ERROR("Failed starting XAudio2 SourceVoice")
 				if (cancelled_playback_generation.load(std::memory_order_acquire) >= playback_generation)
@@ -794,9 +794,10 @@ bool XAudio2Thread::IsPlaying() {
 int64_t XAudio2Thread::GetCurrentFrame() {
 	CheckError();
 	if (!IsPlaying()) return 0;
-	ULONGLONG milliseconds_elapsed = GetTickCount64() - last_playback_restart.load(std::memory_order_acquire);
+	auto const origin = last_playback_restart.load(std::memory_order_acquire);
+	auto const elapsed = std::chrono::steady_clock::now() - origin;
 	return playback_start_frame.load(std::memory_order_acquire)
-		+ milliseconds_elapsed * provider->GetSampleRate() / 1000;
+		+ static_cast<int64_t>(std::chrono::duration<double>(elapsed).count() * provider->GetSampleRate());
 }
 
 int64_t XAudio2Thread::GetEndFrame() {

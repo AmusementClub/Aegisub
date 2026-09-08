@@ -955,7 +955,13 @@ void VideoDisplay::RenderToolFeedback() {
 void VideoDisplay::OnEraseBackground(wxEraseEvent &) {
 }
 
-void VideoDisplay::OnPaint(wxPaintEvent &) {
+void VideoDisplay::OnPaint(wxPaintEvent&) {
+	perf_trace::VideoUiDurationScope trace("video_display.paint");
+	if (trace.IsActive()) {
+		auto const dirty = GetUpdateRegion().GetBox();
+		trace.SetDetails(dirty.GetWidth(), dirty.GetHeight());
+		perf_trace::ObserveVideoUiDuration("video_display.paint.origin", 0.0, dirty.GetX(), dirty.GetY());
+	}
 	wxPaintDC dc(this);
 	(void)dc;
 	DoRender();
@@ -2558,14 +2564,19 @@ void VideoDisplay::RefreshVideoScale() {
 		UpdateSize();
 }
 
-void VideoDisplay::OnSizeEvent(wxSizeEvent &event) {
+void VideoDisplay::OnSizeEvent(wxSizeEvent& event) {
+	auto const client_size = GetClientSize();
+	perf_trace::VideoUiDurationScope trace("video_display.resize", client_size.x, client_size.y);
+	// Sizer layout can send size events for unchanged children. Avoid discarding
+	// the paused scene and scheduling another buffer swap for those events.
+	if (client_size == last_size_event_client_size && scale_factor == baseViewportScaleFactor)
+		return;
+	last_size_event_client_size = client_size;
 	if (freeSize) {
-		wxSize newVideoSize = GetClientSize() * scale_factor;
+		wxSize newVideoSize = client_size * scale_factor;
 		// Host-owned strip/layout changes resize the canvas without changing the
 		// user's view. Real window resizes retain the historical reset behavior.
-		if (newVideoSize != videoSize
-			&& !internalLayoutResizePending
-			&& internalLayoutResizeDepth == 0) {
+		if (newVideoSize != videoSize && !internalLayoutResizePending && internalLayoutResizeDepth == 0) {
 			contentZoomValue = 1.0;
 			pan_x = 0.0;
 			pan_y = 0.0;

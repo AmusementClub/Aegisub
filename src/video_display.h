@@ -137,6 +137,7 @@ class VideoDisplay final : public wxGLCanvas {
 
 	/// Base viewport before attached-mode content pan/zoom is applied
 	VideoDisplayViewportLayout baseViewport;
+	wxSize last_size_event_client_size = wxDefaultSize;
 
 	/// Screen pixels between the left of the canvas and the left of the video
 	int viewport_left = 0;

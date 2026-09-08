@@ -1517,8 +1517,10 @@ void SkiaAudioDisplay::EmitMiddleSeekOutput(int time_ms, bool commit) {
 	perf_trace::TraceAudioMiddleSeek(commit ? "commit" : "preview", time_ms, frame);
 	if (commit)
 		core.videoController->CommitInteractiveSeekPreviewToTime(time_ms, agi::vfr::EXACT);
-	else
+	else {
+		core.videoController->BeginInteractiveSeekPreview();
 		core.videoController->PreviewToFrameLatest(frame);
+	}
 }
 
 void SkiaAudioDisplay::ScheduleMiddleSeekTimer() {
@@ -1612,7 +1614,7 @@ void SkiaAudioDisplay::OnPlaybackPosition(int position_ms) {
 		return;
 	auto const playback_position_ms = std::max(0, position_ms);
 	bool viewport_changed = false;
-	if (OPT_GET("Audio/Lock Scroll on Cursor")->GetBool() && impl->viewport.IsValid()) {
+	if (!impl->middle_seek_active && OPT_GET("Audio/Lock Scroll on Cursor")->GetBool() && impl->viewport.IsValid()) {
 		perf_trace::AudioUiDurationScope scroll_trace("audio_display.scroll");
 		auto const old_scroll_left = impl->scroll_left;
 		auto const logical_ms_per_pixel = AudioMillisecondsPerLogicalPixel(impl->zoom_level);
@@ -1914,7 +1916,12 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 		if (core.videoController && core.project->VideoProvider()) {
 			auto const time_ms = time_from_x(mouse.x);
 			set_middle_cursor(time_ms);
-			core.videoController->BeginInteractiveSeekPreview();
+			bool const was_playing = core.videoController->IsPlaying();
+			impl->middle_seek_policy.BeginGesture(
+				was_playing,
+				static_cast<int>(std::ceil(3.0 * AudioMillisecondsPerLogicalPixel(impl->zoom_level))));
+			if (was_playing)
+				core.videoController->PrefetchFrame(core.videoController->FrameAtTime(time_ms));
 			impl->middle_seek_active = true;
 			if (auto output = impl->middle_seek_policy.OnMotion(
 				time_ms, NavigationPreviewPolicy::Clock::now(), event.MiddleDown())) {

@@ -31,9 +31,14 @@ public:
 	NavigationPreviewPolicy(NavigationPreviewPolicy&&) = delete;
 	NavigationPreviewPolicy& operator=(NavigationPreviewPolicy&&) = delete;
 
+	/// Start a gesture, optionally treating the initial press as a click until
+	/// motion exceeds drag_threshold in target units. Release always commits.
+	void BeginGesture(bool defer_preview, int threshold = 0);
+
 	/// Register a new navigation preview target.
 	///
-	/// - If `force` is true, emits a Preview output immediately.
+	/// - A deferred initial press waits for motion beyond the drag threshold.
+	/// - Otherwise, `force` emits a Preview output immediately.
 	/// - Otherwise, emits at most once per `min_interval`, coalescing to the latest target.
 	std::optional<Output> OnMotion(int target, TimePoint now, bool force);
 
@@ -55,6 +60,8 @@ private:
 
 	bool has_latest_target = false;
 	int latest_target = 0;
+	bool defer_initial_preview = false;
+	int drag_threshold = 0;
 
 	bool has_last_emit = false;
 	TimePoint last_emit_time{};

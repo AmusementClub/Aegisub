@@ -534,7 +534,7 @@ void VideoController::JumpToFrame(int n) {
 	}
 
 	if (was_playing) {
-		if (!PreparePlayback(resume_mode, frame_n, resume_end_ms)) {
+		if (!PreparePlayback(resume_mode, frame_n, resume_end_ms, true)) {
 			Stop();
 			return;
 		}
@@ -677,7 +677,7 @@ void VideoController::PrevFrame() {
 	StepSingleFrame(-1);
 }
 
-bool VideoController::PreparePlayback(PlaybackMode mode, int start_frame, int range_end_ms) {
+bool VideoController::PreparePlayback(PlaybackMode mode, int start_frame, int range_end_ms, bool keep_audio_playing) {
 	if (!provider || mode == PlaybackMode::None)
 		return false;
 
@@ -698,12 +698,13 @@ bool VideoController::PreparePlayback(PlaybackMode mode, int start_frame, int ra
 		end_frame = provider->GetFrameCount();
 	}
 
-	// Arm the playback-start gate: hold the audio clock until the first
-	// frame of the range is delivered. After a long pause the first read can
-	// stall on cold storage for seconds, and audio running ahead of a frozen
-	// picture desyncs playback for the whole stall.
-	if (core.audioController->IsPlaying())
+	// Start the new audio clock only after its first video frame arrives. An
+	// ongoing playback seek can keep the old audio running during that wait;
+	// ResolvePendingPlaybackStart replaces it at the delivered frame's time.
+	// Starting from pause still waits silently so cold reads cannot desync it.
+	if (!keep_audio_playing && core.audioController->IsPlaying()) {
 		core.audioController->Stop();
+	}
 	playback_uses_audio_authority = false;
 	// Clamp to a frame the provider can actually deliver: PlayLine start
 	// frames extrapolate past the video range for lines timed outside it,
@@ -720,6 +721,12 @@ bool VideoController::PreparePlayback(PlaybackMode mode, int start_frame, int ra
 
 void VideoController::StartPlaybackTimer() {
 	playback_timer->Start(10);
+}
+
+void VideoController::PrefetchFrame(int frame) noexcept {
+	if (!provider || frame < 0 || frame >= provider->GetFrameCount())
+		return;
+	provider->PrefetchFrames(frame, 1);
 }
 
 void VideoController::PrimeNextPlaybackFrame() {

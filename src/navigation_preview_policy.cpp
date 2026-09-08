@@ -1,5 +1,6 @@
 #include "navigation_preview_policy.h"
 
+#include <algorithm>
 #include <utility>
 
 NavigationPreviewPolicy::NavigationPreviewPolicy(std::chrono::milliseconds min_interval)
@@ -7,6 +8,14 @@ NavigationPreviewPolicy::NavigationPreviewPolicy(std::chrono::milliseconds min_i
 }
 
 NavigationPreviewPolicy::~NavigationPreviewPolicy() = default;
+
+void NavigationPreviewPolicy::BeginGesture(bool defer_preview, int threshold) {
+	Cancel();
+	has_latest_target = false;
+	has_last_emit = false;
+	defer_initial_preview = defer_preview;
+	drag_threshold = std::max(0, threshold);
+}
 
 void NavigationPreviewPolicy::ClearPending() {
 	pending_target.reset();
@@ -28,6 +37,19 @@ NavigationPreviewPolicy::Output NavigationPreviewPolicy::Emit(OutputKind kind, i
 }
 
 std::optional<NavigationPreviewPolicy::Output> NavigationPreviewPolicy::OnMotion(int target, TimePoint now, bool force) {
+	if (defer_initial_preview) {
+		if (!has_latest_target) {
+			has_latest_target = true;
+			latest_target = target;
+			return std::nullopt;
+		}
+		auto const delta = static_cast<long long>(target) - latest_target;
+		if (delta >= -drag_threshold && delta <= drag_threshold) {
+			return std::nullopt;
+		}
+		defer_initial_preview = false;
+	}
+
 	if (!has_latest_target) {
 		has_latest_target = true;
 		latest_target = target;
@@ -51,6 +73,7 @@ std::optional<NavigationPreviewPolicy::Output> NavigationPreviewPolicy::OnMotion
 }
 
 NavigationPreviewPolicy::Output NavigationPreviewPolicy::OnRelease(int target, TimePoint now) {
+	defer_initial_preview = false;
 	if (!has_latest_target) {
 		has_latest_target = true;
 		latest_target = target;
@@ -80,6 +103,7 @@ std::optional<NavigationPreviewPolicy::TimePoint> NavigationPreviewPolicy::NextP
 }
 
 void NavigationPreviewPolicy::Cancel() {
+	defer_initial_preview = false;
 	token_source.Supersede();
 	ClearPending();
 }

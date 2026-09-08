@@ -32,6 +32,19 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Initialize Release IPO for all in-tree targets, including static libraries.
+option(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE "Enable link-time optimization for Release builds" ON)
+if(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT _aegisub_ipo_supported OUTPUT _aegisub_ipo_error LANGUAGES C CXX)
+    if(NOT _aegisub_ipo_supported)
+        message(FATAL_ERROR
+            "Release LTO is not supported by this toolchain. "
+            "Set -DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=OFF to disable it.\n"
+            "${_aegisub_ipo_error}")
+    endif()
+endif()
+
 # ------------------------------------------------------------------
 # Code quality: clang-tidy static analysis
 # Automatically enabled when clang-tidy is found in PATH.

@@ -500,9 +500,14 @@ SubsStyledTextEditCtrl::~SubsStyledTextEditCtrl() {
 
 #ifdef __WXMSW__
 WXLRESULT SubsStyledTextEditCtrl::MSWWindowProc(WXUINT message, WXWPARAM wParam, WXLPARAM lParam) {
+	if (message == WM_SIZE) {
+		perf_trace::VideoUiDurationScope trace("subs_edit_stc.resize");
+		return wxStyledTextCtrl::MSWWindowProc(message, wParam, lParam);
+	}
 	if (message != WM_PAINT)
 		return wxStyledTextCtrl::MSWWindowProc(message, wParam, lParam);
 
+	perf_trace::VideoUiDurationScope trace("subs_edit_stc.paint");
 	auto const timing = pending_paint_timing;
 	pending_paint_timing.pending = false;
 	auto const paint_started_ns = timing.pending ? PaintTimingNowNs() : 0;

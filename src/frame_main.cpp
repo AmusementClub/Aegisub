@@ -47,6 +47,7 @@
 #include "compat.h"
 #include "command/command.h"
 #include "selection_controller.h"
+#include "scoped_no_composited.h"
 #include "dialog_detached_video.h"
 #include "dialog_manager.h"
 #include "font_family_catalog_cache.h"
@@ -498,11 +499,21 @@ void FrameMain::InitContents() {
 	};
 
 	StartupLog("Create background panel");
-	contentsPanel = new wxPanel(this, -1, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxCLIP_CHILDREN);
+	{
+#ifdef _WIN32
+		ScopedWxNoComposited no_composited;
+#endif
+		contentsPanel = new wxPanel(this, -1, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxCLIP_CHILDREN);
+	}
 
 	StartupLog("Create subtitles grid");
 	auto ui = context->GetUI();
-	ui.subsGrid = new BaseGrid(contentsPanel, context.get());
+	{
+#ifdef _WIN32
+		ScopedWxNoComposited no_composited;
+#endif
+		ui.subsGrid = new BaseGrid(contentsPanel, context.get());
+	}
 
 	StartupLog("Create subtitle editing box");
 	auto EditBox = new SubsEditBox(contentsPanel, context.get());
@@ -514,11 +525,18 @@ void FrameMain::InitContents() {
 	ToolsSizer->Add(EditBox, 1, wxEXPAND);
 	TopSizer = new wxBoxSizer(wxHORIZONTAL);
 	TopSizer->Add(ToolsSizer, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 5);
-	editGridSplitter = new wxSplitterWindow(contentsPanel, wxID_ANY,
-		wxDefaultPosition, wxDefaultSize, wxSP_NOBORDER);
-	editAreaPanel = new wxPanel(editGridSplitter, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxCLIP_CHILDREN);
+	{
+#ifdef _WIN32
+		ScopedWxNoComposited no_composited;
+#endif
+		editGridSplitter = new wxSplitterWindow(contentsPanel, wxID_ANY,
+												wxDefaultPosition, wxDefaultSize, wxSP_NOBORDER);
+		editAreaPanel = new wxPanel(editGridSplitter, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxCLIP_CHILDREN);
+	}
+#ifndef _WIN32
 	editGridSplitter->SetDoubleBuffered(true);
 	editAreaPanel->SetDoubleBuffered(true);
+#endif
 
 	subtitleCommandToolbar = toolbar::GetOptionToolbarWrapping(
 		editAreaPanel,
@@ -981,11 +999,12 @@ WXLRESULT FrameMain::MSWWindowProc(WXUINT message, WXWPARAM wParam, WXLPARAM lPa
 	}
 
 	if (message == WM_SIZE) {
+		perf_trace::VideoUiDurationScope trace("frame_main.resize", LOWORD(lParam), HIWORD(lParam));
 		WXLRESULT res = wxFrame::MSWWindowProc(message, wParam, lParam);
-		// Invalidate the entire frame after resize to prevent black areas.
-		// With WS_CLIPCHILDREN, newly-exposed gaps between the panel's old
-		// position and the frame's new edge are not repainted by default.
-		Refresh(false);
+		// Repaint exposed frame background without invalidating unchanged child
+		// controls: wxWindow::Refresh also requests RDW_ALLCHILDREN on Windows.
+		::RedrawWindow(reinterpret_cast<HWND>(GetHandle()), nullptr, nullptr,
+					   RDW_INVALIDATE | RDW_ERASE | RDW_NOCHILDREN);
 		return res;
 	}
 

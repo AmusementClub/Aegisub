@@ -747,7 +747,27 @@ void BaseGrid::NotifyTextRasterPolicyChanged() {
 }
 
 void BaseGrid::OnSize(wxSizeEvent &) {
+	auto const size = GetClientSize();
+	auto const previous = last_client_size;
+	last_client_size = size;
 	AdjustScrollbar();
+	if (previous == size)
+		return;
+#ifdef _WIN32
+#ifdef AEGISUB_WITH_SKIA_SUBTITLE_GRID
+	if (CanUseSkiaRenderer()) {
+		Refresh(false);
+		return;
+	}
+#endif
+	if (previous.x > 0 && previous.y == size.y) {
+		// Columns keep their positions on a width-only resize. Include the old
+		// scrollbar and right border, whose pixels become grid content on growth.
+		int const left = std::max(0, std::min(previous.x, size.x) - scrollBar->GetSize().x - 2);
+		RefreshRect(wxRect(left, 0, size.x - left, size.y), false);
+		return;
+	}
+#endif
 	Refresh(false);
 }
 
@@ -1281,16 +1301,18 @@ void BaseGrid::RefreshAfterScroll(int old_y_pos) {
 }
 
 void BaseGrid::AdjustScrollbar() {
+	perf_trace::VideoUiDurationScope trace("subtitle_grid.adjust_scrollbar");
 	wxSize clientSize = GetClientSize();
 	wxSize scrollbarSize = scrollBar->GetSize();
 
-	scrollBar->Freeze();
-	scrollBar->SetSize(clientSize.GetWidth() - scrollbarSize.GetWidth(), 0, scrollbarSize.GetWidth(), clientSize.GetHeight());
+	wxRect const bounds(clientSize.GetWidth() - scrollbarSize.GetWidth(), 0, scrollbarSize.GetWidth(), clientSize.GetHeight());
+	if (scrollBar->GetRect() != bounds)
+		scrollBar->SetSize(bounds);
 
 	if (GetRows() <= 1) {
 		yPos = 0;
-		scrollBar->Enable(false);
-		scrollBar->Thaw();
+		if (scrollBar->IsEnabled())
+			scrollBar->Enable(false);
 		return;
 	}
 
@@ -1302,8 +1324,11 @@ void BaseGrid::AdjustScrollbar() {
 
 	context->GetCore().ass->Properties.scroll_position = yPos = mid(0, yPos, rows - 1);
 
-	scrollBar->SetScrollbar(yPos, drawPerScreen, rows + drawPerScreen - 1, drawPerScreen - 2, true);
-	scrollBar->Thaw();
+	int const range = rows + drawPerScreen - 1;
+	int const page = drawPerScreen - 2;
+	if (scrollBar->GetThumbPosition() != yPos || scrollBar->GetThumbSize() != drawPerScreen ||
+		scrollBar->GetRange() != range || scrollBar->GetPageSize() != page)
+		scrollBar->SetScrollbar(yPos, drawPerScreen, range, page, true);
 }
 
 void BaseGrid::RefreshSubtitleGridRow(int row_index) {

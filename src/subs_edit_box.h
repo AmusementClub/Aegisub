@@ -190,6 +190,9 @@ class SubsEditBox final : public wxPanel {
 	void OnCommentChange(wxCommandEvent &);
 	void OnEffectChange(wxCommandEvent &);
 	void OnSize(wxSizeEvent &event);
+#ifdef __WXMSW__
+	WXLRESULT MSWWindowProc(WXUINT message, WXWPARAM wParam, WXLPARAM lParam) override;
+#endif
 	void OnSplit(wxCommandEvent&);
 	void DoOnSplit(bool show_original);
 

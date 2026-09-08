@@ -49,6 +49,7 @@
 #include "initial_line_state.h"
 #include "options.h"
 #include "perf_trace.h"
+#include "scoped_no_composited.h"
 #include "project.h"
 #include "placeholder_ctrl.h"
 #include "selection_controller.h"
@@ -202,7 +203,7 @@ int ColorDoubleClickIntervalMs() {
 }
 
 SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
-	: wxPanel(parent, -1, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxRAISED_BORDER | wxCLIP_CHILDREN, wxS("SubsEditBox")), c(context), command_session(context->GetCore().ass.get()), undo_timer(GetEventHandler()), visual_tool_text_sync_timer(GetEventHandler()), color_click_timer(GetEventHandler())
+	: c(context), command_session(context->GetCore().ass.get()), undo_timer(GetEventHandler()), visual_tool_text_sync_timer(GetEventHandler()), color_click_timer(GetEventHandler())
 #ifdef WITH_WXSTC
 	  ,
 	  use_stc(OPT_GET("Subtitle/Use STC")->GetBool())
@@ -210,7 +211,15 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 {
 	using std::bind;
 
+	{
+#ifdef _WIN32
+		ScopedWxNoComposited no_composited;
+#endif
+		Create(parent, -1, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxRAISED_BORDER | wxCLIP_CHILDREN, wxS("SubsEditBox"));
+	}
+#ifndef _WIN32
 	SetDoubleBuffered(true);
+#endif
 
 	// Top controls
 	top_sizer = new wxBoxSizer(wxHORIZONTAL);
@@ -1297,6 +1306,7 @@ void SubsEditBox::SetDurationField() {
 }
 
 void SubsEditBox::OnSize(wxSizeEvent &evt) {
+	perf_trace::VideoUiDurationScope trace("subs_edit_box.resize.layout");
 	int availableWidth = GetVirtualSize().GetWidth();
 	int midMin = middle_left_sizer->GetMinSize().GetWidth();
 	int botMin = middle_right_sizer->GetMinSize().GetWidth();
@@ -1318,6 +1328,16 @@ void SubsEditBox::OnSize(wxSizeEvent &evt) {
 
 	evt.Skip();
 }
+
+#ifdef __WXMSW__
+WXLRESULT SubsEditBox::MSWWindowProc(WXUINT message, WXWPARAM wParam, WXLPARAM lParam) {
+	if (message == WM_SIZE) {
+		perf_trace::VideoUiDurationScope trace("subs_edit_box.resize.native");
+		return wxPanel::MSWWindowProc(message, wParam, lParam);
+	}
+	return wxPanel::MSWWindowProc(message, wParam, lParam);
+}
+#endif
 
 void SubsEditBox::OnFrameTimeRadio(wxCommandEvent &event) {
 	event.Skip();

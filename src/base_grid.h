@@ -82,6 +82,7 @@ class BaseGrid final : public wxWindow {
 	std::vector<int> drag_selection_base_rows;
 	wxFont font;            ///< Current grid font
 	wxScrollBar *scrollBar; ///< The grid's scrollbar
+	wxSize last_client_size = wxDefaultSize;
 	SubtitleTimeDisplayMode display_mode = SubtitleTimeDisplayMode::Ass;
 
 	/// Row from which the selection shrinks/grows from when selecting via the

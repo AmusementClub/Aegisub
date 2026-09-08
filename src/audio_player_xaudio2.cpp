@@ -30,6 +30,7 @@
 #ifdef WITH_XAUDIO2
 #include "include/aegisub/audio_player.h"
 
+#include "audio_player_xaudio2_buffer_slots.h"
 #include "options.h"
 #include "perf_trace.h"
 
@@ -224,9 +225,6 @@ class XAudio2Thread :public IXAudio2VoiceCallback {
 	/// Desired length in milliseconds to write ahead of the playback cursor
 	int wanted_latency;
 
-	/// Multiplier for WantedLatency to get total buffer length
-	int buffer_length;
-
 	/// System millisecond timestamp of last playback start, used to calculate playback position
 	std::atomic<ULONGLONG> last_playback_restart{0};
 
@@ -236,8 +234,8 @@ class XAudio2Thread :public IXAudio2VoiceCallback {
 	/// Audio provider to take sample data from
 	agi::AudioProvider* provider;
 
-	/// Buffer occupied indicator
-	std::unique_ptr<std::atomic_bool[]> buffer_occupied;
+	/// Two banks retain flushed audio until its callbacks release the slots.
+	XAudio2BufferSlots buffer_slots;
 
 	/// HRESULT supplied by the most recent OnVoiceError callback
 	std::atomic<HRESULT> voice_error{S_OK};
@@ -260,8 +258,9 @@ public:
 	void STDMETHODCALLTYPE OnBufferStart(void* pBufferContext) override {}
 	void STDMETHODCALLTYPE OnBufferEnd(void* pBufferContext) override {
 		intptr_t i = reinterpret_cast<intptr_t>(pBufferContext);
-		if (i >= 0 && i < buffer_length)
-			buffer_occupied[i].store(false, std::memory_order_release);
+		if (i >= 0 && i < buffer_slots.SlotCount()) {
+			buffer_slots.Release(static_cast<int>(i));
+		}
 		SetEvent(event_buffer_end);
 	}
 	void STDMETHODCALLTYPE OnLoopEnd(void* pBufferContext) override {}
@@ -361,6 +360,9 @@ void XAudio2Thread::Run() {
 	wfx.nBlockAlign = wfx.nChannels * wfx.wBitsPerSample / 8;
 	wfx.nAvgBytesPerSec = wfx.nSamplesPerSec * wfx.nBlockAlign;
 
+	// The source voice must be destroyed before storage still referenced by
+	// flushed buffers is released, including on error/early-return paths.
+	std::vector<std::vector<BYTE>> buff(buffer_slots.SlotCount());
 	IXAudio2SourceVoice* source_voice_raw = nullptr;
 	if (FAILED(hr = pXAudio2->CreateSourceVoice(&source_voice_raw, &wfx, 0, 2, this))) {
 		if (hr == XAUDIO2_E_INVALID_CALL) {
@@ -418,7 +420,6 @@ void XAudio2Thread::Run() {
 	uint64_t playback_generation = 0;
 	const int wanted_frames = std::max(1, wanted_latency * static_cast<int>(wfx.nSamplesPerSec) / 1000);
 	const DWORD wanted_latency_bytes = wanted_frames * wfx.nBlockAlign;
-	std::vector<std::vector<BYTE> > buff(buffer_length);
 	for (auto& i : buff)
 		i.resize(wanted_latency_bytes);
 
@@ -480,15 +481,18 @@ void XAudio2Thread::Run() {
 
 		switch (wait_result) {
 		case WAIT_OBJECT_0 + EventStartPlayback:
-			// Stop and flush the old queue before preparing the new request. Occupied
-			// slots are released only by OnBufferEnd, so a late callback cannot make
-			// a newly submitted slot reusable.
+			// Old slots stay owned by XAudio2 until their asynchronous OnBufferEnd
+			// callbacks arrive. Prepare this request in the other bank so a normal
+			// seek need not block the UI for that callback/engine processing pass.
+			emit_audio_output("restart_begin");
 			ResetEvent(is_playing);
 			if (FAILED(hr = pSourceVoice->Stop()))
 				REPORT_ERROR("Failed stopping XAudio2 SourceVoice before playback")
 			if (FAILED(hr = pSourceVoice->FlushSourceBuffers()))
 				REPORT_ERROR("Failed flushing XAudio2 SourceVoice before playback")
 			ResetEvent(event_stream_end);
+			buffer_slots.BeginPlayback();
+			emit_audio_output("restart_flushed");
 
 			playback_begin_frame = start_frame.load(std::memory_order_acquire);
 			next_input_frame = playback_begin_frame;
@@ -534,7 +538,7 @@ void XAudio2Thread::Run() {
 				REPORT_ERROR("Failed setting XAudio2 SourceVoice volume")
 			break;
 
-		case WAIT_OBJECT_0 + EventBufferEnd:
+		case WAIT_OBJECT_0 + EventBufferEnd: {
 			// Auto-reset events may coalesce callbacks; scanning every atomic slot
 			// recovers all completed buffers in one pass.
 			emit_audio_output("buffer_end", -1, -1, -1.0, true);
@@ -542,12 +546,18 @@ void XAudio2Thread::Run() {
 			if (!playback_should_be_running)
 				break;
 
-			for (int i = 0; i < buffer_length; ++i) {
+			// A flush may still be reflected in GetState until its callbacks run.
+			// Respect the API's queue limit even with a maximum-sized old bank.
+			XAUDIO2_VOICE_STATE queue_state{};
+			pSourceVoice->GetState(&queue_state, XAUDIO2_VOICE_NOSAMPLESPLAYED);
+			for (UINT32 queued = queue_state.BuffersQueued; queued < XAUDIO2_MAX_QUEUED_BUFFERS; ++queued) {
 				int64_t const remaining_frames = playback_end_frame - next_input_frame;
 				if (remaining_frames <= 0)
 					break;
-				if (buffer_occupied[i].exchange(true, std::memory_order_acq_rel))
-					continue;
+				int const i = buffer_slots.TryAcquire();
+				if (i < 0) {
+					break;
+				}
 
 				int const fill_len = static_cast<int>(std::min<int64_t>(remaining_frames, wanted_frames));
 				auto const fill_started = trace_audio_output
@@ -569,7 +579,7 @@ void XAudio2Thread::Run() {
 				xbf.pAudioData = buff[i].data();
 				xbf.pContext = reinterpret_cast<void*>(static_cast<intptr_t>(i));
 				if (FAILED(hr = pSourceVoice->SubmitSourceBuffer(&xbf))) {
-					buffer_occupied[i].store(false, std::memory_order_release);
+					buffer_slots.Release(i);
 					REPORT_ERROR("Failed submitting XAudio2 source buffer")
 				}
 				next_input_frame = buffer_end_frame;
@@ -592,7 +602,11 @@ void XAudio2Thread::Run() {
 				completed_playback_generation.store(playback_generation, std::memory_order_release);
 				SetEvent(playback_request_done);
 			}
+			else if (playback_start_pending) {
+				emit_audio_output("start_waiting_for_buffer");
+			}
 			break;
+		}
 
 		case WAIT_OBJECT_0 + EventStreamEnd: {
 			XAUDIO2_VOICE_STATE voice_state{};
@@ -671,13 +685,9 @@ XAudio2Thread::XAudio2Thread(agi::AudioProvider* provider, int WantedLatency, in
 	, playback_request_done(CreateEvent(0, FALSE, FALSE, 0))
 	, error_happened(CreateEvent(0, TRUE, FALSE, 0))
 	, wanted_latency(WantedLatency)
-	, buffer_length(BufferLength < XAUDIO2_MAX_QUEUED_BUFFERS ? BufferLength : XAUDIO2_MAX_QUEUED_BUFFERS)
 	, provider(provider)
-	, buffer_occupied(std::make_unique<std::atomic_bool[]>(buffer_length))
+	, buffer_slots(std::min(BufferLength, XAUDIO2_MAX_QUEUED_BUFFERS))
 {
-	for (int i = 0; i < buffer_length; ++i)
-		buffer_occupied[i].store(false, std::memory_order_relaxed);
-
 	if (!(thread_handle = (HANDLE)_beginthreadex(0, 0, ThreadProc, this, 0, 0))) {
 		throw AudioPlayerOpenError("Failed creating playback thread in XAudio2Player. This is bad.");
 	}

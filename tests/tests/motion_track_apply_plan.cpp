@@ -2,6 +2,7 @@
 
 #include "../../src/motion_track/apply_plan.h"
 #include "../../src/motion_track/types.h"
+#include "../../src/perspective_ass_state.h"
 
 #include <ass_dialogue.h>
 #include <ass_file.h>
@@ -17,6 +18,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <numbers>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -553,8 +555,6 @@ TEST(motion_track_apply_plan, homography_model_is_hard_error) {
 }
 
 namespace {
-constexpr double kPi = 3.14159265358979323846;
-
 void FillPose(TrackSample& s, double cx, double cy, double theta_cw,
 			  double scale) {
 	s.status = TrackStatus::Ok;
@@ -567,18 +567,168 @@ void FillPose(TrackSample& s, double cx, double cy, double theta_cw,
 }
 }
 
-TEST(motion_track_apply_plan, similarity_compact_mode_is_rejected) {
+TEST(motion_track_apply_plan, similarity_compact_emits_move_and_transform) {
 	Fixture fx;
-	auto *line = fx.AddLine(0, 2000, "x");
+	auto *line = fx.AddLine(0, 1950, R"({\pos(0,0)}x)");
 	auto input = BaseInput();
 	input.model = TrackModel::Similarity;
 	input.options.mode = ApplyMode::Compact;
-	input.samples = LinearSamples(0, 29, 0, 0, 1.0, 0.0);
+	input.options.compact_epsilon = 100.0;
+	input.origin_center_x = 0;
+	input.origin_center_y = 0;
+	input.direction_domain = FrameInterval{.first = 0, .last = 19};
+	input.decode_interval = FrameInterval{.first = 0, .last = 19};
+	input.video_frame_count = 20;
+
+	std::vector<TrackSample> samples;
+	for (int f = 0; f <= 19; ++f) {
+		TrackSample s;
+		s.frame = f;
+		FillPose(s, 2.0 * f, 0.0, 0.5 * f * std::numbers::pi / 180.0,
+				 1.0 + 0.01 * f);
+		samples.push_back(s);
+	}
+	input.samples = std::move(samples);
 
 	auto plan = BuildApplyPlan(fx.file, {line}, input);
-	EXPECT_EQ(ApplyPlanStatus::UnsupportedMode, plan.status);
-	EXPECT_FALSE(plan.has_mutations());
-	EXPECT_FALSE(plan.message.empty());
+	ASSERT_EQ(ApplyPlanStatus::Ok, plan.status);
+	ASSERT_EQ(1u, plan.event_count);
+	ASSERT_EQ(1u, plan.lines.size());
+	ASSERT_EQ(1u, plan.lines[0].parts.size());
+	auto const& text = plan.lines[0].parts[0].text;
+	TagPos position;
+	ASSERT_TRUE(ParseTag(text, position));
+	EXPECT_TRUE(position.is_move);
+	EXPECT_DOUBLE_EQ(0.0, position.x1);
+	EXPECT_DOUBLE_EQ(0.0, position.y1);
+	EXPECT_DOUBLE_EQ(38.0, position.x2);
+	EXPECT_DOUBLE_EQ(0.0, position.y2);
+	EXPECT_EQ(0, position.t1);
+	EXPECT_EQ(1900, position.t2);
+	EXPECT_NE(std::string::npos, text.find(R"(\t(0,1900,\frz-9.50\fscx119.00\fscy119.00))"));
+	EXPECT_EQ(std::string::npos, text.find(R"(\t(0,1900,\frz(-9.50)))"));
+	AssDialogue emitted;
+	emitted.Start = 0;
+	emitted.End = 1950;
+	emitted.Text = text;
+	for (int time : {0, 950, 1900}) {
+		auto const state = perspective::EvaluateEffectiveAssState({
+			&fx.file, &emitted, {1920.0, 1080.0}, time});
+		ASSERT_TRUE(state) << perspective::DescribeAssStateError(state.error);
+		EXPECT_NEAR(-0.005 * time, state.value.transform.rotation_z, 1.0e-6);
+		EXPECT_NEAR(100.0 + 0.01 * time, state.value.transform.scale_x,
+					1.0e-6);
+		EXPECT_NEAR(100.0 + 0.01 * time, state.value.transform.scale_y,
+					1.0e-6);
+	}
+}
+
+TEST(motion_track_apply_plan, similarity_compact_unwraps_rotation_short_way) {
+	Fixture fx;
+	auto *line = fx.AddLine(0, 1000, R"({\pos(0,0)}x)");
+	auto input = BaseInput();
+	input.model = TrackModel::Similarity;
+	input.options.mode = ApplyMode::Compact;
+	input.options.compact_epsilon = 100.0;
+	input.origin_center_x = 0;
+	input.origin_center_y = 0;
+	input.direction_domain = FrameInterval{.first = 0, .last = 9};
+	input.decode_interval = FrameInterval{.first = 0, .last = 9};
+	input.video_frame_count = 10;
+
+	std::vector<TrackSample> samples;
+	for (int f = 0; f <= 9; ++f) {
+		TrackSample s;
+		s.frame = f;
+		// The raw atan2 channel crosses -180/180; Compact must not animate
+		// the long way around the circle.
+		FillPose(s, 0.0, 0.0,
+				 (179.0 + 0.5 * f) * std::numbers::pi / 180.0, 1.0);
+		samples.push_back(s);
+	}
+	input.samples = std::move(samples);
+
+	auto plan = BuildApplyPlan(fx.file, {line}, input);
+	ASSERT_EQ(ApplyPlanStatus::Ok, plan.status);
+	ASSERT_EQ(1u, plan.event_count);
+	auto const& text = plan.lines[0].parts[0].text;
+	// 179 -> 183 degrees is represented as a +4 degree interpolation, not
+	// a -356 degree interpolation.
+	EXPECT_NE(std::string::npos, text.find(R"(\t(0,900,\frz-183.50))")) << text;
+}
+
+TEST(motion_track_apply_plan, similarity_compact_adjusts_pose_at_segment_start) {
+	Fixture fx;
+	auto *line = fx.AddLine(0, 500, R"({\pos(0,0)}x)");
+	auto input = BaseInput();
+	input.model = TrackModel::Similarity;
+	input.options.mode = ApplyMode::Compact;
+	input.options.compact_epsilon = 0.01;
+	input.origin_center_x = 0;
+	input.origin_center_y = 0;
+	input.direction_domain = FrameInterval{.first = 0, .last = 4};
+	input.decode_interval = FrameInterval{.first = 0, .last = 4};
+	input.video_frame_count = 5;
+
+	std::vector<TrackSample> samples;
+	for (int f = 0; f <= 4; ++f) {
+		TrackSample s;
+		s.frame = f;
+		FillPose(s, f * f * 10.0, 0.0, f * std::numbers::pi / 18.0,
+				 1.0);
+		samples.push_back(s);
+	}
+	input.samples = std::move(samples);
+
+	auto plan = BuildApplyPlan(fx.file, {line}, input);
+	ASSERT_EQ(ApplyPlanStatus::Ok, plan.status);
+	ASSERT_GE(plan.lines[0].parts.size(), 2u);
+	bool found_segment_start_pose = false;
+	for (auto const& part : plan.lines[0].parts) {
+		if (!part.covered || part.start_ms <= 0)
+			continue;
+		AssDialogue emitted;
+		emitted.Start = part.start_ms;
+		emitted.End = part.end_ms;
+		emitted.Text = part.text;
+		auto const state = perspective::EvaluateEffectiveAssState({
+			&fx.file, &emitted, {1920.0, 1080.0}, part.start_ms});
+		ASSERT_TRUE(state) << perspective::DescribeAssStateError(state.error);
+		EXPECT_NEAR(-0.1 * part.start_ms,
+					state.value.transform.rotation_z, 1.0e-6);
+		found_segment_start_pose = true;
+	}
+	EXPECT_TRUE(found_segment_start_pose) << plan.lines[0].parts[1].text;
+}
+
+TEST(motion_track_apply_plan, similarity_compact_refines_pose_in_timecode_space) {
+	Fixture fx;
+	auto *line = fx.AddLine(0, 450, R"({\pos(0,0)}x)");
+	auto input = BaseInput();
+	input.model = TrackModel::Similarity;
+	input.options.mode = ApplyMode::Compact;
+	input.options.compact_epsilon = 100.0;
+	input.origin_center_x = 0;
+	input.origin_center_y = 0;
+	input.direction_domain = FrameInterval{.first = 0, .last = 2};
+	input.decode_interval = FrameInterval{.first = 0, .last = 2};
+	input.video_frame_count = 3;
+	input.timecodes = agi::vfr::Framerate({0, 100, 400, 500});
+
+	std::vector<TrackSample> samples;
+	for (int f = 0; f <= 2; ++f) {
+		TrackSample s;
+		s.frame = f;
+		FillPose(s, 0.0, 0.0, f * 10.0 * std::numbers::pi / 180.0,
+				 1.0);
+		samples.push_back(s);
+	}
+	input.samples = std::move(samples);
+
+	auto plan = BuildApplyPlan(fx.file, {line}, input);
+	ASSERT_EQ(ApplyPlanStatus::Ok, plan.status);
+	ASSERT_EQ(2u, plan.event_count);
+	ASSERT_EQ(2u, plan.lines[0].parts.size());
 }
 
 TEST(motion_track_apply_plan, similarity_exact_emits_full_transform_tags) {
@@ -594,7 +744,7 @@ TEST(motion_track_apply_plan, similarity_exact_emits_full_transform_tags) {
 	for (int f = 0; f <= 19; ++f) {
 		TrackSample s;
 		s.frame = f;
-		FillPose(s, 120.0, 100.0, kPi / 2, 1.05);
+		FillPose(s, 120.0, 100.0, std::numbers::pi / 2, 1.05);
 		samples.push_back(s);
 	}
 	input.samples = samples;
@@ -632,7 +782,7 @@ TEST(motion_track_apply_plan, similarity_exact_composes_style_scale_and_angle) {
 	for (int f = 0; f <= 19; ++f) {
 		TrackSample s;
 		s.frame = f;
-		FillPose(s, 100.0, 100.0, kPi / 6.0, 0.5); // 30 deg cw, 50%
+		FillPose(s, 100.0, 100.0, std::numbers::pi / 6.0, 0.5); // 30 deg cw, 50%
 		samples.push_back(s);
 	}
 	input.samples = samples;
@@ -663,7 +813,7 @@ TEST(motion_track_apply_plan, similarity_exact_splits_parts_on_pose_change) {
 		if (f < 10)
 			FillPose(s, 10.0, 0.0, 0.0, 1.0);
 		else
-			FillPose(s, 20.0, 0.0, kPi / 12.0, 1.1);
+			FillPose(s, 20.0, 0.0, std::numbers::pi / 12.0, 1.1);
 		samples.push_back(s);
 	}
 	input.samples = samples;
@@ -1295,7 +1445,7 @@ TEST(motion_track_apply_plan, similarity_inline_fr_absorbed_and_transforms_stay_
 	for (int f = 0; f <= 19; ++f) {
 		TrackSample s;
 		s.frame = f;
-		FillPose(s, 0.0, 0.0, kPi / 18.0, 1.0); // 10 deg CW tracked rotation
+		FillPose(s, 0.0, 0.0, std::numbers::pi / 18.0, 1.0); // 10 deg CW tracked rotation
 		samples.push_back(s);
 	}
 	input.samples = samples;

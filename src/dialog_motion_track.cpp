@@ -153,7 +153,7 @@ DialogMotionTrack::DialogMotionTrack(agi::Context *c)
 	model->SetSelection(std::clamp(
 		int(OPT_GET("Tool/Motion Track/Model")->GetInt()), 0, 1));
 	model->SetToolTip(_("Similarity tracks rotation and uniform scale too; "
-						"Apply needs Exact mode"));
+						"Compact uses \\move and \\t for the pose"));
 	track_grid->Add(model, 1, wxEXPAND);
 
 	track_grid->Add(new wxStaticText(track_box, -1, _("Template refresh")),
@@ -951,8 +951,8 @@ void DialogMotionTrack::RefreshButtons() {
 }
 
 void DialogMotionTrack::UpdateApplyOptionAvailability() {
-	// Growth compensation only exists in similarity Exact applies; leaving
-	// the checkbox enabled there would silently do nothing.
+	// Growth compensation is currently emitted for static similarity poses;
+	// Compact's animated transform does not rewrite these style dimensions.
 	bool const similarity = model->GetSelection() == 1;
 	bool const exact = apply_mode->GetSelection() == 1;
 	growth->Enable(similarity && exact);

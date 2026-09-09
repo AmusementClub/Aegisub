@@ -740,6 +740,11 @@ struct ResolvedPoint {
 };
 
 std::string FormatCoord(double v, int decimals) {
+	// Avoid serializing a rounded value as "-0"; ASS accepts it, but it is
+	// noisy and can make generated motion tags needlessly hard to inspect.
+	double const quantum = std::pow(10.0, -std::max(0, decimals));
+	if (std::abs(v) < quantum * 0.5)
+		v = 0.0;
 	char buf[64];
 	std::snprintf(buf, sizeof(buf), "%.*f", decimals, v);
 	return buf;
@@ -942,6 +947,136 @@ struct FitPiece {
 	double x0 = 0.0, y0 = 0.0, x1 = 0.0, y1 = 0.0;
 };
 
+// ASS transforms interpolate scalar tag values, so a Compact similarity
+// segment needs the pose channels to be close to their own linear
+// interpolation as well as the position channels fitted by FitRunPieces.
+// The tolerances are intentionally tied to the two-decimal values emitted
+// below: they suppress tracker noise without making a visibly curved pose
+// look linear.
+constexpr double kCompactPoseAngleEpsilon = 0.05;
+constexpr double kCompactPoseScaleEpsilon = 0.05;
+
+double InterpolateByTime(double a, double b, int time_a, int time_b,
+						 int time) {
+	if (time_b <= time_a) {
+		return a;
+	}
+	double const u = std::clamp(
+		static_cast<double>(time - time_a) /
+			static_cast<double>(time_b - time_a),
+		0.0, 1.0);
+	return a + ((b - a) * u);
+}
+
+double AngleDistance(double a, double b) {
+	double d = std::fmod(a - b, 360.0);
+	if (d > 180.0) {
+		d -= 360.0;
+	}
+	else if (d < -180.0) {
+		d += 360.0;
+	}
+	return std::abs(d);
+}
+
+// Unwrap the emitted angle sequence before Compact fitting. ASS renders
+// angles modulo 360, but a raw -179 -> 179 pair would otherwise make a
+// transform take the long way around.
+void UnwrapCompactAngles(std::vector<ResolvedPoint>& points) {
+	if (points.size() < 2) {
+		return;
+	}
+	for (size_t i = 1; i < points.size(); ++i) {
+		double delta = points[i].rot_deg - points[i - 1].rot_deg;
+		while (delta > 180.0) {
+			points[i].rot_deg -= 360.0;
+			delta -= 360.0;
+		}
+		while (delta < -180.0) {
+			points[i].rot_deg += 360.0;
+			delta += 360.0;
+		}
+	}
+}
+
+// Refine the position-derived Compact pieces at pose curvature points. The
+// split preserves the already-fitted position line, while the transform
+// endpoints come from the actual tracked samples at the new knot.
+std::vector<FitPiece> RefineSimilarityPieces(
+	std::vector<ResolvedPoint> const& points,
+	std::vector<FitPiece> const& source,
+	agi::vfr::Framerate const& timecodes) {
+	std::vector<FitPiece> refined;
+	for (auto const& initial : source) {
+		std::vector<FitPiece> pending{initial};
+		while (!pending.empty()) {
+			FitPiece piece = pending.back();
+			pending.pop_back();
+			if (piece.i1 <= piece.i0 + 1) {
+				refined.push_back(piece);
+				continue;
+			}
+
+			ResolvedPoint const& first = points[piece.i0];
+			ResolvedPoint const& last = points[piece.i1];
+			int const first_time = timecodes.TimeAtFrame(first.frame);
+			int const last_time = timecodes.TimeAtFrame(last.frame);
+			size_t worst = piece.i0;
+			double worst_error = 0.0;
+			for (size_t i = piece.i0 + 1; i < piece.i1; ++i) {
+				ResolvedPoint const& sample = points[i];
+				int const sample_time = timecodes.TimeAtFrame(sample.frame);
+				double const expected_angle = InterpolateByTime(
+					first.rot_deg, last.rot_deg, first_time, last_time,
+					sample_time);
+				double const expected_x = InterpolateByTime(
+					first.scale_pct_x, last.scale_pct_x, first_time,
+					last_time, sample_time);
+				double const expected_y = InterpolateByTime(
+					first.scale_pct_y, last.scale_pct_y, first_time,
+					last_time, sample_time);
+				double const angle_error =
+					AngleDistance(sample.rot_deg, expected_angle) /
+					kCompactPoseAngleEpsilon;
+				double const scale_x_error =
+					std::abs(sample.scale_pct_x - expected_x) /
+					kCompactPoseScaleEpsilon;
+				double const scale_y_error =
+					std::abs(sample.scale_pct_y - expected_y) /
+					kCompactPoseScaleEpsilon;
+				double const error =
+					std::max({angle_error, scale_x_error, scale_y_error});
+				if (error > worst_error) {
+					worst_error = error;
+					worst = i;
+				}
+			}
+			if (worst_error <= 1.0) {
+				refined.push_back(piece);
+				continue;
+			}
+
+			double const u = first.frame == last.frame
+								 ? 0.0
+								 : static_cast<double>(
+									   points[worst].frame - first.frame) /
+									   static_cast<double>(last.frame - first.frame);
+			FitPiece left{piece};
+			left.i1 = worst;
+			left.x1 = piece.x0 + ((piece.x1 - piece.x0) * u);
+			left.y1 = piece.y0 + ((piece.y1 - piece.y0) * u);
+			FitPiece right{piece};
+			right.i0 = worst;
+			right.x0 = left.x1;
+			right.y0 = left.y1;
+			// LIFO keeps the final vector in ascending time order.
+			pending.push_back(right);
+			pending.push_back(left);
+		}
+	}
+	return refined;
+}
+
 // Solves the continuous piecewise-linear least-squares fit for one axis.
 // `knots` are ascending sample indices; the unknowns are the knot values, the
 // basis functions are the hats over adjacent knot frames, so the normal
@@ -1137,11 +1272,6 @@ MotionTrackApplyPlan BuildApplyPlan(
 		plan.status = ApplyPlanStatus::UnsupportedModel;
 		plan.message = "only Translation and Similarity trajectories can be "
 					   "applied";
-		return plan;
-	}
-	if (input.model == TrackModel::Similarity && input.options.mode != ApplyMode::Exact) {
-		plan.status = ApplyPlanStatus::UnsupportedMode;
-		plan.message = "similarity trajectories support Exact apply mode only";
 		return plan;
 	}
 	if (input.video_frame_count <= 0) {
@@ -1436,6 +1566,9 @@ MotionTrackApplyPlan BuildApplyPlan(
 				}
 			}
 		}
+		if (input.model == TrackModel::Similarity &&
+			input.options.mode == ApplyMode::Compact)
+			UnwrapCompactAngles(points);
 
 		std::vector<FitPiece> pieces;
 		if (input.options.mode == ApplyMode::Exact) {
@@ -1492,6 +1625,8 @@ MotionTrackApplyPlan BuildApplyPlan(
 							  std::make_move_iterator(run_pieces.begin()),
 							  std::make_move_iterator(run_pieces.end()));
 			}
+			if (input.model == TrackModel::Similarity)
+				pieces = RefineSimilarityPieces(points, pieces, input.timecodes);
 		}
 
 		// Assemble parts: optional preserved prefix, covered pieces, optional
@@ -1522,6 +1657,103 @@ MotionTrackApplyPlan BuildApplyPlan(
 			part.start_ms = std::clamp(part.start_ms, cursor, dom_end_ms);
 			part.end_ms = std::clamp(part.end_ms, part.start_ms, dom_end_ms);
 			cursor = part.end_ms;
+
+			if (input.model == TrackModel::Similarity &&
+				input.options.mode == ApplyMode::Compact) {
+				// Compact similarity keeps the fitted position in one event and
+				// uses ASS's transform interpolation for the pose channels. The
+				// static values establish the pose at the event start; the
+				// transform then reaches the next knot at the same time as the
+				// \move window.
+				ResolvedPoint const& first = points[piece.i0];
+				ResolvedPoint const& last = points[piece.i1];
+				int const ta = input.timecodes.TimeAtFrame(first.frame);
+				int const tb = input.timecodes.TimeAtFrame(last.frame);
+				int const dur = part.end_ms - part.start_ms;
+				int const t1 = std::clamp(
+					ta - part.start_ms, 0, std::max(0, dur - 1));
+				int const t2 = std::clamp(
+					tb - part.start_ms, t1 + 1, std::max(t1 + 1, dur));
+				auto const rounded2 = [](double v) {
+					return std::round(v * 100.0) / 100.0;
+				};
+				// The preceding part owns the knot's frame, so this event can
+				// start after ta. Rebase every channel onto its actual start.
+				double const start_rot = InterpolateByTime(
+					first.rot_deg, last.rot_deg, ta, tb, part.start_ms);
+				double const start_scale_x = InterpolateByTime(
+					first.scale_pct_x, last.scale_pct_x, ta, tb, part.start_ms);
+				double const start_scale_y = InterpolateByTime(
+					first.scale_pct_y, last.scale_pct_y, ta, tb, part.start_ms);
+				bool const rotation_changed =
+					rounded2(start_rot) != rounded2(last.rot_deg);
+				bool const scale_changed =
+					rounded2(start_scale_x) != rounded2(last.scale_pct_x) ||
+					rounded2(start_scale_y) != rounded2(last.scale_pct_y);
+				bool const emit_rotation =
+					inline_frz || rounded2(start_rot) != rounded2(style_angle);
+				bool const emit_scale =
+					inline_scale ||
+					rounded2(start_scale_x) != rounded2(style_scale_x) ||
+					rounded2(start_scale_y) != rounded2(style_scale_y);
+
+				int const dec = input.options.position_decimals;
+				double const ex0 = InterpolateByTime(
+					piece.x0, piece.x1, ta, tb, part.start_ms);
+				double const ey0 = InterpolateByTime(
+					piece.y0, piece.y1, ta, tb, part.start_ms);
+				double const ex1 = piece.x1;
+				double const ey1 = piece.y1;
+				std::string position_tag;
+				if (std::round(ex0) == std::round(ex1) &&
+					std::round(ey0) == std::round(ey1)) {
+					position_tag = "\\pos(" + FormatCoord(ex0, dec) + "," +
+								   FormatCoord(ey0, dec) + ")";
+				}
+				else {
+					position_tag = "\\move(" + FormatCoord(ex0, dec) + "," +
+								   FormatCoord(ey0, dec) + "," + FormatCoord(ex1, dec) +
+								   "," + FormatCoord(ey1, dec) + "," + std::to_string(t1) +
+								   "," + std::to_string(t2) + ")";
+				}
+
+				std::string static_transforms;
+				if (emit_rotation)
+					static_transforms += "\\frz(" + FormatCoord(start_rot, 2) + ")";
+				if (emit_scale)
+					static_transforms += "\\fscx(" +
+										 FormatCoord(start_scale_x, 2) + ")\\fscy(" +
+										 FormatCoord(start_scale_y, 2) + ")";
+
+				std::string animated_transforms;
+				if ((rotation_changed || scale_changed) && t2 > t1) {
+					// libass ends the transform at the first ')', so nested
+					// scalar tags must use their unparenthesized spelling.
+					animated_transforms = "\\t(" + std::to_string(t1) + "," +
+										  std::to_string(t2) + ",";
+					if (rotation_changed)
+						animated_transforms += "\\frz" +
+											   FormatCoord(last.rot_deg, 2);
+					if (scale_changed)
+						animated_transforms += "\\fscx" +
+											   FormatCoord(last.scale_pct_x, 2) + "\\fscy" +
+											   FormatCoord(last.scale_pct_y, 2);
+					animated_transforms += ")";
+				}
+
+				part.text = ReplaceTagsDropping(line->Text, position_tag, true,
+												true);
+				if (!static_transforms.empty() || !animated_transforms.empty())
+					part.text = AppendTagToFirstBlock(
+						part.text, static_transforms + animated_transforms);
+				part.covered = true;
+				part.x0 = ex0;
+				part.y0 = ey0;
+				part.x1 = ex1;
+				part.y1 = ey1;
+				pl.parts.push_back(std::move(part));
+				continue;
+			}
 
 			if (input.model == TrackModel::Similarity) {
 				// Exact parts are static by construction: one constant pose

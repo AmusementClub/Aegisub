@@ -6,9 +6,10 @@
 // mutations on any uncovered frame), interior Failed gaps hold the previous
 // Ok pose only when bounded by Ok on both sides in time-ascending order,
 // out-of-domain prefixes/suffixes are preserved verbatim, Comment lines are
-// skipped. Translation supports Exact and Compact; Similarity supports Exact
-// only (per-part \pos plus \frz/\fscx/\fscy composed with the style base);
-// other models are hard errors. In Exact mode, adjacent covered parts whose
+// skipped. Translation and Similarity support Exact and Compact. Similarity
+// Compact uses \move for the fitted position and \t for the fitted
+// \frz/\fscx/\fscy channels; Exact writes one static pose per part. In Exact
+// mode, adjacent covered parts whose
 // emitted text is identical (e.g. a pose held through a Failed gap that
 // matches the tracked pose) merge into one event that renders the same at
 // every frame time.
@@ -162,7 +163,7 @@ enum class ApplyPlanStatus {
 	NeedsConfirmation,  // plan is complete; it would create >100 events
 	IncompleteCoverage, // zero mutations; see uncovered
 	UnsupportedModel,   // non-Translation/Similarity trajectory
-	UnsupportedMode,    // e.g. Similarity with Compact apply mode
+	UnsupportedMode,    // reserved for an unsupported apply-mode combination
 	InvalidInput,       // malformed inputs: no frames, missing resolution
 };
 

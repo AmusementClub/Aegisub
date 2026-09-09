@@ -297,13 +297,248 @@ TEST(perspective_tag_solver, fit_scale_still_solves_target_that_requires_scaling
 	EXPECT_LE(result.candidate->max_error, input.max_error);
 }
 
+TEST(perspective_tag_solver, preserve_scale_keeps_rectangular_targets_rectangular) {
+	for (double const rotation : {0.0, 27.0, -90.0}) {
+		for (auto const scales : {Vec2{.x = 44.0, .y = 192.5}, Vec2{.x = 240.0, .y = 65.0}}) {
+			SCOPED_TRACE(rotation);
+			SCOPED_TRACE(scales.x);
+			auto source = BaseInput();
+			source.state.alignment = 5;
+			auto desired = source.state;
+			desired.position = {.x = 500.0, .y = 300.0};
+			desired.rotation_z = rotation;
+			desired.scale_x = scales.x;
+			desired.scale_y = scales.y;
+			SolverInput input{.source = source, .target = TargetFrom(source, desired)};
+			input.scale_policy = PerspectiveScalePolicy::Preserve;
+			auto const result = SolvePerspectiveTags(input);
+			ASSERT_TRUE(result) << DescribeSolverError(result.error);
+			ASSERT_TRUE(result.candidate);
+			EXPECT_DOUBLE_EQ(source.state.scale_x, result.candidate->state.scale_x);
+			EXPECT_DOUBLE_EQ(source.state.scale_y, result.candidate->state.scale_y);
+			auto const landed = ForwardQuad(source, result.candidate->state);
+			ASSERT_TRUE(landed);
+			auto const& quad = landed.quad;
+			// Opposite edges must remain parallel and adjacent edges orthogonal.
+			Vec2 const top = quad[1] - quad[0];
+			Vec2 const left = quad[3] - quad[0];
+			Vec2 const target_top = input.target[1] - input.target[0];
+			EXPECT_LE(std::abs(top.Cross(target_top)),
+					  1.0e-5 * std::sqrt(top.SquareLength() * target_top.SquareLength()));
+			EXPECT_GT(top.x * target_top.x + top.y * target_top.y, 0.0);
+			EXPECT_LE(std::sqrt((top - (quad[2] - quad[3])).SquareLength()),
+					  2.0 * input.max_error);
+			EXPECT_LE(std::sqrt((left - (quad[2] - quad[1])).SquareLength()),
+					  2.0 * input.max_error);
+			EXPECT_LE(std::abs(top.x * left.x + top.y * left.y),
+					  1.0e-5 * std::sqrt(top.SquareLength() * left.SquareLength()));
+			Vec2 const center = (quad[0] + quad[2]) / 2.0;
+			EXPECT_NEAR(desired.position.x, center.x, input.max_error);
+			EXPECT_NEAR(desired.position.y, center.y, input.max_error);
+		}
+	}
+}
+
+TEST(perspective_tag_solver, preserve_scale_flattens_an_existing_plane_for_a_rectangle) {
+	auto source = BaseInput();
+	source.state.alignment = 5;
+	source.state.origin = Vec2{.x = 410.0, .y = 290.0};
+	source.state.rotation_x = 15.0;
+	source.state.rotation_y = -8.0;
+	source.state.rotation_z = -90.0;
+	SolverInput input{.source = source,
+					  .target = MakeQuad({.left = 456.0, .top = 223.0, .right = 544.0, .bottom = 377.0})};
+	input.scale_policy = PerspectiveScalePolicy::Preserve;
+	auto const result = SolvePerspectiveTags(input);
+	ASSERT_TRUE(result) << DescribeSolverError(result.error);
+	ASSERT_TRUE(result.candidate);
+	EXPECT_DOUBLE_EQ(source.state.scale_x, result.candidate->state.scale_x);
+	EXPECT_DOUBLE_EQ(source.state.scale_y, result.candidate->state.scale_y);
+	auto const landed = ForwardQuad(source, result.candidate->state);
+	ASSERT_TRUE(landed);
+	EXPECT_NEAR(landed.quad[0].y, landed.quad[1].y, 1.0e-6);
+	EXPECT_NEAR(landed.quad[2].y, landed.quad[3].y, 1.0e-6);
+	EXPECT_NEAR(landed.quad[0].x, landed.quad[3].x, 1.0e-6);
+	EXPECT_NEAR(landed.quad[1].x, landed.quad[2].x, 1.0e-6);
+}
+
+TEST(perspective_tag_solver, preserve_scale_keeps_a_locked_rectangle_rectangular) {
+	auto source = BaseInput();
+	source.state.alignment = 5;
+	SolverInput input{
+		source,
+		Quad{{
+			{450.0, 100.0},
+			{450.0, 300.0},
+			{400.0, 300.0},
+			{400.0, 100.0},
+		}}};
+	input.scale_policy = PerspectiveScalePolicy::Preserve;
+	input.locked_rotation_z = 270.0;
+	auto const result = SolvePerspectiveTags(input);
+	ASSERT_TRUE(result) << DescribeSolverError(result.error);
+	ASSERT_TRUE(result.candidate);
+	EXPECT_DOUBLE_EQ(source.state.scale_x, result.candidate->state.scale_x);
+	EXPECT_DOUBLE_EQ(source.state.scale_y, result.candidate->state.scale_y);
+	auto const landed = ForwardQuad(source, result.candidate->state);
+	ASSERT_TRUE(landed);
+	EXPECT_NEAR(landed.quad[0].x, landed.quad[1].x, 1.0e-6);
+	EXPECT_NEAR(landed.quad[2].x, landed.quad[3].x, 1.0e-6);
+	EXPECT_NEAR(landed.quad[0].y, landed.quad[3].y, 1.0e-6);
+	EXPECT_NEAR(landed.quad[1].y, landed.quad[2].y, 1.0e-6);
+}
+
+TEST(perspective_tag_solver, preserve_scale_keeps_a_parallelogram_similar) {
+	auto source = BaseInput();
+	source.state.scale_x = 120.0;
+	source.state.scale_y = 80.0;
+	auto desired = source.state;
+	desired.position = {535.0, 405.0};
+	desired.scale_x = 156.0;
+	desired.scale_y = 104.0;
+	desired.shear_x = 0.18;
+	desired.shear_y = 0.07;
+	desired.rotation_z = 19.0;
+
+	SolverInput input{source, TargetFrom(source, desired)};
+	input.scale_policy = PerspectiveScalePolicy::Preserve;
+	auto const result = SolvePerspectiveTags(input);
+	ASSERT_TRUE(result) << DescribeSolverError(result.error);
+	ASSERT_TRUE(result.candidate);
+	EXPECT_EQ(CandidateFamily::PreserveShapeAffine, result.candidate->family)
+		<< static_cast<int>(result.candidate->family);
+	EXPECT_DOUBLE_EQ(source.state.scale_x, result.candidate->state.scale_x);
+	EXPECT_DOUBLE_EQ(source.state.scale_y, result.candidate->state.scale_y);
+
+	auto landed = source;
+	landed.state = result.candidate->state;
+	auto const forward = ForwardQuad(landed);
+	ASSERT_TRUE(forward);
+	Vec2 center;
+	for (auto const& point : input.target)
+		center = center + point / 4.0;
+	double numerator = 0.0;
+	double denominator = 0.0;
+	for (std::size_t index = 0; index < input.target.size(); ++index) {
+		Vec2 const target_vector = input.target[index] - center;
+		Vec2 const landed_vector = forward.quad[index] - center;
+		numerator += target_vector.Dot(landed_vector);
+		denominator += target_vector.SquareLength();
+	}
+	ASSERT_GT(denominator, 0.0);
+	double const factor = numerator / denominator;
+	ASSERT_GT(factor, 0.0);
+	for (std::size_t index = 0; index < input.target.size(); ++index) {
+		Vec2 const expected = center + (input.target[index] - center) * factor;
+		EXPECT_NEAR(expected.x, forward.quad[index].x, 2.0 * input.max_error)
+			<< "corner " << index;
+		EXPECT_NEAR(expected.y, forward.quad[index].y, 2.0 * input.max_error)
+			<< "corner " << index;
+	}
+}
+
+TEST(perspective_tag_solver, preserve_scale_keeps_a_locked_rotation_parallelogram_similar) {
+	auto source = BaseInput();
+	source.state.scale_x = 120.0;
+	source.state.scale_y = 80.0;
+	source.state.rotation_z = 270.0;
+	auto desired = source.state;
+	desired.position = {535.0, 405.0};
+	desired.scale_x = 156.0;
+	desired.scale_y = 104.0;
+	desired.shear_x = 0.18;
+	desired.shear_y = 0.07;
+
+	SolverInput input{source, TargetFrom(source, desired)};
+	input.scale_policy = PerspectiveScalePolicy::Preserve;
+	input.locked_rotation_z = 270.0;
+	auto const result = SolvePerspectiveTags(input);
+	ASSERT_TRUE(result) << DescribeSolverError(result.error);
+	ASSERT_TRUE(result.candidate);
+	EXPECT_DOUBLE_EQ(270.0, result.candidate->state.rotation_z);
+	EXPECT_DOUBLE_EQ(source.state.scale_x, result.candidate->state.scale_x);
+	EXPECT_DOUBLE_EQ(source.state.scale_y, result.candidate->state.scale_y);
+
+	auto landed = source;
+	landed.state = result.candidate->state;
+	auto const forward = ForwardQuad(landed);
+	ASSERT_TRUE(forward);
+	Vec2 center;
+	for (auto const& point : input.target)
+		center = center + point / 4.0;
+	double numerator = 0.0;
+	double denominator = 0.0;
+	for (std::size_t index = 0; index < input.target.size(); ++index) {
+		Vec2 const target_vector = input.target[index] - center;
+		Vec2 const landed_vector = forward.quad[index] - center;
+		numerator += target_vector.Dot(landed_vector);
+		denominator += target_vector.SquareLength();
+	}
+	ASSERT_GT(denominator, 0.0);
+	double const factor = numerator / denominator;
+	ASSERT_GT(factor, 0.0);
+	for (std::size_t index = 0; index < input.target.size(); ++index) {
+		Vec2 const expected = center + (input.target[index] - center) * factor;
+		EXPECT_NEAR(expected.x, forward.quad[index].x, 2.0 * input.max_error)
+			<< "corner " << index;
+		EXPECT_NEAR(expected.y, forward.quad[index].y, 2.0 * input.max_error)
+			<< "corner " << index;
+	}
+}
+
+TEST(perspective_tag_solver, preserve_scale_keeps_an_extreme_trapezoid_similar) {
+	auto source = BaseInput();
+	source.bounds.rectangle = {0.0, 0.0, 38.0, 42.0};
+	SolverInput input{
+		source,
+		Quad{{
+			{160.0, 239.0},
+			{872.0, 105.0},
+			{551.0, 553.0},
+			{174.0, 553.0},
+		}}};
+	input.scale_policy = PerspectiveScalePolicy::Preserve;
+	input.max_error = 0.1;
+	auto const result = SolvePerspectiveTags(input);
+	ASSERT_TRUE(result) << DescribeSolverError(result.error);
+	ASSERT_TRUE(result.candidate);
+	EXPECT_DOUBLE_EQ(source.state.scale_x, result.candidate->state.scale_x);
+	EXPECT_DOUBLE_EQ(source.state.scale_y, result.candidate->state.scale_y);
+
+	auto landed = source;
+	landed.state = result.candidate->state;
+	auto const forward = ForwardQuad(landed);
+	ASSERT_TRUE(forward);
+	Vec2 center;
+	for (auto const& point : input.target)
+		center = center + point / 4.0;
+	double numerator = 0.0;
+	double denominator = 0.0;
+	for (std::size_t index = 0; index < input.target.size(); ++index) {
+		Vec2 const target_vector = input.target[index] - center;
+		Vec2 const landed_vector = forward.quad[index] - center;
+		numerator += target_vector.Dot(landed_vector);
+		denominator += target_vector.SquareLength();
+	}
+	ASSERT_GT(denominator, 0.0);
+	double const factor = numerator / denominator;
+	ASSERT_GT(factor, 0.0);
+	for (std::size_t index = 0; index < input.target.size(); ++index) {
+		Vec2 const expected = center + (input.target[index] - center) * factor;
+		EXPECT_NEAR(expected.x, forward.quad[index].x, 0.2)
+			<< "corner " << index;
+		EXPECT_NEAR(expected.y, forward.quad[index].y, 0.2)
+			<< "corner " << index;
+	}
+}
+
 TEST(perspective_tag_solver, preserve_scale_keeps_non_integer_style_scale_exact) {
 	auto source = BaseInput();
 	source.state.scale_x = 123.456789;
 	source.state.scale_y = 87.654321;
 	auto target = source.state;
 	target.position = {535.0, 405.0};
-	SolverInput input {source, TargetFrom(source, target)};
+	SolverInput input{source, TargetFrom(source, target)};
 	input.scale_policy = PerspectiveScalePolicy::Preserve;
 
 	auto const result = SolvePerspectiveTags(input);
@@ -315,7 +550,7 @@ TEST(perspective_tag_solver, preserve_scale_keeps_non_integer_style_scale_exact)
 	EXPECT_LE(result.candidate->max_error, input.max_error);
 }
 
-TEST(perspective_tag_solver, preserve_scale_freezes_implicit_optimizer_scale_parameters) {
+TEST(perspective_tag_solver, preserve_scale_keeps_projective_candidate_scales_fixed) {
 	auto source = BaseInput();
 	source.state.scale_x = 121.234567;
 	source.state.scale_y = 88.765432;
@@ -325,18 +560,34 @@ TEST(perspective_tag_solver, preserve_scale_freezes_implicit_optimizer_scale_par
 	target.rotation_x = 21.0;
 	target.rotation_y = -17.0;
 	target.rotation_z = 13.0;
-	SolverInput input {source, TargetFrom(source, target)};
+	SolverInput input{source, TargetFrom(source, target)};
 	input.scale_policy = PerspectiveScalePolicy::Preserve;
+
+	auto fit_input = input;
+	fit_input.scale_policy = PerspectiveScalePolicy::Fit;
+	auto const fit = SolvePerspectiveTags(fit_input);
+	ASSERT_TRUE(fit) << DescribeSolverError(fit.error);
+	ASSERT_TRUE(fit.candidate);
 
 	auto const result = SolvePerspectiveTags(input);
 	ASSERT_TRUE(result) << DescribeSolverError(result.error);
 	ASSERT_TRUE(result.candidate);
-	EXPECT_TRUE(
-		result.candidate->family == CandidateFamily::ProjectiveImplicitFax
-		|| result.candidate->family == CandidateFamily::ProjectiveImplicitFay);
+	EXPECT_EQ(CandidateFamily::PreserveFitState, result.candidate->family);
 	EXPECT_DOUBLE_EQ(source.state.scale_x, result.candidate->state.scale_x);
 	EXPECT_DOUBLE_EQ(source.state.scale_y, result.candidate->state.scale_y);
-	EXPECT_LE(result.candidate->max_error, input.max_error);
+	EXPECT_DOUBLE_EQ(fit.candidate->state.position.x, result.candidate->state.position.x);
+	EXPECT_DOUBLE_EQ(fit.candidate->state.position.y, result.candidate->state.position.y);
+	ASSERT_EQ(fit.candidate->state.origin.has_value(), result.candidate->state.origin.has_value());
+	if (fit.candidate->state.origin)
+		EXPECT_DOUBLE_EQ(fit.candidate->state.origin->x, result.candidate->state.origin->x);
+	if (fit.candidate->state.origin)
+		EXPECT_DOUBLE_EQ(fit.candidate->state.origin->y, result.candidate->state.origin->y);
+	EXPECT_DOUBLE_EQ(fit.candidate->state.shear_x, result.candidate->state.shear_x);
+	EXPECT_DOUBLE_EQ(fit.candidate->state.shear_y, result.candidate->state.shear_y);
+	EXPECT_DOUBLE_EQ(fit.candidate->state.rotation_x, result.candidate->state.rotation_x);
+	EXPECT_DOUBLE_EQ(fit.candidate->state.rotation_y, result.candidate->state.rotation_y);
+	EXPECT_DOUBLE_EQ(fit.candidate->state.rotation_z, result.candidate->state.rotation_z);
+	EXPECT_GT(result.candidate->snap_error, input.max_error);
 }
 
 TEST(perspective_tag_solver, equivalent_locked_rotation_keeps_affine_representation) {
@@ -1726,14 +1977,10 @@ TEST(perspective_tag_solver, a_scale_lock_does_not_charge_for_size_drift) {
 	EXPECT_DOUBLE_EQ(0.0, shortfall(resized, kPreserve, kAuto));
 }
 
-// The projective families must be size-blind under the lock too. A drawn quad
-// that is both much larger and foreshortened can never be hit verbatim at the
-// pinned scale -- foreshortening only ever shrinks -- nor by the affine
-// families even normalized, because they cannot express the trapezoid. The
-// camera distance is fixed, so the shrunk quad's magnification profile is not
-// exactly expressible either: what the lock can do is fit the shape as close
-// as the tags allow and report the remainder. The floor-sign case.
-TEST(perspective_tag_solver, preserve_scale_matches_foreshortened_shape_at_pinned_size) {
+// Preserve keeps the drawn projective shape and chooses its uniform size from
+// the pinned source scale. Quantization may move each corner by the normal
+// output budget, but it must not introduce an independent corner distortion.
+TEST(perspective_tag_solver, preserve_scale_keeps_a_foreshortened_shape_similar) {
 	auto source = BaseInput();
 	EvaluatedTransformState projective = source.state;
 	projective.position = {560.0, 380.0};
@@ -1747,12 +1994,6 @@ TEST(perspective_tag_solver, preserve_scale_matches_foreshortened_shape_at_pinne
 	SolverInput input{source, drawn};
 	input.scale_policy = PerspectiveScalePolicy::Preserve;
 
-	// The best size-blind fit is returned with the scale pinned and its
-	// shortfall reported instead of refusing the drag. Affine and projective
-	// fits land near-equally far here -- the irreducible part is the
-	// magnification profile at the fixed camera distance, which both kinds
-	// suffer -- so the cheaper tag set wins, per the score order. The gap is
-	// small enough to read as "close" on the preview, not as garbage.
 	auto const result = SolvePerspectiveTags(input);
 	ASSERT_TRUE(result) << DescribeSolverError(result.error);
 	ASSERT_TRUE(result.candidate);
@@ -1761,38 +2002,50 @@ TEST(perspective_tag_solver, preserve_scale_matches_foreshortened_shape_at_pinne
 	EXPECT_NE(CandidateFamily::CurrentRepresentation, result.candidate->family);
 	EXPECT_DOUBLE_EQ(source.state.scale_x, result.candidate->state.scale_x);
 	EXPECT_DOUBLE_EQ(source.state.scale_y, result.candidate->state.scale_y);
-	EXPECT_TRUE(result.candidate->Snapped());
-	EXPECT_GT(result.candidate->snap_error, input.max_error);
-	EXPECT_LT(result.candidate->snap_error, 20.0);
+	EXPECT_LE(result.candidate->snap_error, input.max_error);
 
-	// The aimed-at quad is the drawn one rescaled to the area the emitted
-	// tags actually produce at the pinned scale -- the published effective
-	// target is where the tags land, not where the user drew.
-	auto const signed_area = [](Quad const& quad) {
-		double area = 0.0;
-		for (std::size_t index = 0; index < quad.size(); ++index) {
-			auto const& a = quad[index];
-			auto const& b = quad[(index + 1) % quad.size()];
-			area += a.x * b.y - b.x * a.y;
-		}
-		return area / 2.0;
-	};
 	auto landed = source;
 	landed.state = result.candidate->state;
 	auto const landed_quad = ForwardQuad(landed);
 	ASSERT_TRUE(landed_quad) << DescribeForwardError(landed_quad.error);
-	double const factor = std::sqrt(std::abs(signed_area(landed_quad.quad)) / std::abs(signed_area(drawn)));
-	ASSERT_GT(factor, 0.0);
-	ASSERT_LT(factor, 1.0);
 	Vec2 mean;
 	for (auto const& point : drawn)
 		mean = mean + point / 4.0;
+	double numerator = 0.0;
+	double denominator = 0.0;
+	for (std::size_t index = 0; index < drawn.size(); ++index) {
+		Vec2 const source_vector = drawn[index] - mean;
+		Vec2 const landed_vector = landed_quad.quad[index] - mean;
+		numerator += landed_vector.Dot(source_vector);
+		denominator += source_vector.SquareLength();
+	}
+	ASSERT_GT(denominator, 0.0);
+	double const factor = numerator / denominator;
+	ASSERT_GT(factor, 0.0);
 	for (std::size_t index = 0; index < drawn.size(); ++index) {
 		Vec2 const expected = mean + (drawn[index] - mean) * factor;
+		EXPECT_NEAR(expected.x, landed_quad.quad[index].x, 2.0 * input.max_error)
+			<< "corner " << index;
+		EXPECT_NEAR(expected.y, landed_quad.quad[index].y, 2.0 * input.max_error)
+			<< "corner " << index;
+	}
+
+	// The published aim is the same homothetic target used by the solver, so
+	// downstream staged verification sees the shape rather than the drawn size.
+	numerator = denominator = 0.0;
+	for (std::size_t index = 0; index < drawn.size(); ++index) {
+		Vec2 const source_vector = drawn[index] - mean;
+		Vec2 const aimed_vector = result.effective_target[index] - mean;
+		numerator += aimed_vector.Dot(source_vector);
+		denominator += source_vector.SquareLength();
+	}
+	double const aimed_factor = numerator / denominator;
+	for (std::size_t index = 0; index < drawn.size(); ++index) {
+		Vec2 const expected = mean + (drawn[index] - mean) * aimed_factor;
 		EXPECT_NEAR(expected.x, result.effective_target[index].x, 1.0e-6)
-			<< "corner " << index;
+			<< "aimed corner " << index;
 		EXPECT_NEAR(expected.y, result.effective_target[index].y, 1.0e-6)
-			<< "corner " << index;
+			<< "aimed corner " << index;
 	}
 }
 
@@ -2046,6 +2299,40 @@ TEST(perspective_tag_solver, plane_refit_tracks_an_inplane_move_under_a_scale_lo
 	EXPECT_NEAR(desired.position.y, result.candidate->state.position.y, 1.0e-3);
 	EXPECT_FALSE(result.candidate->Snapped());
 	EXPECT_LE(result.candidate->max_error, input.max_error);
+}
+
+TEST(perspective_tag_solver, preserve_scale_plane_targets_are_homothetic) {
+	auto source = BaseInput();
+	source.state.origin = Vec2{430.0, 280.0};
+	source.state.rotation_x = 18.0;
+	source.state.rotation_y = -12.0;
+	auto desired = source.state;
+	desired.position = {470.0, 340.0};
+	Quad const target = TargetFrom(source, desired);
+	SolverInput input{source, target};
+	input.scale_policy = PerspectiveScalePolicy::Preserve;
+	input.representation_policy = PerspectiveRepresentationPolicy::Automatic;
+
+	auto const current = ForwardQuad(source);
+	ASSERT_TRUE(current) << DescribeForwardError(current.error);
+	auto const target_area = std::abs(SignedArea(target));
+	auto const current_area = std::abs(SignedArea(current.quad));
+	ASSERT_GT(target_area, 0.0);
+	ASSERT_GT(current_area, 0.0);
+	double const factor = std::sqrt(current_area / target_area);
+	Vec2 center;
+	for (auto const& point : target)
+		center = center + point / 4.0;
+
+	auto const result = SolvePerspectiveTags(input);
+	ASSERT_TRUE(result) << DescribeSolverError(result.error);
+	for (std::size_t index = 0; index < target.size(); ++index) {
+		Vec2 const expected = center + (target[index] - center) * factor;
+		EXPECT_NEAR(expected.x, result.effective_target[index].x, 1.0e-6)
+			<< "corner " << index;
+		EXPECT_NEAR(expected.y, result.effective_target[index].y, 1.0e-6)
+			<< "corner " << index;
+	}
 }
 
 // Per-candidate effective targets, affine side: a fay-only line has no

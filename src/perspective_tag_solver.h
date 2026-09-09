@@ -47,6 +47,12 @@ enum class CandidateFamily {
 	ProjectiveImplicitFay,
 	ProjectiveImplicitLockedDoubleShear,
 	ProjectiveExplicitOrigin,
+	// Preserve-scale fallback for parallelogram targets. Keeps the rendered
+	// shape affine when a perspective fit would trade shape for the locked size.
+	PreserveShapeAffine,
+	// Preserve-scale candidate seeded from the corresponding Fit result so
+	// toggling Fit Text changes the scale tags before changing other geometry.
+	PreserveFitState,
 };
 
 struct SerializedTransformState {
@@ -67,6 +73,10 @@ struct CandidateScore {
 	// come close, distance decides before tag economy does.
 	int snapped = 0;
 	int snap_bucket = 0;
+	// Shape-only continuity preference for PreserveFitState. A negative value
+	// means its pinned-scale result is homothetic to the drawn quad; positive
+	// values are shape-error buckets, so visibly different planes still lose.
+	int fit_consistency_penalty = 0;
 	int changed_tag_count = 0;
 	int explicit_origin_penalty = 0;
 	int perspective_penalty = 0;
@@ -209,12 +219,11 @@ struct SolverResult {
 	ForwardError forward_error = ForwardError::None;
 	std::optional<SolverCandidate> candidate;
 	std::size_t considered_candidates = 0;
-	// The quad the winning candidate actually aimed at. Under Preserve the
-	// projective families first try the drawn quad verbatim and fall back to
-	// it rescaled about its centroid to the area the pinned scale can produce,
-	// while the affine families always aim at the rescaled one -- so the
-	// reported quad is where the emitted tags actually land, not where the
-	// user drew. Under Fit it is the drawn quad itself. Downstream
+	// The quad the winning candidate actually aimed at. Under Preserve every
+	// family aims at the drawn quad rescaled about its centroid to the area the
+	// pinned scale can produce, so the reported quad is where the emitted tags
+	// are expected to land rather than where the user drew. Under Fit it is the
+	// drawn quad itself. Downstream
 	// verification must use this rather than the drawn quad, or it would
 	// re-introduce the very size error the policy told the solver to ignore.
 	// See PreserveAreaFactor in the solver.

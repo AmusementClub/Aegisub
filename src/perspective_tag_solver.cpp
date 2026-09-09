@@ -352,6 +352,11 @@ CandidateScore ScoreCandidate(
 	CandidateFamily family,
 	double residual) {
 	CandidateScore score;
+	// PreserveFitState is the same decomposition the Fit option just produced,
+	// with only the scale fields pinned. Its value is filled in below from the
+	// shape-only residual; a negative value lets an otherwise homothetic result
+	// win over a different tag decomposition without hiding a real shape error.
+	score.fit_consistency_penalty = family == CandidateFamily::PreserveFitState ? -1 : 0;
 	score.family_rank = static_cast<int>(family);
 	score.residual = residual;
 	if (!NearlyEqual(source.position, candidate.position)) {
@@ -397,10 +402,14 @@ CandidateScore ScoreCandidate(
 bool BetterScore(CandidateScore const& left, CandidateScore const& right) {
 	int const left_no_op_penalty = left.changed_tag_count == 0 ? 0 : 1;
 	int const right_no_op_penalty = right.changed_tag_count == 0 ? 0 : 1;
-	// snapped and snap_bucket outrank the no-op preference on purpose. Without
+	// Fit continuity is compared first because a homothetic Preserve result is
+	// the same plane with only its scale fields pinned. Its shape-only bucket
+	// is positive when that continuity is not geometrically credible. Snapped
+	// and snap_bucket then outrank the no-op preference on purpose; without
 	// that, a drag the restricted subset cannot express would let the unchanged
 	// source win on tag economy and the tool would look broken.
 	return std::tie(
+		left.fit_consistency_penalty,
 		left.snapped,
 		left.snap_bucket,
 		left_no_op_penalty,
@@ -413,6 +422,7 @@ bool BetterScore(CandidateScore const& left, CandidateScore const& right) {
 		left.family_rank,
 		left.residual)
 		< std::tie(
+			right.fit_consistency_penalty,
 			right.snapped,
 			right.snap_bucket,
 			right_no_op_penalty,
@@ -476,6 +486,45 @@ int SnapBucket(double snap_error, double unit) {
 		return std::numeric_limits<int>::max();
 	return static_cast<int>(
 		std::min<double>(bucket, std::numeric_limits<int>::max()));
+}
+
+// A pinned scale is allowed to change the overall size, but it should not
+// change the plane selected by Fit. Measure the landed quad after removing the
+// best uniform scale about the drawn quad's centre; translation remains part
+// of the error because position is one of the tags that should be preserved.
+double HomotheticShapeError(
+	Quad const& target,
+	Quad const& landed,
+	OutputCoordinateMapping mapping) {
+	Vec2 target_center;
+	for (auto const& point : target)
+		target_center = target_center + point / static_cast<double>(target.size());
+	double numerator = 0.0;
+	double denominator = 0.0;
+	for (std::size_t index = 0; index < target.size(); ++index) {
+		Vec2 const target_vector = target[index] - target_center;
+		Vec2 const landed_vector = landed[index] - target_center;
+		numerator += target_vector.Dot(landed_vector);
+		denominator += target_vector.SquareLength();
+	}
+	if (!(denominator > 0.0) || !std::isfinite(numerator)
+		|| !std::isfinite(denominator))
+		return std::numeric_limits<double>::infinity();
+	double const factor = numerator / denominator;
+	if (!(factor > 0.0) || !std::isfinite(factor))
+		return std::numeric_limits<double>::infinity();
+	double maximum = 0.0;
+	for (std::size_t index = 0; index < target.size(); ++index) {
+		Vec2 const expected = target_center
+			+ (target[index] - target_center) * factor;
+		Vec2 const delta = landed[index] - expected;
+		double const error = std::hypot(
+			delta.x * mapping.scale_x, delta.y * mapping.scale_y);
+		if (!std::isfinite(error))
+			return std::numeric_limits<double>::infinity();
+		maximum = std::max(maximum, error);
+	}
+	return maximum;
 }
 
 // Where a quantization attempt stopped. The distinction is what the UI
@@ -582,7 +631,7 @@ QuantizeOutcome QuantizeCandidate(
 	if (*residual > input.max_error)
 		return RejectedQuantization(*residual, input.max_error);
 
-	if (family != CandidateFamily::NoOp) {
+	if (family != CandidateFamily::NoOp && family != CandidateFamily::PreserveShapeAffine) {
 		CompactField(state, raw, position_decimals, [](auto& value, auto const& original, int decimals) { value.position = {Quantize(original.position.x, decimals), Quantize(original.position.y, decimals)}; }, input, reference);
 		if (raw.origin && !restricted) {
 			CompactField(state, raw, position_decimals, [](auto& value, auto const& original, int decimals) { value.origin = Vec2{Quantize(original.origin->x, decimals), Quantize(original.origin->y, decimals)}; }, input, reference);
@@ -619,6 +668,13 @@ QuantizeOutcome QuantizeCandidate(
 	score.snap_bucket = snapped
 							? SnapBucket(*snap_error, input.max_error)
 							: 0;
+	if (family == CandidateFamily::PreserveFitState) {
+		double const shape_error = HomotheticShapeError(
+			input.target, forward.quad, input.output_mapping);
+		score.fit_consistency_penalty = shape_error <= input.max_error
+			? -1
+			: SnapBucket(shape_error, input.max_error);
+	}
 	SolverCandidate candidate{
 		.family = family,
 		.state = state,
@@ -906,6 +962,220 @@ std::optional<EvaluatedTransformState> SimilarityCandidate(
 	};
 	candidate->position = {map.b0 - rotated_shift.x, map.b1 - rotated_shift.y};
 	return candidate;
+}
+
+bool IsParallelogram(Quad const& target) {
+	Vec2 const diagonal_error = target[0] + target[2] - target[1] - target[3];
+	double const scale = std::max({1.0,
+								   (target[1] - target[0]).SquareLength(),
+								   (target[2] - target[1]).SquareLength(),
+								   (target[3] - target[2]).SquareLength(),
+								   (target[0] - target[3]).SquareLength()});
+	return diagonal_error.SquareLength() <= 1.0e-12 * scale;
+}
+
+bool IsRectangle(Quad const& target) {
+	if (!IsParallelogram(target))
+		return false;
+	Vec2 const horizontal = target[1] - target[0];
+	Vec2 const vertical = target[3] - target[0];
+	double const scale = std::max(1.0,
+								  horizontal.SquareLength() * vertical.SquareLength());
+	return std::abs(horizontal.Dot(vertical)) <= 1.0e-12 * scale;
+}
+
+Quad ScaleQuadAboutCenter(Quad const& quad, double factor);
+
+struct PreserveShapeAffineResult {
+	EvaluatedTransformState state;
+	Quad effective_target;
+	// Exact affine homotheties can safely suppress the generic projective
+	// families. A rectangle with a different intrinsic aspect ratio cannot be
+	// represented at a pinned scale; its fallback remains a scored approximation.
+	bool exact = true;
+};
+
+std::optional<PreserveShapeAffineResult> PreserveShapeAffineCandidate(
+	SolverInput const& input,
+	Quad const& target,
+	std::optional<double> locked_rotation_z) {
+	if (!IsParallelogram(target))
+		return std::nullopt;
+	double const width = input.source.bounds.rectangle.Width();
+	double const height = input.source.bounds.rectangle.Height();
+	double const scale_x = input.source.state.scale_x / 100.0;
+	double const scale_y = input.source.state.scale_y / 100.0;
+	if (!(width > 0.0) || !(height > 0.0) || !(scale_x > 0.0) || !(scale_y > 0.0) || !std::isfinite(width) || !std::isfinite(height) || !std::isfinite(scale_x) || !std::isfinite(scale_y))
+		return std::nullopt;
+
+	Vec2 const target_u = (target[1] - target[0]) / width;
+	Vec2 const target_v = (target[3] - target[0]) / height;
+	// Undoing the renderer's clockwise Z rotation gives
+	//
+	//   R(r) * [target_u target_v] * factor
+	//       = [[scale_x, scale_x * fax],
+	//          [scale_y * fay, scale_y]].
+	//
+	// The two fixed diagonal entries determine r.  Solving that pair directly
+	// matters for rectangles whose aspect ratio differs from the source: both
+	// shear axes are then needed, and forcing them into an opposite-shear pair
+	// silently changes the shape.
+	double cosine = 0.0;
+	double sine = 0.0;
+	if (locked_rotation_z) {
+		if (!std::isfinite(*locked_rotation_z))
+			return std::nullopt;
+		double const rotation = *locked_rotation_z * DegreesToRadians;
+		cosine = std::cos(rotation);
+		sine = std::sin(rotation);
+	}
+	else {
+		double const sine_coefficient =
+			scale_x * target_v.x + scale_y * target_u.y;
+		double const cosine_coefficient =
+			scale_x * target_v.y - scale_y * target_u.x;
+		double const length =
+			std::hypot(sine_coefficient, cosine_coefficient);
+		if (!(length > 1.0e-12) || !std::isfinite(length))
+			return std::nullopt;
+		cosine = sine_coefficient / length;
+		sine = -cosine_coefficient / length;
+	}
+
+	double const diagonal_x = cosine * target_u.x - sine * target_u.y;
+	double const diagonal_y = sine * target_v.x + cosine * target_v.y;
+	if (!(diagonal_x > 1.0e-12) || !(diagonal_y > 1.0e-12))
+		return std::nullopt;
+	double const factor_x = scale_x / diagonal_x;
+	double const factor_y = scale_y / diagonal_y;
+	if (!std::isfinite(factor_x) || !std::isfinite(factor_y) || factor_x <= 0.0 || factor_y <= 0.0 || std::abs(factor_x - factor_y) > 1.0e-8 * std::max({1.0, factor_x, factor_y}))
+		return std::nullopt;
+	double const factor = (factor_x + factor_y) / 2.0;
+	double const shear_x = factor * (cosine * target_v.x - sine * target_v.y) / scale_x;
+	double const shear_y = factor * (sine * target_u.x + cosine * target_u.y) / scale_y;
+	if (!std::isfinite(factor) || !std::isfinite(shear_x) || !std::isfinite(shear_y) || 1.0 - shear_x * shear_y <= 1.0e-12)
+		return std::nullopt;
+
+	Quad const effective_target = ScaleQuadAboutCenter(target, factor);
+	auto state = input.source.state;
+	state.origin.reset();
+	state.scale_x = input.source.state.scale_x;
+	state.scale_y = input.source.state.scale_y;
+	state.shear_x = shear_x;
+	state.shear_y = shear_y;
+	state.rotation_x = 0.0;
+	state.rotation_y = 0.0;
+	state.rotation_z = std::atan2(sine, cosine) * RadiansToDegrees;
+	Vec2 const shift = ResolveBoundsAlignmentShift(
+		input.source.bounds, state.alignment);
+	Vec2 const first{
+		(input.source.bounds.rectangle.left + input.source.bounds.rectangle.top * shear_x + shift.x) * scale_x,
+		(input.source.bounds.rectangle.left * shear_y + input.source.bounds.rectangle.top + shift.y) * scale_y};
+	state.position = effective_target[0] - RotateZ(
+											   first, -state.rotation_z * DegreesToRadians);
+	if (!std::isfinite(state.position.x) || !std::isfinite(state.position.y))
+		return std::nullopt;
+	return PreserveShapeAffineResult{state, effective_target, true};
+}
+
+std::optional<PreserveShapeAffineResult> PreserveRectangleFallback(
+	SolverInput const& input,
+	Quad const& target,
+	std::optional<double> locked_rotation_z) {
+	if (!IsRectangle(target))
+		return std::nullopt;
+	double const width = input.source.bounds.rectangle.Width();
+	double const height = input.source.bounds.rectangle.Height();
+	double const scale_x = input.source.state.scale_x / 100.0;
+	double const scale_y = input.source.state.scale_y / 100.0;
+	if (!(width > 0.0) || !(height > 0.0) || !(scale_x > 0.0) || !(scale_y > 0.0))
+		return std::nullopt;
+
+	Vec2 const edge_x = target[1] - target[0];
+	Vec2 const edge_y = target[3] - target[0];
+	double const target_width = std::hypot(edge_x.x, edge_x.y);
+	double const target_height = std::hypot(edge_y.x, edge_y.y);
+	double const base_width = width * scale_x;
+	double const base_height = height * scale_y;
+	if (!(target_width > 0.0) || !(target_height > 0.0) || !(base_width > 0.0) || !(base_height > 0.0))
+		return std::nullopt;
+
+	// With fixed scales, every affine rectangle has the source aspect ratio.
+	// Opposite shears can increase both sides by the same factor while keeping
+	// them orthogonal; use that extra degree of freedom for the closest size.
+	double const scale_ratio = scale_x / scale_y;
+	double const target_angle = std::atan2(edge_x.y, edge_x.x);
+	double factor = 1.0;
+	double shear_x = 0.0;
+	double shear_y = 0.0;
+	double rotation = 0.0;
+	if (locked_rotation_z) {
+		if (!std::isfinite(*locked_rotation_z))
+			return std::nullopt;
+		// With a fixed Z angle, choose the opposite-shear rectangle whose local
+		// x basis points at the requested edge. A positive x diagonal is required
+		// by the renderer, so angles beyond +/-90 degrees have no valid fallback.
+		double const local_angle =
+			target_angle + *locked_rotation_z * DegreesToRadians;
+		if (std::cos(local_angle) <= 1.0e-12)
+			return std::nullopt;
+		double const shear_magnitude = -std::tan(local_angle);
+		factor = std::sqrt(1.0 + shear_magnitude * shear_magnitude);
+		shear_x = shear_magnitude / scale_ratio;
+		shear_y = -scale_ratio * shear_magnitude;
+		rotation = *locked_rotation_z * DegreesToRadians;
+	}
+	else {
+		factor = std::max(1.0,
+						  (target_width * base_width + target_height * base_height) / (base_width * base_width + base_height * base_height));
+		double const shear_magnitude =
+			std::sqrt(std::max(0.0, factor * factor - 1.0));
+		shear_x = shear_magnitude / scale_ratio;
+		shear_y = -scale_ratio * shear_magnitude;
+		// The local x basis is tilted by the opposite shear before the renderer's
+		// clockwise Z rotation. Align that basis with the target's top edge.
+		double const local_angle = std::atan2(scale_y * shear_y, scale_x);
+		rotation = local_angle - target_angle;
+	}
+	Vec2 const center = (target[0] + target[2]) / 2.0;
+	Vec2 const local_width{
+		base_width * factor * std::cos(target_angle),
+		base_width * factor * std::sin(target_angle)};
+	Vec2 const local_height{
+		-base_height * factor * std::sin(target_angle),
+		base_height * factor * std::cos(target_angle)};
+	Quad landed_target{
+		center - (local_width + local_height) / 2.0,
+		center + (local_width - local_height) / 2.0,
+		center + (local_width + local_height) / 2.0,
+		center + (local_width * -1.0 + local_height) / 2.0};
+
+	auto state = input.source.state;
+	state.origin.reset();
+	state.scale_x = input.source.state.scale_x;
+	state.scale_y = input.source.state.scale_y;
+	state.shear_x = shear_x;
+	state.shear_y = shear_y;
+	state.rotation_x = 0.0;
+	state.rotation_y = 0.0;
+	state.rotation_z = locked_rotation_z
+						   ? *locked_rotation_z
+						   : rotation * RadiansToDegrees;
+	Vec2 const shift = ResolveBoundsAlignmentShift(
+		input.source.bounds, state.alignment);
+	Vec2 const first{
+		(input.source.bounds.rectangle.left + input.source.bounds.rectangle.top * shear_x + shift.x) * scale_x,
+		(input.source.bounds.rectangle.left * shear_y + input.source.bounds.rectangle.top + shift.y) * scale_y};
+	double const theta = locked_rotation_z
+							 ? -*locked_rotation_z * DegreesToRadians
+							 : -rotation;
+	state.position = landed_target[0] - RotateZ(first, theta);
+	if (!std::isfinite(state.position.x) || !std::isfinite(state.position.y))
+		return std::nullopt;
+	// Keep judging against the homothetic target. The landed rectangle is only
+	// the closest fixed-aspect affine state; its residual must remain visible to
+	// the normal candidate ranking and preview.
+	return PreserveShapeAffineResult{state, target, false};
 }
 
 std::optional<EvaluatedTransformState> ExplicitOriginCandidate(
@@ -1273,6 +1543,213 @@ std::optional<EvaluatedTransformState> OptimizeImplicitOrigin(
 	return StateFromParameters(input.source.state, parameters, model);
 }
 
+// A projective quad has eight independent coordinates. With a fixed source
+// scale, an explicit origin supplies the two degrees of freedom that the
+// implicit-origin families otherwise spend on scale. Keeping one ASS shear
+// axis canonical leaves exactly eight fitting parameters and avoids the
+// singular normal matrix produced by optimizing both shear axes together.
+constexpr std::size_t ExplicitOriginParameterCount = 8;
+using ExplicitOriginParameters =
+	std::array<double, ExplicitOriginParameterCount>;
+using ExplicitOriginMatrix =
+	std::array<std::array<double, ExplicitOriginParameterCount>, ExplicitOriginParameterCount>;
+using ExplicitOriginResidual = std::array<double, CornerResidualCount>;
+
+ExplicitOriginParameters ExplicitOriginParametersFromState(
+	EvaluatedTransformState const& state, bool use_fay) {
+	Vec2 const origin = state.origin.value_or(state.position);
+	return {
+		state.position.x,
+		state.position.y,
+		origin.x,
+		origin.y,
+		(use_fay ? state.shear_y : state.shear_x),
+		state.rotation_z * DegreesToRadians,
+		state.rotation_x * DegreesToRadians,
+		state.rotation_y * DegreesToRadians,
+	};
+}
+
+std::optional<EvaluatedTransformState> StateFromExplicitOriginParameters(
+	EvaluatedTransformState const& source,
+	ExplicitOriginParameters const& parameters,
+	bool use_fay) {
+	for (double const value : parameters) {
+		if (!std::isfinite(value))
+			return std::nullopt;
+	}
+	auto state = source;
+	state.position = {parameters[0], parameters[1]};
+	state.origin = Vec2{parameters[2], parameters[3]};
+	state.shear_x = use_fay ? 0.0 : parameters[4];
+	state.shear_y = use_fay ? parameters[4] : 0.0;
+	state.rotation_z = parameters[5] * RadiansToDegrees;
+	state.rotation_x = parameters[6] * RadiansToDegrees;
+	state.rotation_y = parameters[7] * RadiansToDegrees;
+	return state;
+}
+
+bool EvaluateExplicitOriginParameters(
+	SolverInput const& input,
+	Quad const& target,
+	ExplicitOriginParameters const& parameters,
+	bool use_fay,
+	ExplicitOriginResidual& residual,
+	double& cost) {
+	auto const state = StateFromExplicitOriginParameters(
+		input.source.state, parameters, use_fay);
+	if (!state)
+		return false;
+	auto const forward = ForwardQuad(input.source, *state);
+	if (!forward)
+		return false;
+	cost = 0.0;
+	for (std::size_t index = 0; index < target.size(); ++index) {
+		residual[index * 2] =
+			(forward.quad[index].x - target[index].x) * input.output_mapping.scale_x;
+		residual[index * 2 + 1] =
+			(forward.quad[index].y - target[index].y) * input.output_mapping.scale_y;
+		cost += residual[index * 2] * residual[index * 2] + residual[index * 2 + 1] * residual[index * 2 + 1];
+	}
+	return std::isfinite(cost);
+}
+
+bool SolveExplicitOriginLinear(
+	ExplicitOriginMatrix matrix,
+	ExplicitOriginParameters right,
+	ExplicitOriginParameters& solution) {
+	double scale = 0.0;
+	for (auto const& row : matrix)
+		for (double const entry : row)
+			scale = std::max(scale, std::abs(entry));
+	for (std::size_t column = 0; column < ExplicitOriginParameterCount; ++column) {
+		std::size_t pivot = column;
+		for (std::size_t row = column + 1;
+			 row < ExplicitOriginParameterCount; ++row) {
+			if (std::abs(matrix[row][column]) > std::abs(matrix[pivot][column]))
+				pivot = row;
+		}
+		if (!(std::abs(matrix[pivot][column]) > scale * 1.0e-12))
+			return false;
+		if (pivot != column) {
+			std::swap(matrix[pivot], matrix[column]);
+			std::swap(right[pivot], right[column]);
+		}
+		double const divisor = matrix[column][column];
+		for (std::size_t entry = column; entry < ExplicitOriginParameterCount; ++entry)
+			matrix[column][entry] /= divisor;
+		right[column] /= divisor;
+		for (std::size_t row = 0; row < ExplicitOriginParameterCount; ++row) {
+			if (row == column)
+				continue;
+			double const factor = matrix[row][column];
+			for (std::size_t entry = column; entry < ExplicitOriginParameterCount; ++entry)
+				matrix[row][entry] -= factor * matrix[column][entry];
+			right[row] -= factor * right[column];
+		}
+	}
+	solution = right;
+	return true;
+}
+
+std::optional<EvaluatedTransformState> OptimizeFixedScaleExplicitOrigin(
+	SolverInput const& input,
+	Quad const& target,
+	EvaluatedTransformState initial,
+	bool use_fay) {
+	initial.scale_x = input.source.state.scale_x;
+	initial.scale_y = input.source.state.scale_y;
+	initial.origin = initial.origin.value_or(initial.position);
+	ExplicitOriginParameters parameters =
+		ExplicitOriginParametersFromState(initial, use_fay);
+	ExplicitOriginResidual residual{};
+	double cost = 0.0;
+	if (!EvaluateExplicitOriginParameters(
+			input, target, parameters, use_fay, residual, cost))
+		return std::nullopt;
+	double damping = 1.0e-3;
+	for (int iteration = 0; iteration < 100; ++iteration) {
+		std::array<ExplicitOriginResidual, ExplicitOriginParameterCount> derivatives{};
+		for (std::size_t column = 0; column < ExplicitOriginParameterCount; ++column) {
+			double const step = (column < 4 ? 1.0e-4 : 1.0e-6) * std::max(1.0, std::abs(parameters[column]));
+			auto plus = parameters;
+			auto minus = parameters;
+			plus[column] += step;
+			minus[column] -= step;
+			ExplicitOriginResidual plus_residual{};
+			ExplicitOriginResidual minus_residual{};
+			double plus_cost = 0.0;
+			double minus_cost = 0.0;
+			bool const has_plus = EvaluateExplicitOriginParameters(
+				input, target, plus, use_fay, plus_residual, plus_cost);
+			bool const has_minus = EvaluateExplicitOriginParameters(
+				input, target, minus, use_fay, minus_residual, minus_cost);
+			if (!has_plus && !has_minus)
+				break;
+			for (std::size_t row = 0; row < CornerResidualCount; ++row) {
+				if (has_plus && has_minus)
+					derivatives[column][row] =
+						(plus_residual[row] - minus_residual[row]) / (2.0 * step);
+				else if (has_plus)
+					derivatives[column][row] =
+						(plus_residual[row] - residual[row]) / step;
+				else
+					derivatives[column][row] =
+						(residual[row] - minus_residual[row]) / step;
+			}
+		}
+
+		ExplicitOriginMatrix normal{};
+		ExplicitOriginParameters gradient{};
+		for (std::size_t left = 0; left < ExplicitOriginParameterCount; ++left) {
+			for (std::size_t row = 0; row < CornerResidualCount; ++row)
+				gradient[left] += derivatives[left][row] * residual[row];
+			for (std::size_t right = 0;
+				 right < ExplicitOriginParameterCount; ++right) {
+				for (std::size_t row = 0; row < CornerResidualCount; ++row)
+					normal[left][right] +=
+						derivatives[left][row] * derivatives[right][row];
+			}
+			normal[left][left] += damping * (normal[left][left] + 1.0e-9);
+			gradient[left] = -gradient[left];
+		}
+		ExplicitOriginParameters delta{};
+		if (!SolveExplicitOriginLinear(normal, gradient, delta)) {
+			damping *= 10.0;
+			continue;
+		}
+		auto trial = parameters;
+		double delta_norm = 0.0;
+		for (std::size_t index = 0; index < ExplicitOriginParameterCount; ++index) {
+			trial[index] += delta[index];
+			delta_norm = std::max(delta_norm, std::abs(delta[index]));
+		}
+		trial[4] = std::clamp(trial[4], -1000.0, 1000.0);
+		trial[5] = std::remainder(trial[5], 2.0 * Pi);
+		trial[6] = std::clamp(trial[6], -12.0, 12.0);
+		trial[7] = std::clamp(trial[7], -12.0, 12.0);
+		ExplicitOriginResidual trial_residual{};
+		double trial_cost = 0.0;
+		if (EvaluateExplicitOriginParameters(
+				input, target, trial, use_fay, trial_residual, trial_cost) &&
+			trial_cost < cost) {
+			parameters = trial;
+			residual = trial_residual;
+			cost = trial_cost;
+			damping = std::max(1.0e-12, damping / 3.0);
+			if (delta_norm <= 1.0e-10 || cost <= 1.0e-18)
+				break;
+		}
+		else {
+			damping = std::min(1.0e12, damping * 10.0);
+		}
+	}
+	if (auto result = StateFromExplicitOriginParameters(
+			input.source.state, parameters, use_fay))
+		return result;
+	return initial;
+}
+
 // Rescales the drawn quad about its corner mean to the area the model set can
 // actually produce, and reports the factor it used.
 //
@@ -1529,22 +2006,17 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 
 	// Under Preserve the drawn size carries no information -- turning off Fit
 	// Text says "do not change my font size", not "my hand-drawn box is already
-	// the exact right size". The area-pinned affine families aim at the drawn
-	// quad rescaled to the area the pinned scale can produce, the only size
-	// they can ever hit. The projective families are size-blind by trying, not
-	// by rescaling: foreshortening trades apparent area even at pinned scale,
-	// so a drawn quad of almost any area may still be exactly reachable
-	// verbatim, and when it is not -- a much larger draw can never be grown
-	// to -- the same families run again against the rescaled quad and fit the
-	// foreshortened shape at the producible size. See PreserveAreaFactor.
-	// Under Fit the rescaled quad is the drawn one and nothing changes.
+	// the exact right size". Every family therefore aims at one homothetic copy
+	// of the drawn quad whose area matches the currently rendered text. This
+	// keeps the inner preview's direction and vanishing points tied to the outer
+	// frame while dropping only the size change. Under Fit the target is used
+	// unchanged.
 	Quad const drawn_target = request.target;
 	Quad affine_target = drawn_target;
 	std::optional<Homography> affine_target_transform;
-	bool size_drifted = false;
 	if (request.scale_policy == PerspectiveScalePolicy::Preserve) {
 		if (auto const factor = PreserveAreaFactor(
-			drawn_target, projection_context.quad)) {
+				drawn_target, projection_context.quad)) {
 			auto const rescaled = ScaleQuadAboutCenter(drawn_target, *factor);
 			// A rescale can only fail validation in extreme cases, and a drawn
 			// quad the user can still see is worth more than a normalized one
@@ -1555,7 +2027,6 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 				if (normalized) {
 					affine_target = rescaled;
 					affine_target_transform = normalized.value;
-					size_drifted = std::abs(*factor - 1.0) > 1.0e-6;
 				}
 			}
 		}
@@ -1567,6 +2038,17 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 		return {SolverError::InvalidTarget, drawn_target_transform.error};
 	if (!affine_target_transform)
 		affine_target_transform = drawn_target_transform.value;
+	std::optional<EvaluatedTransformState> fit_state;
+	if (request.scale_policy == PerspectiveScalePolicy::Preserve) {
+		// Preserve is the same operation as Fit with the size tags pinned. Keep
+		// the Fit winner as a candidate seed so toggling the option does not
+		// replace its plane and orientation with a different decomposition.
+		SolverInput fit_request = request;
+		fit_request.scale_policy = PerspectiveScalePolicy::Fit;
+		if (auto const fitted = SolvePerspectiveTags(fit_request);
+			fitted && fitted.candidate)
+			fit_state = fitted.candidate->state;
+	}
 
 	struct RawCandidate {
 		CandidateFamily family;
@@ -1582,8 +2064,7 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 			affine_target;
 		Vec2 translation;
 		for (std::size_t index = 0; index < translation_target.size(); ++index)
-			translation = translation
-				+ (translation_target[index] - current_forward.quad[index]) / 4.0;
+			translation = translation + (translation_target[index] - current_forward.quad[index]) / 4.0;
 		auto position_only = request.source.state;
 		position_only.position = position_only.position + translation;
 		raw_candidates.push_back({CandidateFamily::CurrentRepresentation,
@@ -1599,8 +2080,43 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 
 	bool const preserve_scale =
 		request.scale_policy == PerspectiveScalePolicy::Preserve;
+	bool const preserve_parallelogram =
+		preserve_scale && IsParallelogram(drawn_target);
 	// Closed forms cannot preserve multiline shear; use constrained refits.
 	bool const multiline = request.source.bounds.multiline_text;
+	std::optional<PreserveShapeAffineResult> preserve_shape;
+	if (preserve_parallelogram && request.representation_policy == PerspectiveRepresentationPolicy::Automatic && !multiline) {
+		preserve_shape = PreserveShapeAffineCandidate(
+			request, affine_target, request.locked_rotation_z);
+		if (!preserve_shape && IsRectangle(affine_target))
+			preserve_shape = PreserveRectangleFallback(
+				request, affine_target, request.locked_rotation_z);
+		if (preserve_shape)
+			raw_candidates.push_back({.family = CandidateFamily::PreserveShapeAffine,
+									  .state = preserve_shape->state,
+									  .effective_target = preserve_shape->effective_target});
+	}
+	// A regular rectangle is a visual invariant under Preserve even when the
+	// pinned scales cannot reproduce its aspect ratio exactly. In that case the
+	// rectangle fallback is the deliberate closest state; allowing a projective
+	// candidate to compete would trade a modest size shortfall for a visibly
+	// skewed inner frame.
+	bool const preserve_shape_available =
+		preserve_shape && (preserve_shape->exact || IsRectangle(affine_target));
+	// The Fit decomposition is the useful continuity anchor only for an
+	// unrestricted projective solve. Restricted Fax + Frz solves and the
+	// dedicated affine shape candidates have stronger representation contracts
+	// that must remain ahead of this preference.
+	if (fit_state
+		&& request.representation_policy == PerspectiveRepresentationPolicy::Automatic
+		&& !multiline
+		&& !preserve_shape_available) {
+		auto state = *fit_state;
+		state.scale_x = request.source.state.scale_x;
+		state.scale_y = request.source.state.scale_y;
+		raw_candidates.push_back({CandidateFamily::PreserveFitState,
+								  state, affine_target});
+	}
 	auto const add_refit = [&](
 							   CandidateFamily family,
 							   EvaluatedTransformState const& seed,
@@ -1624,8 +2140,7 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 			if (auto const seed = DecomposeAffine(*affine, request.source, false))
 				add_refit(CandidateFamily::AffineFax, *seed,
 						  {.preserve_scale = preserve_scale, .preserve_plane = true, .preserve_shear_y = true}, affine_target);
-			if (request.representation_policy
-				== PerspectiveRepresentationPolicy::Automatic) {
+			if (request.representation_policy == PerspectiveRepresentationPolicy::Automatic) {
 				if (auto const seed = DecomposeAffine(*affine, request.source, true))
 					add_refit(CandidateFamily::AffineFay, *seed,
 							  {.preserve_scale = preserve_scale, .preserve_plane = true, .preserve_shear_x = true}, affine_target);
@@ -1641,8 +2156,7 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 			if (auto const candidate = DecomposeAffine(*affine, request.source, false))
 				raw_candidates.push_back({CandidateFamily::AffineFax, *candidate,
 										  affine_target});
-			if (request.representation_policy
-				== PerspectiveRepresentationPolicy::Automatic) {
+			if (request.representation_policy == PerspectiveRepresentationPolicy::Automatic) {
 				if (auto const candidate = DecomposeAffine(*affine, request.source, true))
 					raw_candidates.push_back({CandidateFamily::AffineFay, *candidate,
 											  affine_target});
@@ -1658,10 +2172,7 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 	// with the fay held exactly as written. Automatic gets the family too: it is
 	// a plain affine candidate, and the existing scoring already knows how to
 	// rank it against the zeroing variants.
-	if (std::abs(request.source.state.shear_y) > 1.0e-9
-		&& !request.source.state.origin
-		&& std::abs(request.source.state.rotation_x) <= 1.0e-9
-		&& std::abs(request.source.state.rotation_y) <= 1.0e-9) {
+	if (std::abs(request.source.state.shear_y) > 1.0e-9 && !request.source.state.origin && std::abs(request.source.state.rotation_x) <= 1.0e-9 && std::abs(request.source.state.rotation_y) <= 1.0e-9) {
 		add_refit(CandidateFamily::AffineFay, request.source.state,
 				  {.preserve_scale = preserve_scale, .preserve_plane = true, .preserve_shear_y = true}, affine_target);
 	}
@@ -1677,13 +2188,11 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 	// frz at the lock instead of freeing it, so the lock filter below passes by
 	// construction and a vertical line with an existing plane can finally refit
 	// in plane at all.
-	if (request.source.state.origin
-		|| std::abs(request.source.state.rotation_x) > 1.0e-9
-		|| std::abs(request.source.state.rotation_y) > 1.0e-9) {
-		// The refit is a projective-class family, so under a size drift it runs
-		// against both targets: the drawn quad, which a declared plane can
-		// often still hit verbatim, and the rescaled one for the shape at the
-		// size the pinned scale can produce.
+	if ((request.source.state.origin || std::abs(request.source.state.rotation_x) > 1.0e-9 || std::abs(request.source.state.rotation_y) > 1.0e-9) && !preserve_shape_available) {
+		// Automatic can change the projective axes and therefore follows the
+		// homothetic Preserve target. Fax + Frz Only deliberately keeps the
+		// declared plane; when that plane cannot realize the size-normalized
+		// target, its residual is reported as the policy's honest shortfall.
 		ImplicitModel const plane_model{
 			.preserve_scale = preserve_scale,
 			.preserve_plane = true,
@@ -1691,17 +2200,14 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 			.preserve_rotation_z = request.locked_rotation_z.has_value(),
 			.preserve_origin = true,
 			.locked_rotation_z = request.locked_rotation_z};
+		bool const preserve_target = preserve_scale && request.representation_policy == PerspectiveRepresentationPolicy::Automatic;
+		Quad const& plane_target = preserve_target ? affine_target : drawn_target;
 		add_refit(CandidateFamily::CurrentPlaneRefit, request.source.state,
-				  plane_model, drawn_target);
-		if (size_drifted)
-			add_refit(CandidateFamily::CurrentPlaneRefit, request.source.state,
-					  plane_model, affine_target);
+				  plane_model, plane_target);
 		// The zero-fax economy variant is meaningless under multi-line bounds:
 		// the lock would just restore the source's fax and duplicate the refit
 		// above, so it is only generated where the fax may actually move.
-		if (request.representation_policy
-			== PerspectiveRepresentationPolicy::Automatic
-			&& !multiline) {
+		if (request.representation_policy == PerspectiveRepresentationPolicy::Automatic && !multiline) {
 			// Tag-economy variant: zero the fax in the seed and freeze it, so
 			// the fit goes out to a fay-only representation when the quad
 			// allows one. Seeding the zero rather than hard-coding it keeps
@@ -1716,82 +2222,25 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 				.preserve_origin = true,
 				.locked_rotation_z = request.locked_rotation_z};
 			add_refit(CandidateFamily::CurrentPlaneRefit, seed,
-					  fay_only_model, drawn_target);
-			if (size_drifted)
-				add_refit(CandidateFamily::CurrentPlaneRefit, seed,
-						  fay_only_model, affine_target);
+					  fay_only_model, plane_target);
 		}
 	}
-
-	if (request.representation_policy
-		== PerspectiveRepresentationPolicy::Automatic) {
-		Vec2 const source_center {
+	if (request.representation_policy == PerspectiveRepresentationPolicy::Automatic && !preserve_shape_available) {
+		Vec2 const source_center{
 			(request.source.bounds.rectangle.left + request.source.bounds.rectangle.right) / 2.0,
 			(request.source.bounds.rectangle.top + request.source.bounds.rectangle.bottom) / 2.0,
 		};
-		// Projective families are size-blind by trying, not by rescaling:
-		// foreshortening trades apparent area even at pinned scale, so the
-		// drawn quad may be exactly reachable verbatim no matter how its area
-		// compares to the current one. When it is not (a much larger draw can
-		// never be grown to), the size-blind variant iterates: each fit
-		// reveals the area its angles actually produce, and the next pass
-		// re-aims at the drawn quad scaled to that area. A shape whose very
-		// perspectivity inflates its area therefore converges on the size it
-		// can really have, instead of on the flat-anchor normalization that
-		// ignores the swing. Whichever candidate reaches wins by the normal
-		// score order.
+		// Preserve has already selected the single homothetic target above.
+		// Each projective family is fitted once against that target; retrying
+		// with an area derived from the fitted state would change the requested
+		// size and could no longer guarantee a proportional inner frame.
 		auto const generate_projective = [&](Quad const& target,
-											 Homography const& target_transform,
-											 bool size_blind) {
-			// The drawn quad rescaled to the area a fitted state actually
-			// produces, or nullopt when size-blindness is off or the state
-			// cannot be probed. This is the next pass's aim: the size the
-			// shape's own angular content can have at the pinned scale.
-			auto const aim_for = [&](EvaluatedTransformState const& state)
-				-> std::optional<Quad> {
-				if (!size_blind)
-					return std::nullopt;
-				auto const probed = ForwardQuad(request.source, state);
-				if (!probed)
-					return std::nullopt;
-				double const drawn_area = std::abs(SignedArea(drawn_target));
-				double const state_area = std::abs(SignedArea(probed.quad));
-				if (!(drawn_area > 0.0) || !std::isfinite(state_area) || !(state_area > 0.0))
-					return std::nullopt;
-				auto const rescaled = ScaleQuadAboutCenter(
-					drawn_target, std::sqrt(state_area / drawn_area));
-				if (!ValidateQuad(rescaled))
-					return std::nullopt;
-				return rescaled;
-			};
-			// Fit, probe, re-aim, fit again: stop when the area the state
-			// produces matches the area it was aimed at, because then the aim
-			// is self-consistent and the fit has nothing left to chase. The
-			// loop creeps geometrically toward that fixed point, and four
-			// passes get close enough that the leftover is buried in the snap
-			// tolerance that exists for exactly this kind of remainder.
+											 Homography const& target_transform) {
 			auto const run_family = [&](CandidateFamily family, auto&& fit) {
-				std::optional<EvaluatedTransformState> state;
-				Quad aim = target;
-				Quad state_aim = aim;
-				for (int pass = 0; pass < 4; ++pass) {
-					auto const next_state = fit(aim);
-					if (!next_state)
-						break;
-					state = *next_state;
-					state_aim = aim;
-					auto const next_aim = aim_for(*state);
-					if (!next_aim)
-						break;
-					if (std::abs(SignedArea(*next_aim) - SignedArea(aim)) <= 1.0e-3 * std::abs(SignedArea(aim)))
-						break;
-					aim = *next_aim;
-				}
-				if (state) {
+				if (auto const state = fit(target))
 					raw_candidates.push_back({.family = family,
 											  .state = *state,
-											  .effective_target = state_aim});
-				}
+											  .effective_target = target});
 			};
 			if (auto const local_affine = LocalAffine(target_transform, source_center)) {
 				if (request.locked_rotation_z) {
@@ -1831,19 +2280,41 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 				}
 			}
 			// The closed-form origin decomposition derives both shear axes
-			// from the target geometry and cannot carry the multi-line lock,
-			// so it only exists where the shear is free.
+			// from the target geometry and cannot carry the multi-line lock.
+			// Preserve needs a fixed-scale variant: resetting the scales of the
+			// closed-form result after fitting changes the quad shape. Re-solving
+			// the same eight projective degrees of freedom with an explicit origin
+			// keeps the target shape while honoring the source scale.
 			if (!multiline) {
-				run_family(CandidateFamily::ProjectiveExplicitOrigin,
-						   [&](Quad const& aim) {
-							   return ExplicitOriginCandidate(request, aim, projection_context);
-						   });
+				if (preserve_scale && !request.locked_rotation_z) {
+					for (bool const use_fay : {false, true}) {
+						run_family(CandidateFamily::ProjectiveExplicitOrigin,
+								   [&](Quad const& aim) {
+									   auto const initial = ExplicitOriginCandidate(
+										   request, aim, projection_context);
+									   if (!initial)
+										   return std::optional<EvaluatedTransformState>{};
+									   return OptimizeFixedScaleExplicitOrigin(
+										   request, aim, *initial, use_fay);
+								   });
+					}
+				}
+				else {
+					run_family(CandidateFamily::ProjectiveExplicitOrigin,
+							   [&](Quad const& aim) {
+								   return ExplicitOriginCandidate(
+									   request, aim, projection_context);
+							   });
+				}
 			}
 		};
-		generate_projective(drawn_target, drawn_target_transform.value, false);
-		if (size_drifted)
+		// Preserve means that the preview is a uniformly scaled copy of the
+		// drawn quad. Fit uses the original target.
+		if (preserve_scale)
 			generate_projective(
-				affine_target, affine_target_transform.value(), true);
+				affine_target, affine_target_transform.value());
+		else
+			generate_projective(drawn_target, drawn_target_transform.value);
 	}
 
 	std::optional<SolverCandidate> best;

@@ -67,8 +67,11 @@ void VisualToolDrag::SetToolbar(wxToolBar *tb) {
 	const int icon_size = GetVideoUiIconSize(toolbar, OPT_GET("App/Toolbar Icon Size")->GetInt());
 	toolbar->SetToolBitmapSize(wxSize(icon_size, icon_size));
 	toolbar->AddSeparator();
-	move_pos_button = toolbar->AddTool(-1, _("Toggle between \\move and \\pos"),
-		wxBitmapBundle::FromBitmap(CMD_ICON_GET(visual_move_conv_move, wxLayout_Default, icon_size)))->GetId();
+	move_pos_button = toolbar->AddTool(wxID_ANY, _("Toggle between \\move and \\pos"),
+		wxBitmapBundle::FromBitmap(CMD_ICON_GET(visual_move_conv_move, wxLayout_Default, icon_size)),
+		_("Toggle between \\move and \\pos"), wxITEM_CHECK)->GetId();
+	button_is_move = true;
+	UpdateToggleButtons();
 	toolbar->Realize();
 	toolbar->Show(true);
 
@@ -76,7 +79,7 @@ void VisualToolDrag::SetToolbar(wxToolBar *tb) {
 }
 
 void VisualToolDrag::UpdateToggleButtons() {
-	if (!toolbar || move_pos_button < 0) return;
+	if (!toolbar) return;
 
 	bool to_move = true;
 	if (active_line) {
@@ -85,14 +88,17 @@ void VisualToolDrag::UpdateToggleButtons() {
 		to_move = !GetLineMove(active_line, p1, p2, t1, t2);
 	}
 
-	if (to_move == button_is_move) return;
-
-	const int icon_size = GetVideoUiIconSize(toolbar, OPT_GET("App/Toolbar Icon Size")->GetInt());
-	if (to_move)
-		toolbar->SetToolNormalBitmap(move_pos_button, wxBitmapBundle::FromBitmap(CMD_ICON_GET(visual_move_conv_move, wxLayout_Default, icon_size)));
-	else
-		toolbar->SetToolNormalBitmap(move_pos_button, wxBitmapBundle::FromBitmap(CMD_ICON_GET(visual_move_conv_pos, wxLayout_Default, icon_size)));
-	button_is_move = to_move;
+	if (to_move != button_is_move) {
+		const int icon_size = GetVideoUiIconSize(toolbar, OPT_GET("App/Toolbar Icon Size")->GetInt());
+		if (to_move)
+			toolbar->SetToolNormalBitmap(move_pos_button, wxBitmapBundle::FromBitmap(CMD_ICON_GET(visual_move_conv_move, wxLayout_Default, icon_size)));
+		else
+			toolbar->SetToolNormalBitmap(move_pos_button, wxBitmapBundle::FromBitmap(CMD_ICON_GET(visual_move_conv_pos, wxLayout_Default, icon_size)));
+		button_is_move = to_move;
+	}
+	// The checked state represents the current line mode, while the icon
+	// represents the conversion performed by the next click.
+	toolbar->ToggleTool(move_pos_button, !to_move);
 }
 
 void VisualToolDrag::OnSubTool(wxCommandEvent &) {
@@ -117,7 +123,7 @@ void VisualToolDrag::OnSubTool(wxCommandEvent &) {
 	}
 
 	CommitAndRefresh();
-	//UpdateToggleButtons();
+	UpdateToggleButtons();
 }
 
 void VisualToolDrag::OnLineChanged() {

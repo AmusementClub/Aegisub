@@ -1,6 +1,7 @@
 #include "subtitle_grid_projection.h"
 
 #include "../ass_dialogue.h"
+#include "../subtitle_grid_folding.h"
 
 #include <algorithm>
 
@@ -139,4 +140,25 @@ SubtitleGridWindow BuildSubtitleGridWindow(
 	return window;
 }
 
+SubtitleGridWindow BuildFoldedSubtitleGridWindow(
+	std::vector<SubtitleGridDisplayRow> const& rows,
+	VisibleSubtitleRowsRequest const& request,
+	Revision revision,
+	SubtitleGridRowStateResolver const& resolve_state) {
+	SubtitleGridWindow window;
+	window.revision = revision;
+	window.total_rows = static_cast<int>(rows.size());
+	window.first_row = std::clamp(request.first_row, 0, window.total_rows);
+	int const count = std::clamp(request.row_count, 0, window.total_rows - window.first_row);
+	window.rows.reserve(static_cast<std::size_t>(count));
+
+	RequestedGridColumns columns(request.column_ids);
+	for (int display_row = window.first_row; display_row < window.first_row + count; ++display_row) {
+		auto const& row = rows[static_cast<std::size_t>(display_row)];
+		auto state = resolve_state ? resolve_state(*row.dialogue) : SubtitleGridRowState{};
+		window.rows.push_back(ProjectSubtitleGridRow(*row.dialogue, row.source_row, state, columns));
+	}
+
+	return window;
+}
 }

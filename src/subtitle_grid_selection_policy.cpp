@@ -142,12 +142,14 @@ SelectionPlan PlanMouseSelection(MouseSelectionInput input) {
 }
 
 SelectionPlan PlanKeyboardSelection(KeyboardSelectionInput input) {
-	if (input.direction == 0 || input.step <= 0 || input.row_count <= 0)
+	if (input.row_count <= 0)
+		return {};
+	bool const explicit_target = input.target_row != -1;
+	if (explicit_target ? !is_valid_row(input.row_count, input.target_row) : input.direction == 0 || input.step <= 0)
 		return {};
 
 	auto const active = is_valid_row(input.row_count, input.active_row) ? input.active_row : 0;
-	auto const next = clamp_row(input.row_count, active + input.direction * input.step);
-	auto selected = normalized_rows(std::move(input.selected_rows), input.row_count);
+	auto const next = explicit_target ? input.target_row : clamp_row(input.row_count, active + input.direction * input.step);
 	auto const modifiers = input.modifiers;
 	auto plan = active_plan(next);
 
@@ -160,9 +162,11 @@ SelectionPlan PlanKeyboardSelection(KeyboardSelectionInput input) {
 	if (modifiers.alt && !modifiers.shift && !modifiers.ctrl)
 		return plan;
 
-	if (modifiers.shift && !modifiers.ctrl && !modifiers.alt) {
+	if (modifiers.shift && !modifiers.alt) {
 		int const anchor = normalized_anchor(input.row_count, input.anchor_row, active);
 		std::vector<int> next_selection;
+		if (modifiers.ctrl)
+			next_selection = normalized_rows(std::move(input.selected_rows), input.row_count);
 		add_range(next_selection, next, anchor);
 		plan.anchor_row = anchor;
 		plan.set_selection = true;

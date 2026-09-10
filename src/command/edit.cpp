@@ -57,6 +57,7 @@
 #include "../project.h"
 #include "../selection_controller.h"
 #include "../subtitle_edit_ops.h"
+#include "../subtitle_grid_folding.h"
 #include "../subs_controller.h"
 #include "../subs_edit_box.h"
 #include "../async_video_provider.h"
@@ -97,6 +98,57 @@ wxDataFormat dialogue_exact_clipboard_format() {
 	return format;
 }
 
+wxDataFormat dialogue_folding_clipboard_format() {
+	static wxDataFormat format(wxS("AegisubInternalDialogueFoldingV1"));
+	return format;
+}
+
+struct CopiedFoldGroup {
+	size_t start;
+	size_t end;
+	bool collapsed;
+};
+
+std::vector<CopiedFoldGroup> copied_fold_groups(AssFile& ass, std::vector<AssDialogue *> const& selection) {
+	std::vector<CopiedFoldGroup> result;
+	for (auto const& group : ass.Folding().Groups()) {
+		auto first = std::ranges::lower_bound(selection, group.start, {}, &AssDialogue::Row);
+		int length = group.end - group.start + 1;
+		if (first == selection.end() || (*first)->Row != group.start || selection.end() - first < length || (*(first + length - 1))->Row != group.end)
+			continue;
+		auto start = static_cast<size_t>(first - selection.begin());
+		result.push_back({.start = start, .end = start + static_cast<size_t>(length) - 1, .collapsed = group.collapsed});
+	}
+	return result;
+}
+
+std::string serialize_copied_fold_groups(std::vector<CopiedFoldGroup> const& groups) {
+	std::ostringstream stream;
+	for (auto const& group : groups)
+		stream << group.start << ' ' << group.end << ' ' << group.collapsed << '\n';
+	return stream.str();
+}
+
+void restore_copied_fold_groups(AssFile& ass, EntryList<AssDialogue>& lines, std::string const& data) {
+	std::vector<AssDialogue *> copies;
+	for (auto& line : lines) {
+		SubtitleGridFolding::StripMarkers(ass, line);
+		copies.push_back(&line);
+	}
+
+	std::vector<CopiedFoldGroup> groups;
+	std::istringstream stream(data);
+	size_t start, end;
+	int collapsed;
+	while (stream >> std::ws && !stream.eof()) {
+		if (!(stream >> start >> end >> collapsed) || start >= end || end >= copies.size() || (collapsed != 0 && collapsed != 1) || (!groups.empty() && start <= groups.back().end))
+			return;
+		groups.push_back({.start = start, .end = end, .collapsed = collapsed != 0});
+	}
+	for (auto const& group : groups)
+		SubtitleGridFolding::AddCopiedGroup(ass, *copies[group.start], *copies[group.end], group.collapsed);
+}
+
 bool is_dialogue_clipboard_line(std::string const& data) {
 	auto trimmed = agi::util::strings::trim_copy(data);
 	return agi::util::strings::starts_with(trimmed, "Dialogue:")
@@ -107,7 +159,7 @@ std::string serialize_dialogue_for_exact_clipboard(AssDialogue const& line) {
 	return line.GetEntryData(line.Start.GetAssFormatted(true), line.End.GetAssFormatted(true));
 }
 
-std::string get_exact_dialogue_clipboard_payload() {
+std::string get_exact_dialogue_clipboard_payload(std::string *fold_data = nullptr) {
 	std::string data;
 	wxClipboard *cb = wxClipboard::Get();
 	if (cb->Open()) {
@@ -117,12 +169,17 @@ std::string get_exact_dialogue_clipboard_payload() {
 			if (cb->GetData(raw_data) && raw_data.GetData() && raw_data.GetSize())
 				data.assign(static_cast<char const*>(raw_data.GetData()), raw_data.GetSize());
 		}
+		if (fold_data && !data.empty() && cb->IsSupported(dialogue_folding_clipboard_format())) {
+			wxCustomDataObject raw_data(dialogue_folding_clipboard_format());
+			if (cb->GetData(raw_data) && raw_data.GetData() && raw_data.GetSize())
+				fold_data->assign(static_cast<char const *>(raw_data.GetData()), raw_data.GetSize());
+		}
 		cb->Close();
 	}
 	return data;
 }
 
-void set_dialogue_clipboard(std::string const& text_data, std::string const& exact_data) {
+void set_dialogue_clipboard(std::string const& text_data, std::string const& exact_data, std::string const& fold_data) {
 	wxClipboard *cb = wxClipboard::Get();
 	if (cb->Open()) {
 		auto *composite = new wxDataObjectComposite;
@@ -131,6 +188,11 @@ void set_dialogue_clipboard(std::string const& text_data, std::string const& exa
 		auto *exact_object = new wxCustomDataObject(dialogue_exact_clipboard_format());
 		exact_object->SetData(exact_data.size(), exact_data.data());
 		composite->Add(exact_object);
+		if (!fold_data.empty()) {
+			auto *fold_object = new wxCustomDataObject(dialogue_folding_clipboard_format());
+			fold_object->SetData(fold_data.size(), fold_data.data());
+			composite->Add(fold_object);
+		}
 
 		cb->SetData(composite);
 		cb->Flush();
@@ -300,8 +362,11 @@ void paste_lines(agi::Context *c, bool paste_over, Paster&& paste_line) {
 	};
 
 	EntryList<AssDialogue> exact_lines;
-	auto exact_data = get_exact_dialogue_clipboard_payload();
+	std::string fold_data;
+	auto exact_data = get_exact_dialogue_clipboard_payload(&fold_data);
 	if (!exact_data.empty() && parse_dialogue_clipboard_data(exact_data, exact_lines)) {
+		if (!paste_over)
+			restore_copied_fold_groups(*core.ass, exact_lines, fold_data);
 		for (auto const& line : exact_lines) {
 			if (!handle_line(agi::make_unique<AssDialogue>(line)))
 				break;
@@ -318,6 +383,7 @@ void paste_lines(agi::Context *c, bool paste_over, Paster&& paste_line) {
 				return;
 
 			std::unique_ptr<AssDialogue> new_line(get_dialogue(std::string(line)));
+			SubtitleGridFolding::StripMarkers(*core.ass, *new_line);
 			if (!handle_line(std::move(new_line)))
 				stop = true;
 		});
@@ -1658,12 +1724,15 @@ static void copy_lines(agi::Context *c) {
 	text_lines.reserve(selection.size());
 	exact_lines.reserve(selection.size());
 	for (auto* dialogue : selection) {
-		text_lines.push_back(SerializeAssDialogueForOutput(*dialogue, AssTimeOutputMode::LegacyRounding, &core.project->Timecodes()));
-		exact_lines.push_back(serialize_dialogue_for_exact_clipboard(*dialogue));
+		AssDialogue copy(*dialogue);
+		SubtitleGridFolding::StripMarkers(*core.ass, copy);
+		text_lines.push_back(SerializeAssDialogueForOutput(copy, AssTimeOutputMode::LegacyRounding, &core.project->Timecodes()));
+		exact_lines.push_back(serialize_dialogue_for_exact_clipboard(copy));
 	}
 	set_dialogue_clipboard(
 		agi::util::strings::join(text_lines, "\r\n"),
-		agi::util::strings::join(exact_lines, "\r\n"));
+		agi::util::strings::join(exact_lines, "\r\n"),
+		serialize_copied_fold_groups(copied_fold_groups(*core.ass, selection)));
 }
 
 static void delete_lines(agi::Context *c, std::string const& commit_message) {
@@ -1761,6 +1830,8 @@ struct edit_line_delete final : public validate_sel_nonempty {
 
 static void duplicate_lines(agi::Context *c, int shift) {
 	auto core = c->GetCore();
+	auto groups = copied_fold_groups(*core.ass, core.selectionController->GetSortedSelection());
+	std::vector<AssDialogue *> copies;
 	auto const& sel = core.selectionController->GetSelectedSet();
 	auto in_selection = [&](AssDialogue const& d) { return sel.count(const_cast<AssDialogue *>(&d)); };
 
@@ -1783,6 +1854,8 @@ static void duplicate_lines(agi::Context *c, int shift) {
 		do {
 			auto old_diag = &*start;
 			auto new_diag = new AssDialogue(*old_diag);
+			SubtitleGridFolding::StripMarkers(*core.ass, *new_diag);
+			copies.push_back(new_diag);
 
 			core.ass->Events.insert(insert_pos, *new_diag);
 			new_sel.insert(new_diag);
@@ -1820,6 +1893,8 @@ static void duplicate_lines(agi::Context *c, int shift) {
 	}
 
 	if (new_sel.empty()) return;
+	for (auto const& group : groups)
+		SubtitleGridFolding::AddCopiedGroup(*core.ass, *copies[group.start], *copies[group.end], group.collapsed);
 
 	core.ass->Commit(from_wx(shift ? _("split") : _("duplicate lines")), AssFile::COMMIT_DIAG_ADDREM);
 
@@ -1912,10 +1987,12 @@ struct edit_line_join_keep_first final : public validate_sel_multiple {
 static bool try_paste_lines(agi::Context *c) {
 	auto core = c->GetCore();
 	EntryList<AssDialogue> parsed;
-	auto exact_data = get_exact_dialogue_clipboard_payload();
+	std::string fold_data;
+	auto exact_data = get_exact_dialogue_clipboard_payload(&fold_data);
 	bool exact_parsed = !exact_data.empty() && parse_dialogue_clipboard_data(exact_data, parsed);
 	if (!exact_parsed && !parse_dialogue_clipboard_data(GetClipboard(), parsed))
 		return false;
+	restore_copied_fold_groups(*core.ass, parsed, exact_parsed ? fold_data : std::string{});
 
 	AssDialogue *new_active = &*parsed.begin();
 	Selection new_selection;
@@ -2109,6 +2186,7 @@ struct edit_line_split_by_karaoke final : public validate_sel_nonempty {
 
 			for (auto const& syl : kara) {
 				auto new_line = new AssDialogue(*line);
+				SubtitleGridFolding::StripMarkers(*core.ass, *new_line);
 
 				new_line->Start = syl.start_time;
 				new_line->End = syl.start_time + syl.duration;
@@ -2140,6 +2218,7 @@ void split_lines(agi::Context *c, AssDialogue *&n1, AssDialogue *&n2) {
 
 	n1 = core.selectionController->GetActiveLine();
 	n2 = new AssDialogue(*n1);
+	SubtitleGridFolding::StripMarkers(*core.ass, *n2);
 	core.ass->Events.insert(++core.ass->iterator_to(*n1), *n2);
 
 	std::string orig = n1->Text;

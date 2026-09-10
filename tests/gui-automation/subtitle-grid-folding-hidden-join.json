@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "name": "subtitle-grid-folding-hidden-join",
+  "hosts": ["gui-test"],
+  "load_global_scripts": false,
+  "default_timeout_ms": 5000,
+  "steps": [
+    { "action": "command", "id": "am/reload/autoload" },
+    { "action": "command", "id": "automation/lua/subtitle-grid-folding/Prepare" },
+    { "action": "command", "id": "grid/fold/create" },
+    { "action": "assert", "target": "command", "id": "automation/lua/subtitle-grid-folding/Original collapsed", "field": "validated", "equals": true },
+    { "action": "command", "id": "automation/lua/subtitle-grid-folding/Select hidden join" },
+    { "action": "assert", "target": "command", "id": "automation/lua/subtitle-grid-folding/Hidden join selection", "field": "validated", "equals": true },
+    { "action": "command", "id": "edit/line/join/keep_first" },
+    { "action": "assert", "target": "command", "id": "automation/lua/subtitle-grid-folding/Hidden join cleared boundaries", "field": "validated", "equals": true },
+    { "action": "command", "id": "edit/undo" },
+    { "action": "assert", "target": "command", "id": "automation/lua/subtitle-grid-folding/Original collapsed", "field": "validated", "equals": true },
+    { "action": "command", "id": "edit/undo" },
+    { "action": "command", "id": "edit/undo" },
+    { "action": "assert", "target": "command", "id": "automation/lua/subtitle-grid-folding/Initial default restored", "field": "validated", "equals": true },
+    { "action": "assert", "target": "command", "id": "edit/undo", "field": "validated", "equals": false }
+  ]
+}

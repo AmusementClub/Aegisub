@@ -18,9 +18,7 @@ SubtitleGridDiff BuildSubtitleGridDiffFromCommit(
 	diff.before_revision = before_revision;
 	diff.after_revision = after_revision;
 
-	if (commit_type == AssFile::COMMIT_NEW
-		|| (commit_type & AssFile::COMMIT_ORDER)
-		|| (commit_type & AssFile::COMMIT_DIAG_ADDREM)) {
+	if (commit_type == AssFile::COMMIT_NEW || (commit_type & AssFile::COMMIT_ORDER) || (commit_type & AssFile::COMMIT_EXTRADATA) || (commit_type & AssFile::COMMIT_DIAG_ADDREM)) {
 		diff.kind = SubtitleGridDiffKind::Reset;
 		diff.requires_full_refresh = true;
 		return diff;

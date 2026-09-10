@@ -34,6 +34,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <wx/brush.h>
 #include <wx/window.h>
 
 #include "presentation/presentation_contract.h"
@@ -46,6 +47,7 @@ namespace agi {
 class AssDialogue;
 class GridColumn;
 class WidthHelper;
+class wxScrollBar;
 #ifdef AEGISUB_WITH_SKIA_SUBTITLE_GRID
 namespace aegisub::grid { class SubtitleGridRendererSlot; }
 #endif
@@ -93,6 +95,7 @@ class BaseGrid final : public wxWindow {
 	int yPos = 0;
 
 	int active_row = -1;
+	bool reveal_active_after_commit = false;
 	int current_frame = -1;
 
 	std::unique_ptr<WidthHelper> width_helper;
@@ -133,6 +136,7 @@ class BaseGrid final : public wxWindow {
 
 	std::vector<AssDialogue*> index_line_map;  ///< Row number -> dialogue line
 	std::vector<AssDialogue const*> projection_line_map; ///< Row number -> dialogue line for presentation projection
+	std::vector<int> display_line_ids;                   ///< Stable IDs in the previous display map, for scroll anchoring
 
 	/// Cached grid body context menu
 	std::unique_ptr<wxMenu> context_menu;
@@ -181,10 +185,15 @@ class BaseGrid final : public wxWindow {
 	/// width from an order-independent aggregate (a max over all rows, the total
 	/// row count, or a fixed string), so a commit that only reorders existing
 	/// lines can skip the full-file remeasure.
-	void UpdateMaps(bool remeasure_columns = true);
+	void UpdateMaps(bool remeasure_columns = true, bool preserve_anchor = true);
+	void UpdateDisplayMap(bool preserve_anchor = true);
 	void UpdateStyle();
 
 	int GetRows() const { return index_line_map.size(); }
+	int GetDisplayRows() const;
+	int SourceRow(int display_row) const;
+	int DisplayRow(int source_row) const;
+	int FoldColumnWidth() const;
 	void MakeRowVisible(int row);
 
 	/// @brief Get dialogue by index
@@ -199,6 +208,8 @@ public:
 	void SetDisplayMode(SubtitleTimeDisplayMode mode);
 	void SetByFrame(bool state);
 	void ScrollTo(int y);
+	void RestoreScrollPosition(int source_row);
+	void NextVisibleLine(int direction);
 	void NotifySystemFontsChanged();
 	void NotifyTextRasterPolicyChanged();
 

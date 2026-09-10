@@ -513,6 +513,12 @@ namespace Automation4 {
 
 				auto before_line = capture_current_line(n - 1);
 				auto e = LuaToAssEntry(L, ass);
+				auto const *previous = lines[n - 1];
+				if (previous && previous->Group() == AssEntryGroup::DIALOGUE && e->Group() == AssEntryGroup::DIALOGUE) {
+					// Updating subs[n] replaces the object, not the document line.
+					// Keep the identity used by folding and selection restoration.
+					static_cast<AssDialogue *>(e.get())->Id = static_cast<AssDialogue const *>(previous)->Id;
+				}
 				auto after_line = CaptureMutationLineSnapshot(*e);
 				modification_type |= modification_mask(e.get());
 				QueueLineForDeletion(n - 1);

@@ -22,6 +22,7 @@
 #include "ass_info.h"
 #include "ass_style_resolution.h"
 #include "ass_style.h"
+#include "subtitle_grid_folding.h"
 #include "transient_font_set.h"
 
 #include <algorithm>
@@ -133,6 +134,7 @@ void AssFile::swap(AssFile& from) throw() {
 	std::swap(Properties, from.Properties);
 	std::swap(transient_fonts, from.transient_fonts);
 	std::swap(next_extradata_id, from.next_extradata_id);
+	folding.swap(from.folding);
 }
 
 AssFile& AssFile::operator=(AssFile from) {
@@ -144,6 +146,14 @@ EntryList<AssDialogue>::iterator AssFile::iterator_to(AssDialogue& line) {
 	using l = EntryList<AssDialogue>;
 	bool in_list = !l::node_algorithms::inited(l::value_traits::to_node_ptr(line));
 	return in_list ? Events.iterator_to(line) : Events.end();
+}
+
+SubtitleGridFolding& AssFile::Folding() {
+	if (!folding) {
+		folding = std::make_unique<SubtitleGridFolding>();
+		folding->Rebuild(*this);
+	}
+	return *folding;
 }
 
 void AssFile::InsertAttachment(agi::fs::path const& filename) {
@@ -296,6 +306,14 @@ int AssFile::Commit(std::string const& desc, int type, int amend_id, AssDialogue
 		int i = 0;
 		for (auto& event : Events)
 			event.Row = i++;
+	}
+
+	if (type == COMMIT_NEW || (type & (COMMIT_DIAG_ADDREM | COMMIT_ORDER | COMMIT_EXTRADATA))) {
+		if (Folding().PrepareCommit(*this, type)) {
+			type |= COMMIT_FOLD;
+			single_line = nullptr;
+			changed_lines = {};
+		}
 	}
 
 	PushState({desc, &amend_id, single_line, type, changed_lines});

@@ -258,6 +258,24 @@ TEST(presentation_contract, builds_reset_diff_for_grid_shape_commits) {
 	EXPECT_TRUE(diff.upserted_rows.empty());
 }
 
+TEST(presentation_contract, folding_commit_resets_display_window_even_with_single_changed_line) {
+	AssDialogue line;
+	line.Row = 3;
+	line.Text = "fold start";
+
+	auto diff = BuildSubtitleGridDiffFromCommit(
+		AssFile::COMMIT_FOLD | AssFile::COMMIT_DIAG_TEXT,
+		15,
+		16,
+		&line);
+
+	EXPECT_EQ(15u, diff.before_revision);
+	EXPECT_EQ(16u, diff.after_revision);
+	EXPECT_EQ(SubtitleGridDiffKind::Reset, diff.kind);
+	EXPECT_TRUE(diff.requires_full_refresh);
+	EXPECT_TRUE(diff.upserted_rows.empty());
+}
+
 TEST(presentation_contract, builds_single_row_diff_for_text_commit) {
 	AssDialogue line;
 	line.Id = 55;

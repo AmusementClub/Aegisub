@@ -242,7 +242,7 @@ FrameMain::FrameMain()
 		[context = context.get()](agi::ProjectUiStateSnapshot const& state) {
 			auto ui = context->GetUI();
 			if (state.subtitle_scroll_position && ui.subsGrid)
-				ui.subsGrid->ScrollTo(*state.subtitle_scroll_position);
+				ui.subsGrid->RestoreScrollPosition(*state.subtitle_scroll_position);
 			if (state.video_zoom && ui.videoDisplay)
 				ui.videoDisplay->SetZoom(*state.video_zoom);
 		},

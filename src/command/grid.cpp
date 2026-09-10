@@ -35,6 +35,7 @@
 #include "../ass_file.h"
 #include "../audio_controller.h"
 #include "../audio_timing.h"
+#include "../base_grid.h"
 #include "../compat.h"
 #include "../frame_main.h"
 #include "../include/aegisub/context.h"
@@ -43,6 +44,7 @@
 #include "../options.h"
 #include "../selection_controller.h"
 #include "../subtitle_grid_ops.h"
+#include "../subtitle_grid_folding.h"
 
 #include <libaegisub/make_unique.h>
 
@@ -56,7 +58,10 @@ struct grid_line_next final : public Command {
 	STR_HELP("Move to the next subtitle line")
 
 	void operator()(agi::Context *c) override {
-		c->GetCore().selectionController->NextLine();
+		if (c->ui && c->GetUI().subsGrid)
+			c->GetUI().subsGrid->NextVisibleLine(1);
+		else
+			c->GetCore().selectionController->NextLine();
 	}
 };
 
@@ -93,7 +98,203 @@ struct grid_line_prev final : public Command {
 	STR_HELP("Move to the previous line")
 
 	void operator()(agi::Context *c) override {
-		c->GetCore().selectionController->PrevLine();
+		if (c->ui && c->GetUI().subsGrid)
+			c->GetUI().subsGrid->NextVisibleLine(-1);
+		else
+			c->GetCore().selectionController->PrevLine();
+	}
+};
+
+void activate_fold_start(agi::Context *c, int start, int end) {
+	auto core = c->GetCore();
+	auto *active = core.selectionController->GetActiveLine();
+	if (!active || active->Row <= start || active->Row > end)
+		return;
+	for (auto& line : core.ass->Events) {
+		if (line.Row == start) {
+			core.selectionController->SetActiveLine(&line);
+			return;
+		}
+	}
+}
+
+struct grid_fold_create final : public Command {
+	CMD_NAME("grid/fold/create")
+	STR_MENU("Create Fold Group")
+	STR_DISP("Create Fold Group")
+	STR_HELP("Group and collapse the real subtitle range between the first and last selected lines")
+	CMD_TYPE(COMMAND_VALIDATE)
+
+	bool Validate(const agi::Context *c) override {
+		auto core = c->GetCore();
+		auto selection = core.selectionController->GetSortedSelection();
+		return selection.size() >= 2 && core.ass->Folding().CanCreate(selection.front()->Row, selection.back()->Row);
+	}
+
+	void operator()(agi::Context *c) override {
+		if (!Validate(c))
+			return;
+		auto core = c->GetCore();
+		auto selection = core.selectionController->GetSortedSelection();
+		int start = selection.front()->Row;
+		int end = selection.back()->Row;
+		activate_fold_start(c, start, end);
+		if (core.ass->Folding().Create(*core.ass, start, end))
+			core.ass->Commit(from_wx(_("create fold group")), AssFile::COMMIT_FOLD);
+	}
+};
+
+struct validate_current_fold : public Command {
+	CMD_TYPE(COMMAND_VALIDATE)
+
+	bool Validate(const agi::Context *c) override {
+		auto core = c->GetCore();
+		auto *active = core.selectionController->GetActiveLine();
+		return active && core.ass->Folding().GroupAt(active->Row);
+	}
+};
+
+struct grid_fold_toggle final : public validate_current_fold {
+	CMD_NAME("grid/fold/toggle")
+	STR_MENU("Toggle Fold Group")
+	STR_DISP("Toggle Fold Group")
+	STR_HELP("Expand or collapse the active line's fold group")
+
+	void operator()(agi::Context *c) override {
+		if (!Validate(c))
+			return;
+		auto core = c->GetCore();
+		auto& folding = core.ass->Folding();
+		auto group = *folding.GroupAt(core.selectionController->GetActiveLine()->Row);
+		if (!folding.IsCollapsed(group))
+			activate_fold_start(c, group.start, group.end);
+		if (folding.Toggle(*core.ass, group.start))
+			core.ass->Commit(from_wx(_("toggle fold group")), AssFile::COMMIT_FOLD);
+	}
+};
+
+struct grid_fold_expand final : public validate_current_fold {
+	CMD_NAME("grid/fold/expand")
+	STR_MENU("Expand Fold Group")
+	STR_DISP("Expand Fold Group")
+	STR_HELP("Expand the active line's fold group")
+
+	void operator()(agi::Context *c) override {
+		if (!Validate(c))
+			return;
+		auto core = c->GetCore();
+		if (core.ass->Folding().SetCollapsed(*core.ass, core.selectionController->GetActiveLine()->Row, false))
+			core.ass->Commit(from_wx(_("expand fold group")), AssFile::COMMIT_FOLD);
+	}
+};
+
+struct grid_fold_collapse final : public validate_current_fold {
+	CMD_NAME("grid/fold/collapse")
+	STR_MENU("Collapse Fold Group")
+	STR_DISP("Collapse Fold Group")
+	STR_HELP("Collapse the active line's fold group")
+
+	void operator()(agi::Context *c) override {
+		if (!Validate(c))
+			return;
+		auto core = c->GetCore();
+		auto& folding = core.ass->Folding();
+		auto group = *folding.GroupAt(core.selectionController->GetActiveLine()->Row);
+		activate_fold_start(c, group.start, group.end);
+		if (folding.SetCollapsed(*core.ass, group.start, true))
+			core.ass->Commit(from_wx(_("collapse fold group")), AssFile::COMMIT_FOLD);
+	}
+};
+
+struct grid_fold_clear final : public validate_current_fold {
+	CMD_NAME("grid/fold/clear")
+	STR_MENU("Clear Fold Group")
+	STR_DISP("Clear Fold Group")
+	STR_HELP("Remove the active line's fold group without deleting subtitles")
+
+	bool Validate(const agi::Context *c) override {
+		if (validate_current_fold::Validate(c))
+			return true;
+		auto core = c->GetCore();
+		auto *active = core.selectionController->GetActiveLine();
+		if (!active)
+			return false;
+		for (auto const& entry : core.ass->GetExtradata(active->ExtradataIds)) {
+			if (entry.key == "_aegi_folddata")
+				return true;
+		}
+		return false;
+	}
+
+	void operator()(agi::Context *c) override {
+		if (!Validate(c))
+			return;
+		auto core = c->GetCore();
+		if (core.ass->Folding().Remove(*core.ass, core.selectionController->GetActiveLine()->Row))
+			core.ass->Commit(from_wx(_("clear fold group")), AssFile::COMMIT_FOLD);
+	}
+};
+
+struct validate_any_fold : public Command {
+	CMD_TYPE(COMMAND_VALIDATE)
+
+	bool Validate(const agi::Context *c) override {
+		return !c->GetCore().ass->Folding().Groups().empty();
+	}
+};
+
+struct grid_fold_expand_all final : public validate_any_fold {
+	CMD_NAME("grid/fold/expand/all")
+	STR_MENU("Expand All Fold Groups")
+	STR_DISP("Expand All Fold Groups")
+	STR_HELP("Expand every fold group in the subtitle file")
+
+	void operator()(agi::Context *c) override {
+		auto core = c->GetCore();
+		if (core.ass->Folding().SetAllCollapsed(*core.ass, false))
+			core.ass->Commit(from_wx(_("expand all fold groups")), AssFile::COMMIT_FOLD);
+	}
+};
+
+struct grid_fold_collapse_all final : public validate_any_fold {
+	CMD_NAME("grid/fold/collapse/all")
+	STR_MENU("Collapse All Fold Groups")
+	STR_DISP("Collapse All Fold Groups")
+	STR_HELP("Collapse every fold group in the subtitle file")
+
+	void operator()(agi::Context *c) override {
+		auto core = c->GetCore();
+		auto& folding = core.ass->Folding();
+		if (auto *active = core.selectionController->GetActiveLine()) {
+			if (auto const *group = folding.GroupAt(active->Row))
+				activate_fold_start(c, group->start, group->end);
+		}
+		if (folding.SetAllCollapsed(*core.ass, true))
+			core.ass->Commit(from_wx(_("collapse all fold groups")), AssFile::COMMIT_FOLD);
+	}
+};
+
+struct grid_fold_clear_all final : public validate_any_fold {
+	CMD_NAME("grid/fold/clear/all")
+	STR_MENU("Clear All Fold Groups")
+	STR_DISP("Clear All Fold Groups")
+	STR_HELP("Remove all fold groups and invalid fold markers without deleting subtitles")
+
+	bool Validate(const agi::Context *c) override {
+		auto *ass = c->GetCore().ass.get();
+		for (auto const& line : ass->Events) {
+			for (auto const& entry : ass->GetExtradata(line.ExtradataIds)) {
+				if (entry.key == "_aegi_folddata")
+					return true;
+			}
+		}
+		return false;
+	}
+
+	void operator()(agi::Context *c) override {
+		auto core = c->GetCore();
+		if (core.ass->Folding().Clear(*core.ass))
+			core.ass->Commit(from_wx(_("clear all fold groups")), AssFile::COMMIT_FOLD);
 	}
 };
 
@@ -474,6 +675,14 @@ struct grid_swap final : public Command {
 
 namespace cmd {
 	void init_grid() {
+		reg(agi::make_unique<grid_fold_create>());
+		reg(agi::make_unique<grid_fold_toggle>());
+		reg(agi::make_unique<grid_fold_expand>());
+		reg(agi::make_unique<grid_fold_collapse>());
+		reg(agi::make_unique<grid_fold_clear>());
+		reg(agi::make_unique<grid_fold_expand_all>());
+		reg(agi::make_unique<grid_fold_collapse_all>());
+		reg(agi::make_unique<grid_fold_clear_all>());
 		reg(agi::make_unique<grid_line_next>());
 		reg(agi::make_unique<grid_line_next_create>());
 		reg(agi::make_unique<grid_line_prev>());

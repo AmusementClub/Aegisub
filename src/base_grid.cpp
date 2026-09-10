@@ -50,6 +50,7 @@
 #include "selection_controller.h"
 #include "subs_controller.h"
 #include "subtitle_grid_selection_policy.h"
+#include "subtitle_grid_folding.h"
 #include "video_controller.h"
 #ifdef AEGISUB_WITH_SKIA_SUBTITLE_GRID
 #include "subtitle_grid_renderer_slot.h"
@@ -62,6 +63,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <utility>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -213,9 +215,7 @@ BEGIN_EVENT_TABLE(BaseGrid,wxWindow)
 END_EVENT_TABLE()
 
 void BaseGrid::OnSubtitlesCommit(int type, const AssDialogue *single_line) {
-	if (type == AssFile::COMMIT_NEW
-		|| (type & AssFile::COMMIT_ORDER)
-		|| (type & AssFile::COMMIT_DIAG_ADDREM))
+	if (type == AssFile::COMMIT_NEW || (type & AssFile::COMMIT_ORDER) || (type & AssFile::COMMIT_DIAG_ADDREM) || (type & AssFile::COMMIT_EXTRADATA))
 		ClearDragSelectionPreview(true);
 
 	auto const before_revision = grid_revision;
@@ -244,8 +244,19 @@ void BaseGrid::OnSubtitlesCommit(int type, const AssDialogue *single_line) {
 		// column widths cannot have changed. Skipping the remeasure avoids
 		// projecting and re-measuring every row in the file on each sort.
 		// COMMIT_NEW is 0 and any combination with ADDREM/META still remeasures.
-		bool const order_only = type == AssFile::COMMIT_ORDER;
-		UpdateMaps(!order_only);
+		bool const view_or_order_only = (type & ~(AssFile::COMMIT_ORDER | AssFile::COMMIT_EXTRADATA)) == 0 && type != AssFile::COMMIT_NEW;
+		UpdateMaps(!view_or_order_only, type != AssFile::COMMIT_NEW);
+		auto const *active = context->GetCore().selectionController->GetActiveLine();
+		for (auto const& line : context->GetCore().ass->Events) {
+			if (&line == active) {
+				if (reveal_active_after_commit || DisplayRow(line.Row) < 0) {
+					extendRow = active_row = line.Row;
+					MakeRowVisible(line.Row);
+				}
+				break;
+			}
+		}
+		reveal_active_after_commit = false;
 		return;
 	}
 
@@ -352,7 +363,7 @@ void BaseGrid::UpdateStyle() {
 	Refresh(false);
 }
 
-void BaseGrid::UpdateMaps(bool remeasure_columns) {
+void BaseGrid::UpdateMaps(bool remeasure_columns, bool preserve_anchor) {
 	auto const previous_rows = index_line_map.size();
 	index_line_map.clear();
 	projection_line_map.clear();
@@ -365,9 +376,54 @@ void BaseGrid::UpdateMaps(bool remeasure_columns) {
 		projection_line_map.push_back(&curdiag);
 	}
 
+	UpdateDisplayMap(preserve_anchor);
 	if (remeasure_columns)
 		SetColumnWidths();
+}
+
+int BaseGrid::GetDisplayRows() const {
+	return static_cast<int>(context->GetCore().ass->Folding().DisplayRows().size());
+}
+
+int BaseGrid::SourceRow(int display_row) const {
+	return context->GetCore().ass->Folding().DisplayToSource(display_row);
+}
+
+int BaseGrid::DisplayRow(int source_row) const {
+	return context->GetCore().ass->Folding().SourceToDisplay(source_row);
+}
+
+int BaseGrid::FoldColumnWidth() const {
+	return FromDIP(20);
+}
+
+void BaseGrid::UpdateDisplayMap(bool preserve_anchor) {
+	auto& folding = context->GetCore().ass->Folding();
+	int anchor_id = preserve_anchor && yPos >= 0 && std::cmp_less(yPos, display_line_ids.size())
+						? display_line_ids[yPos]
+						: -1;
+	if (anchor_id >= 0) {
+		for (auto const& line : context->GetCore().ass->Events) {
+			if (line.Id != anchor_id)
+				continue;
+			int row = folding.SourceToDisplay(line.Row);
+			if (row < 0) {
+				if (auto const *group = folding.GroupAt(line.Row))
+					row = folding.SourceToDisplay(group->start);
+			}
+			if (row >= 0)
+				yPos = row;
+			break;
+		}
+	}
+	display_line_ids.clear();
+	display_line_ids.reserve(folding.DisplayRows().size());
+	for (auto const& row : folding.DisplayRows())
+		display_line_ids.push_back(row.dialogue->Id);
+	++grid_revision;
+	subtitle_rows_refresh_on_idle.clear();
 	AdjustScrollbar();
+	visible_rows = GetRowsDisplayedAtCurrentFrame();
 	selected_rows = GetSelectedRowsInWindow();
 	Refresh(false);
 }
@@ -384,8 +440,10 @@ void BaseGrid::OnActiveLineChanged(AssDialogue *new_active) {
 	++grid_revision;
 
 	if (new_active) {
-		if (new_active->Row != active_row)
+		if (GetDialogue(new_active->Row) == new_active)
 			MakeRowVisible(new_active->Row);
+		else
+			reveal_active_after_commit = true;
 		extendRow = active_row = new_active->Row;
 		Refresh(false);
 	}
@@ -397,6 +455,22 @@ void BaseGrid::OnActiveLineChanged(AssDialogue *new_active) {
 }
 
 void BaseGrid::MakeRowVisible(int row) {
+	if (DisplayRow(row) < 0) {
+		// Some edit commands announce selection after mutating Events but before
+		// Commit. Keep the old folding baseline for structural repair, and defer
+		// projection until its pointers have been rebound to the committed file.
+		auto const& events = context->GetCore().ass->Events;
+		if (!std::ranges::equal(events, index_line_map,
+								[](AssDialogue const& line, AssDialogue const *cached) { return &line == cached; })) {
+			reveal_active_after_commit = true;
+			return;
+		}
+	}
+	if (context->GetCore().ass->Folding().EnsureVisible(row))
+		UpdateDisplayMap();
+	row = DisplayRow(row);
+	if (row < 0)
+		return;
 	int h = GetClientSize().GetHeight();
 
 	if (row < yPos + 1)
@@ -474,12 +548,12 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 	int h = 0;
 	GetClientSize(&w,&h);
 	auto const layout = aegisub::grid::CalculateGridLayout({
-		w,
-		h,
-		scrollBar->GetSize().GetWidth(),
-		lineHeight,
-		GetRows(),
-		yPos
+		.client_width = w,
+		.client_height = h,
+		.vertical_scrollbar_width = scrollBar->GetSize().GetWidth(),
+		.line_height = lineHeight,
+		.row_count = GetDisplayRows(),
+		.first_visible_row = yPos,
 	});
 	w = layout.grid_width;
 	h = layout.client_height;
@@ -505,7 +579,7 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 			last_dirty_row = std::max(last_dirty_row, mid(0, last, nDraw - 1));
 		}
 
-		int x = 0;
+		int x = FoldColumnWidth();
 		for (size_t i : agi::util::range(columns.size())) {
 			int width = columns[i]->Width();
 			if (width && updrect.x < x + width && updrect.x + updrect.width > x) {
@@ -543,8 +617,8 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 	if (has_dirty_rows) {
 		int const top = (first_dirty_row + 1) * lineHeight;
 		int const height = (last_dirty_row - first_dirty_row + 1) * lineHeight + 1;
-		painter->FillRectangle(0, top, columns[0]->Width(), height,
-			from_wx(row_colors.LeftCol.GetColour()));
+		painter->FillRectangle(0, top, FoldColumnWidth() + columns[0]->Width(), height,
+							   from_wx(row_colors.LeftCol.GetColour()));
 	}
 
 	// Row colors
@@ -574,7 +648,7 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 		painter->FillRectangle(0, 0, w, lineHeight,
 			from_wx(row_colors.Header.GetColour()));
 
-		int x = 0;
+		int x = FoldColumnWidth();
 		for (size_t i : agi::util::range(columns.size())) {
 			if (paint_columns[i])
 				paint_text(columns[i]->Header(), x, 0, i);
@@ -585,7 +659,7 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 	}
 
 	// Paint the rows
-	const int grid_x = columns[0]->Width();
+	const int grid_x = FoldColumnWidth() + columns[0]->Width();
 
 	int const projected_lines = nDraw;
 	auto projected_window = QueryGridWindow(
@@ -606,7 +680,7 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 			visible_rows.push_back(row.row_index);
 		if (row.state.selected)
 			selected_rows.push_back(row.row_index);
-		int const screen_row = row.row_index - yPos;
+		int const screen_row = DisplayRow(row.row_index) - yPos;
 		if (screen_row >= 0 && screen_row < projected_lines)
 			projected_rows_by_screen_row[static_cast<size_t>(screen_row)] = &row;
 	}
@@ -649,8 +723,18 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 			painter->SetTextColor(text_standard);
 
 		// Draw text
-		int x = 0;
+		int x = FoldColumnWidth();
 		int y = (i + 1) * lineHeight;
+		if (projected_row) {
+			auto const& folding = context->GetCore().ass->Folding();
+			auto const *group = folding.GroupAt(projected_row->row_index);
+			if (group && group->start == projected_row->row_index) {
+				painter->SetTextColor(text_standard);
+				painter->DrawText(folding.IsCollapsed(*group) ? std::wstring(L">") : std::wstring(L"v"), FromDIP(5), y + 2);
+				painter->SetTextColor(row_state.collides_with_active ? text_collision : inSel ? text_selection
+																							  : text_standard);
+			}
+		}
 		for (size_t j : agi::util::range(columns.size())) {
 			if (paint_columns[j] && projected_row)
 				columns[j]->Paint(*painter, x, y, *projected_row, context);
@@ -666,7 +750,8 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 	if (paint_header || has_dirty_rows) {
 		int minH = paint_header ? 0 : (first_dirty_row + 1) * lineHeight;
 		int maxH = has_dirty_rows ? (last_dirty_row + 2) * lineHeight : lineHeight;
-		int x = 0;
+		int x = FoldColumnWidth();
+		painter->DrawLine(x, minH, x, maxH, grid_line_color);
 		for (auto const& column : columns) {
 			x += column->Width();
 			if (x < w)
@@ -775,7 +860,8 @@ void BaseGrid::OnScroll(wxScrollEvent &event) {
 	int newPos = event.GetPosition();
 	if (yPos != newPos) {
 		int old_y_pos = yPos;
-		context->GetCore().ass->Properties.scroll_position = yPos = newPos;
+		yPos = newPos;
+		context->GetCore().ass->Properties.scroll_position = std::max(0, SourceRow(yPos));
 		visible_rows = GetRowsDisplayedAtCurrentFrame();
 		selected_rows = GetSelectedRowsInWindow();
 		RefreshAfterScroll(old_y_pos);
@@ -851,10 +937,11 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 	// Row that mouse is over
 	bool click = event.LeftDown();
 	bool dclick = event.LeftDClick();
-	int row = event.GetY() / lineHeight + yPos - 1;
-	trace_row = row;
+	int display_row = event.GetY() / lineHeight + yPos - 1;
 	if (holding && !click)
-		row = mid(0, row, GetRows()-1);
+		display_row = mid(0, display_row, GetDisplayRows() - 1);
+	int row = event.GetY() < lineHeight && !holding ? -1 : SourceRow(display_row);
+	trace_row = row;
 	AssDialogue *dlg = GetDialogue(row);
 	if (!dlg) row = 0;
 
@@ -864,6 +951,21 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 		auto const focus_started = InputTimingClock::now();
 		SetFocus();
 		focus_ms = DurationMs(focus_started);
+	}
+
+	if ((click || dclick) && dlg && event.GetX() >= 0 && event.GetX() < FoldColumnWidth()) {
+		auto& folding = core.ass->Folding();
+		if (auto const *group = folding.GroupAt(row); group && group->start == row) {
+			// A double click has already toggled on its first press.
+			if (click) {
+				auto const *active = core.selectionController->GetActiveLine();
+				if (!folding.IsCollapsed(*group) && active && active->Row > group->start && active->Row <= group->end)
+					core.selectionController->SetActiveLine(dlg);
+				if (folding.Toggle(*core.ass, row))
+					core.ass->Commit(from_wx(_("toggle subtitle group")), AssFile::COMMIT_FOLD);
+			}
+			return;
+		}
 	}
 
 	if (holding) {
@@ -881,12 +983,12 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 			// Only scroll if the mouse has moved to a different row to avoid
 			// scrolling on sloppy clicks
 			if (row != extendRow) {
-				if (row <= yPos)
+				if (display_row <= yPos)
 					ScrollTo(yPos - 3);
 				// When dragging down we give a 3 row margin to make it easier
 				// to see what's going on, but we don't want to scroll down if
 				// the user clicks on the bottom row and drags up
-				else if (row > yPos + h / lineHeight - (row > extendRow ? 3 : 1))
+				else if (display_row > yPos + h / lineHeight - (row > extendRow ? 3 : 1))
 					ScrollTo(yPos + 3);
 			}
 		}
@@ -1134,11 +1236,24 @@ void BaseGrid::OnContextMenu(wxContextMenuEvent &evt) {
 	}
 }
 
+void BaseGrid::RestoreScrollPosition(int source_row) {
+	auto const& folding = context->GetCore().ass->Folding();
+	int display = folding.SourceToDisplay(source_row);
+	if (display < 0) {
+		if (auto const *group = folding.GroupAt(source_row))
+			display = folding.SourceToDisplay(group->start);
+		else
+			display = source_row > 0 ? GetDisplayRows() - 1 : 0;
+	}
+	ScrollTo(display);
+}
+
 void BaseGrid::ScrollTo(int y) {
-	int nextY = mid(0, y, GetRows() - 1);
+	int nextY = mid(0, y, std::max(0, GetDisplayRows() - 1));
 	if (yPos != nextY) {
 		int old_y_pos = yPos;
-		context->GetCore().ass->Properties.scroll_position = yPos = nextY;
+		yPos = nextY;
+		context->GetCore().ass->Properties.scroll_position = std::max(0, SourceRow(yPos));
 		scrollBar->SetThumbPosition(yPos);
 		visible_rows = GetRowsDisplayedAtCurrentFrame();
 		selected_rows = GetSelectedRowsInWindow();
@@ -1156,7 +1271,7 @@ std::vector<int> BaseGrid::GetRowsDisplayedAtCurrentFrame() const {
 		return rows;
 
 	int lines = GetClientSize().GetHeight() / lineHeight + 1;
-	lines = mid(0, lines, GetRows() - yPos);
+	lines = mid(0, lines, GetDisplayRows() - yPos);
 	rows.reserve(lines);
 
 	auto window = QueryGridWindow(
@@ -1174,14 +1289,15 @@ std::vector<int> BaseGrid::GetSelectedRowsInWindow() const {
 	std::vector<int> rows;
 
 	int lines = GetClientSize().GetHeight() / lineHeight + 1;
-	lines = mid(0, lines, GetRows() - yPos);
+	lines = mid(0, lines, GetDisplayRows() - yPos);
 	rows.reserve(lines);
 
 	// Selection repaint only needs row indices. Avoid building projection rows and
 	// column values on every mouse motion while a drag preview is active.
 	auto const& selection = context->GetCore().selectionController->GetSelectedSet();
-	for (int row = yPos; row < yPos + lines; ++row) {
-		auto const* line = GetDialogue(row);
+	for (int display_row = yPos; display_row < yPos + lines; ++display_row) {
+		int const row = SourceRow(display_row);
+		auto const *line = context->GetCore().ass->Folding().DisplayRows()[display_row].dialogue;
 		if (!line)
 			continue;
 
@@ -1272,9 +1388,9 @@ void BaseGrid::QueueSubtitleGridRowRefresh(int row_index) {
 
 void BaseGrid::QueueVisibleWindowRefresh() {
 	int lines = GetClientSize().GetHeight() / lineHeight + 1;
-	lines = mid(0, lines, GetRows() - yPos);
+	lines = mid(0, lines, GetDisplayRows() - yPos);
 	for (int i = 0; i < lines; ++i)
-		QueueSubtitleGridRowRefresh(yPos + i);
+		QueueSubtitleGridRowRefresh(SourceRow(yPos + i));
 }
 
 void BaseGrid::FlushQueuedSubtitleGridRowRefreshes() {
@@ -1309,8 +1425,10 @@ void BaseGrid::AdjustScrollbar() {
 	if (scrollBar->GetRect() != bounds)
 		scrollBar->SetSize(bounds);
 
-	if (GetRows() <= 1) {
+	if (GetDisplayRows() <= 1) {
 		yPos = 0;
+		context->GetCore().ass->Properties.scroll_position = 0;
+		scrollBar->SetScrollbar(0, 1, 1, 1, true);
 		if (scrollBar->IsEnabled())
 			scrollBar->Enable(false);
 		return;
@@ -1320,9 +1438,10 @@ void BaseGrid::AdjustScrollbar() {
 		scrollBar->Enable(true);
 
 	int drawPerScreen = clientSize.GetHeight() / lineHeight;
-	int rows = GetRows();
+	int rows = GetDisplayRows();
 
-	context->GetCore().ass->Properties.scroll_position = yPos = mid(0, yPos, rows - 1);
+	yPos = mid(0, yPos, rows - 1);
+	context->GetCore().ass->Properties.scroll_position = std::max(0, SourceRow(yPos));
 
 	int const range = rows + drawPerScreen - 1;
 	int const page = drawPerScreen - 2;
@@ -1332,7 +1451,7 @@ void BaseGrid::AdjustScrollbar() {
 }
 
 void BaseGrid::RefreshSubtitleGridRow(int row_index) {
-	int const visible_row = row_index - yPos;
+	int const visible_row = DisplayRow(row_index) - yPos;
 	if (visible_row < 0)
 		return;
 
@@ -1365,7 +1484,7 @@ void BaseGrid::SetColumnWidths() {
 	}
 
 	text_refresh_rects.clear();
-	int x = 0;
+	int x = FoldColumnWidth();
 
 	if (!width_helper)
 		width_helper = agi::make_unique<WidthHelper>();
@@ -1405,8 +1524,8 @@ aegisub::presentation::SubtitleGridWindow BaseGrid::QueryGridWindow(int first_ro
 	request.first_row = first_row;
 	request.row_count = row_count;
 	request.column_ids = std::move(column_ids);
-	return aegisub::presentation::BuildSubtitleGridWindow(
-		projection_line_map,
+	return aegisub::presentation::BuildFoldedSubtitleGridWindow(
+		context->GetCore().ass->Folding().DisplayRows(),
 		request,
 		grid_revision,
 		[&](AssDialogue const& line) {
@@ -1536,11 +1655,11 @@ void BaseGrid::OnKeyDown(wxKeyEvent &event) {
 	}
 	else if (key == WXK_HOME) {
 		dir = -1;
-		step = GetRows();
+		step = GetDisplayRows();
 	}
 	else if (key == WXK_END) {
 		dir = 1;
-		step = GetRows();
+		step = GetDisplayRows();
 	}
 
 	if (!dir) {
@@ -1558,14 +1677,17 @@ void BaseGrid::OnKeyDown(wxKeyEvent &event) {
 		if (line)
 			selected_rows.push_back(line->Row);
 
+	int const active_display = active_line ? DisplayRow(active_line->Row) : 0;
+	int const target_display = mid(0, std::max(0, active_display) + dir * std::max(1, step), std::max(0, GetDisplayRows() - 1));
 	auto plan = aegisub::subtitle_grid_selection_policy::PlanKeyboardSelection({
-		GetRows(),
-		active_line ? active_line->Row : -1,
-		old_extend,
-		std::move(selected_rows),
-		dir,
-		step,
-		{shift, ctrl, alt},
+		.row_count = GetRows(),
+		.active_row = active_line ? active_line->Row : -1,
+		.anchor_row = old_extend,
+		.selected_rows = std::move(selected_rows),
+		.direction = dir,
+		.step = step,
+		.modifiers = {.shift = shift, .ctrl = ctrl, .alt = alt},
+		.target_row = SourceRow(target_display),
 	});
 	if (!plan.handled) {
 		event.Skip();
@@ -1591,6 +1713,17 @@ void BaseGrid::OnKeyDown(wxKeyEvent &event) {
 
 	if (plan.make_active_visible)
 		MakeRowVisible(plan.active_row);
+}
+
+void BaseGrid::NextVisibleLine(int direction) {
+	auto core = context->GetCore();
+	auto const *active = core.selectionController->GetActiveLine();
+	if (!active || !GetDisplayRows())
+		return;
+	int const row = DisplayRow(active->Row);
+	int const next = mid(0, std::max(0, row) + direction, GetDisplayRows() - 1);
+	if (auto *line = GetDialogue(SourceRow(next)))
+		core.selectionController->SetSelectionAndActive({line}, line);
 }
 
 void BaseGrid::SetByFrame(bool state) {

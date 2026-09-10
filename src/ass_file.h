@@ -46,6 +46,7 @@ class AssAttachment;
 class AssDialogue;
 class AssInfo;
 class AssStyle;
+class SubtitleGridFolding;
 class TransientFontSet;
 
 using AssDialogueCommitSpan = std::span<AssDialogue const *const>;
@@ -113,6 +114,7 @@ class AssFile {
 	/// Detailed commit metadata. Spans are valid only for the synchronous signal call.
 	agi::signal::Signal<AssFileCommitDetails> AnnounceCommitDetails;
 	agi::signal::Signal<AssFileCommit> PushState;
+	std::unique_ptr<SubtitleGridFolding> folding;
 public:
 	/// The lines in the file
 	std::vector<AssInfo> Info;
@@ -131,6 +133,7 @@ public:
 	~AssFile();
 
 	EntryList<AssDialogue>::iterator iterator_to(AssDialogue& line);
+	SubtitleGridFolding& Folding();
 
 	/// @brief Load default file
 	/// @param defline Add a blank line to the file
@@ -209,6 +212,8 @@ public:
 		COMMIT_DIAG_FULL   = COMMIT_DIAG_META | COMMIT_DIAG_TIME | COMMIT_DIAG_TEXT,
 		/// Extradata entries were added/modified/removed
 		COMMIT_EXTRADATA   = 0x100,
+		/// Persisted subtitle grid grouping or collapsed state changed.
+		COMMIT_FOLD        = COMMIT_EXTRADATA,
 	};
 
 	DEFINE_SIGNAL_ADDERS(AnnounceCommit, AddCommitListener)

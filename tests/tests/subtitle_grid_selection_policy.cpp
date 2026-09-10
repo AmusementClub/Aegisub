@@ -232,6 +232,83 @@ TEST(subtitle_grid_selection_policy, keyboard_alt_move_changes_active_only) {
 	EXPECT_EQ(1, plan.active_row);
 }
 
+TEST(subtitle_grid_selection_policy, explicit_keyboard_destination_skips_hidden_rows) {
+	policy::KeyboardSelectionInput input;
+	input.row_count = 12;
+	input.active_row = 2;
+	input.anchor_row = 2;
+	input.selected_rows = {2};
+	input.direction = 1;
+	input.step = 1;
+	input.target_row = 8;
+
+	auto plan = policy::PlanKeyboardSelection(input);
+
+	ASSERT_TRUE(plan.handled);
+	EXPECT_EQ(8, plan.active_row);
+	EXPECT_EQ(8, plan.anchor_row);
+	EXPECT_EQ(std::vector<int>{8}, plan.selected_rows);
+}
+
+TEST(subtitle_grid_selection_policy, explicit_keyboard_shift_destination_includes_hidden_range) {
+	policy::KeyboardSelectionInput input;
+	input.row_count = 12;
+	input.active_row = 2;
+	input.anchor_row = 1;
+	input.selected_rows = {1, 2};
+	input.target_row = 8;
+	input.modifiers.shift = true;
+
+	auto plan = policy::PlanKeyboardSelection(input);
+
+	ASSERT_TRUE(plan.set_selection);
+	EXPECT_EQ(8, plan.active_row);
+	EXPECT_EQ(1, plan.anchor_row);
+	EXPECT_TRUE(plan.make_active_visible);
+	EXPECT_EQ((std::vector<int>{1, 2, 3, 4, 5, 6, 7, 8}), plan.selected_rows);
+	input.active_row = 8;
+	input.anchor_row = 9;
+	input.target_row = 2;
+	plan = policy::PlanKeyboardSelection(input);
+	EXPECT_EQ((std::vector<int>{2, 3, 4, 5, 6, 7, 8, 9}), plan.selected_rows);
+}
+
+TEST(subtitle_grid_selection_policy, keyboard_ctrl_shift_merges_range_with_existing_selection) {
+	policy::KeyboardSelectionInput input;
+	input.row_count = 12;
+	input.active_row = 2;
+	input.anchor_row = 2;
+	input.selected_rows = {11, 4, 0, 4, -1, 12};
+	input.target_row = 8;
+	input.modifiers = {.shift = true, .ctrl = true};
+
+	auto plan = policy::PlanKeyboardSelection(input);
+
+	ASSERT_TRUE(plan.set_selection);
+	EXPECT_EQ(8, plan.active_row);
+	EXPECT_EQ(2, plan.anchor_row);
+	EXPECT_EQ((std::vector<int>{0, 2, 3, 4, 5, 6, 7, 8, 11}), plan.selected_rows);
+}
+
+TEST(subtitle_grid_selection_policy, explicit_keyboard_destination_handles_home_end_and_rejects_invalid_rows) {
+	policy::KeyboardSelectionInput input;
+	input.row_count = 7;
+	input.active_row = 3;
+	input.target_row = 0;
+
+	auto home = policy::PlanKeyboardSelection(input);
+	ASSERT_TRUE(home.handled);
+	EXPECT_EQ(std::vector<int>{0}, home.selected_rows);
+	input.target_row = 6;
+	auto end = policy::PlanKeyboardSelection(input);
+	ASSERT_TRUE(end.handled);
+	EXPECT_EQ(std::vector<int>{6}, end.selected_rows);
+	input.target_row = 7;
+	EXPECT_FALSE(policy::PlanKeyboardSelection(input).handled);
+	input.target_row = -2;
+	EXPECT_FALSE(policy::PlanKeyboardSelection(input).handled);
+}
+
 TEST(subtitle_grid_selection_policy, invalid_rows_are_ignored_and_targets_are_clamped) {
 	auto mouse = policy::PlanMouseSelection({
 		3,

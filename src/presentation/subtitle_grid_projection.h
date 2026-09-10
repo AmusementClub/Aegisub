@@ -7,6 +7,7 @@
 #include <vector>
 
 class AssDialogue;
+struct SubtitleGridDisplayRow;
 
 namespace aegisub::presentation {
 
@@ -29,4 +30,10 @@ SubtitleGridWindow BuildSubtitleGridWindow(
 	Revision revision,
 	SubtitleGridRowStateResolver resolve_state = {});
 
+/// Window coordinates refer to visible rows; projected row indices stay document-relative.
+SubtitleGridWindow BuildFoldedSubtitleGridWindow(
+	std::vector<SubtitleGridDisplayRow> const& rows,
+	VisibleSubtitleRowsRequest const& request,
+	Revision revision,
+	SubtitleGridRowStateResolver const& resolve_state = {});
 }

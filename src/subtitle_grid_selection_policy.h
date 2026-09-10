@@ -29,6 +29,8 @@ struct KeyboardSelectionInput {
 	int direction = 0;
 	int step = 0;
 	ModifierState modifiers;
+	// Grid navigation resolves visible destinations back to document rows.
+	int target_row = -1;
 };
 
 struct RowInsertSelectionInput {

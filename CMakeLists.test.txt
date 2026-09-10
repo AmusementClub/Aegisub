@@ -69,6 +69,7 @@ if(GTEST_FOUND)
         src/fontcollector_cli_encoding.cpp
         src/headless_service_output.cpp
         src/automation_command_executor.cpp
+        src/auto4_lua_assfile.cpp
         src/automation_runtime_profile.cpp
         src/automation_scenario.cpp
         src/automation_scenario_runner.cpp
@@ -156,6 +157,7 @@ if(GTEST_FOUND)
         src/subtitle_edit_ops.cpp
         src/subtitle_editor_ops.cpp
         src/subtitle_grid_ops.cpp
+        src/subtitle_grid_folding.cpp
         src/subtitle_grid_selection_policy.cpp
         src/video_property_update_policy.cpp
         src/video_property_update_requests.cpp
@@ -212,6 +214,7 @@ if(GTEST_FOUND)
         tests/tests/locale_pick.cpp
         tests/tests/lsmas_native_api_version.cpp
         tests/tests/lua_drawing_module.cpp
+        tests/tests/lua_assfile.cpp
         tests/tests/lua_lfs.cpp
         tests/tests/lua_re.cpp
         tests/tests/lua_script_reader.cpp
@@ -276,6 +279,7 @@ if(GTEST_FOUND)
         tests/tests/subtitle_editor_ops.cpp
         tests/tests/subtitle_grid_ops.cpp
         tests/tests/subtitle_grid_selection_policy.cpp
+        tests/tests/subtitle_grid_folding.cpp
         tests/tests/subtitle_grid_renderer_contract.cpp
         tests/tests/subtitle_timing_ops.cpp
         tests/tests/subtitle_matcher.cpp

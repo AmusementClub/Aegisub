@@ -836,6 +836,7 @@ set(AEGISUB_CORE_SOURCES
     src/subtitle_edit_ops.cpp
     src/subtitle_editor_ops.cpp
     src/subtitle_grid_ops.cpp
+    src/subtitle_grid_folding.cpp
     src/subtitle_grid_selection_policy.cpp
     src/subtitle_timing_ops.cpp
     # Controllers / context / services

@@ -405,8 +405,7 @@ void VideoController::ClearInspectionStepState() {
 }
 
 void VideoController::ClearInteractiveSeekPreviewState() {
-	interactive_seek_preview_active = false;
-	interactive_seek_preview_resume_playback = false;
+	interactive_seek_phase = InteractiveSeekPhase::None;
 	interactive_seek_preview_resume_mode = PlaybackMode::None;
 	interactive_seek_preview_resume_end_ms = 0;
 }
@@ -574,11 +573,14 @@ void VideoController::PreviewToFrame(int n) {
 
 void VideoController::PreviewToFrameLatest(int n) {
 	if (!provider) return;
+	StopIfAudioEnded();
 
 	ClearInspectionStepState();
 	ClearLatePreviewFrameAcceptance();
 
-	bool const keep_playback_paused_for_preview = interactive_seek_preview_active;
+	bool const keep_playback_paused_for_preview = interactive_seek_phase != InteractiveSeekPhase::None;
+	if (keep_playback_paused_for_preview)
+		interactive_seek_phase = InteractiveSeekPhase::Previewing;
 	bool was_playing = IsPlaying();
 	auto resume_mode = playback_mode;
 	auto resume_end_ms = playback_end_ms;
@@ -602,17 +604,15 @@ void VideoController::PreviewToFrameLatest(int n) {
 }
 
 void VideoController::BeginInteractiveSeekPreview() {
-	if (!provider || interactive_seek_preview_active)
+	StopIfAudioEnded();
+	if (!provider || interactive_seek_phase != InteractiveSeekPhase::None)
 		return;
 
 	paused_prefetch_timer->Stop();
 	provider->CancelFramePrefetch();
-	interactive_seek_preview_active = true;
-	interactive_seek_preview_resume_playback = IsPlaying();
-	interactive_seek_preview_resume_mode = playback_mode;
+	interactive_seek_phase = InteractiveSeekPhase::Pressed;
+	interactive_seek_preview_resume_mode = IsPlaying() ? playback_mode : PlaybackMode::None;
 	interactive_seek_preview_resume_end_ms = playback_end_ms;
-	if (interactive_seek_preview_resume_playback)
-		StopPlayback(false);
 }
 
 void VideoController::CommitInteractiveSeekPreviewToTime(int ms, agi::vfr::Time end) {
@@ -621,12 +621,19 @@ void VideoController::CommitInteractiveSeekPreviewToTime(int ms, agi::vfr::Time 
 		return;
 	}
 
-	bool const resume_playback = interactive_seek_preview_active && interactive_seek_preview_resume_playback;
+	StopIfAudioEnded();
+	int const target_frame = mid(0, FrameAtTime(ms, end), provider->GetFrameCount() - 1);
+	if (IsPlaying()) {
+		// A click without a preview keeps audio running and seeks exactly once.
+		JumpToFrame(target_frame);
+		return;
+	}
+
+	bool const resume_playback = interactive_seek_preview_resume_mode != PlaybackMode::None;
 	auto const resume_mode = interactive_seek_preview_resume_mode;
 	int const resume_end_ms = interactive_seek_preview_resume_end_ms;
 
-	int const target_frame = mid(0, FrameAtTime(ms, end), provider->GetFrameCount() - 1);
-	if (interactive_seek_preview_active && target_frame == frame_n) {
+	if (interactive_seek_phase != InteractiveSeekPhase::None && target_frame == frame_n) {
 		// Releasing at the preview target commits the request already in flight.
 		// Reissuing it would invalidate its result and make the playback-start
 		// gate wait for a second render of the very same frame.
@@ -641,10 +648,11 @@ void VideoController::CommitInteractiveSeekPreviewToTime(int ms, agi::vfr::Time 
 }
 
 void VideoController::CancelInteractiveSeekPreview() {
-	if (!interactive_seek_preview_active)
+	StopIfAudioEnded();
+	if (interactive_seek_phase == InteractiveSeekPhase::None)
 		return;
 
-	bool const resume_playback = interactive_seek_preview_resume_playback;
+	bool const resume_playback = interactive_seek_phase == InteractiveSeekPhase::Previewing && interactive_seek_preview_resume_mode != PlaybackMode::None;
 	auto const resume_mode = interactive_seek_preview_resume_mode;
 	int const resume_end_ms = interactive_seek_preview_resume_end_ms;
 	ClearInteractiveSeekPreviewState();
@@ -876,6 +884,15 @@ void VideoController::Stop() {
 	StopPlayback(true);
 }
 
+bool VideoController::StopIfAudioEnded() {
+	auto core = context->GetCore();
+	if (!IsPlaying() || !playback_uses_audio_authority || core.audioController->IsPlaying())
+		return false;
+	// Preserve a held gesture across natural completion, but honor explicit stops.
+	StopPlayback(!core.audioController->IsPlaybackComplete());
+	return true;
+}
+
 bool VideoController::IsPlaying() const {
 	return playback_timer && playback_timer->IsRunning();
 }
@@ -896,8 +913,7 @@ void VideoController::OnPlayTimer() {
 
 	int authority_time_ms = start_ms + duration_cast<milliseconds>(steady_clock::now() - playback_start_time).count();
 	if (playback_uses_audio_authority) {
-		if (!core.audioController->IsPlaying()) {
-			Stop();
+		if (StopIfAudioEnded()) {
 			return;
 		}
 		authority_time_ms = core.audioController->GetPlaybackPosition();
@@ -918,11 +934,11 @@ void VideoController::OnPlayTimer() {
 	}
 
 	if (reached_end)
-		Stop();
+		StopPlayback(false);
 }
 
 void VideoController::SchedulePausedFramePrefetch() {
-	if (!provider || IsPlaying() || playback_start_pending || interactive_seek_preview_active)
+	if (!provider || IsPlaying() || playback_start_pending || interactive_seek_phase != InteractiveSeekPhase::None)
 		return;
 
 	paused_prefetch_timer->Stop();
@@ -930,7 +946,7 @@ void VideoController::SchedulePausedFramePrefetch() {
 }
 
 void VideoController::OnPausedPrefetchTimer() {
-	if (!provider || IsPlaying() || playback_start_pending || interactive_seek_preview_active)
+	if (!provider || IsPlaying() || playback_start_pending || interactive_seek_phase != InteractiveSeekPhase::None)
 		return;
 
 	// Only warm ahead of a frame that actually made it to the display, so a

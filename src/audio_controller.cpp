@@ -88,7 +88,7 @@ void AudioController::OnPlaybackTimer()
 	{
 		// The +200 is to allow the player to end the sound output cleanly,
 		// otherwise a popping artifact can sometimes be heard.
-		Stop();
+		StopPlayback(PM_Completed);
 	}
 	else
 	{
@@ -227,13 +227,16 @@ void AudioController::PlayToEnd(int start_ms)
 	trace.SetDetails(start_ms);
 }
 
-void AudioController::Stop()
-{
+void AudioController::Stop() {
+	StopPlayback(PM_NotPlaying);
+}
+
+void AudioController::StopPlayback(PlaybackMode stopped_mode) {
 	if (!player) return;
 	perf_trace::AudioUiDurationScope trace("audio_controller.stop");
 
 	player->Stop();
-	playback_mode = PM_NotPlaying;
+	playback_mode = stopped_mode;
 	playback_timer->Stop();
 	perf_trace::ResetAudioUiTimerInterval();
 
@@ -242,7 +245,7 @@ void AudioController::Stop()
 
 bool AudioController::IsPlaying()
 {
-	return player && playback_mode != PM_NotPlaying;
+	return player && playback_mode != PM_NotPlaying && playback_mode != PM_Completed;
 }
 
 void AudioController::RecoverAudioPlayerAfterDeviceChange()

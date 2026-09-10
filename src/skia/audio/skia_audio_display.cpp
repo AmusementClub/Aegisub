@@ -1518,7 +1518,6 @@ void SkiaAudioDisplay::EmitMiddleSeekOutput(int time_ms, bool commit) {
 	if (commit)
 		core.videoController->CommitInteractiveSeekPreviewToTime(time_ms, agi::vfr::EXACT);
 	else {
-		core.videoController->BeginInteractiveSeekPreview();
 		core.videoController->PreviewToFrameLatest(frame);
 	}
 }
@@ -1916,6 +1915,7 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 		if (core.videoController && core.project->VideoProvider()) {
 			auto const time_ms = time_from_x(mouse.x);
 			set_middle_cursor(time_ms);
+			core.videoController->BeginInteractiveSeekPreview();
 			bool const was_playing = core.videoController->IsPlaying();
 			impl->middle_seek_policy.BeginGesture(
 				was_playing,

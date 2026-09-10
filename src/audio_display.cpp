@@ -1388,7 +1388,6 @@ void AudioDisplay::EmitMiddleSeekOutput(NavigationPreviewPolicy::Output const& o
 	}
 	else {
 		perf_trace::TraceAudioMiddleSeek("preview", output.target, frame);
-		core.videoController->BeginInteractiveSeekPreview();
 		core.videoController->PreviewToFrameLatest(frame);
 	}
 }
@@ -1429,6 +1428,7 @@ void AudioDisplay::HandleMiddleSeekMotion(int time_ms, bool force)
 	CaptureMiddleSeekMouse();
 	SetTrackCursor(AbsoluteXFromTime(time_ms), OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool());
 	if (!middle_seek_active) {
+		context->videoController->BeginInteractiveSeekPreview();
 		bool const was_playing = context->videoController->IsPlaying();
 		middle_seek_preview_policy.BeginGesture(
 			was_playing, TimeFromAbsoluteX(3));

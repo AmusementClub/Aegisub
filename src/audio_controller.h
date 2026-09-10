@@ -76,7 +76,8 @@ class AudioController final : public wxEvtHandler {
 		PM_NotPlaying,
 		PM_Range,
 		PM_PrimaryRange,
-		PM_ToEnd
+		PM_ToEnd,
+		PM_Completed
 	};
 	/// The current playback mode
 	PlaybackMode playback_mode = PM_NotPlaying;
@@ -92,6 +93,7 @@ class AudioController final : public wxEvtHandler {
 
 	/// Event handler for the playback timer
 	void OnPlaybackTimer();
+	void StopPlayback(PlaybackMode stopped_mode);
 
 	/// @brief Timing controller signals primary playback range changed
 	void OnTimingControllerUpdatedPrimaryRange();
@@ -162,6 +164,8 @@ public:
 	/// @brief Determine whether playback is ongoing
 	/// @return True if audio is being played back
 	bool IsPlaying();
+	/// Whether the playback timer observed the end, rather than an explicit stop.
+	bool IsPlaybackComplete() const { return playback_mode == PM_Completed; }
 
 	/// Recreate the active audio player after a Windows session/output-device
 	/// transition when the selected backend is XAudio2.

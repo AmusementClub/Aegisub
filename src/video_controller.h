@@ -141,8 +141,12 @@ class VideoController final {
 	int pending_inspection_step_frame = -1;
 	bool pending_inspection_step_play_audio = false;
 	int pending_inspection_step_delta = 0;
-	bool interactive_seek_preview_active = false;
-	bool interactive_seek_preview_resume_playback = false;
+	enum class InteractiveSeekPhase {
+		None,
+		Pressed,
+		Previewing
+	};
+	InteractiveSeekPhase interactive_seek_phase = InteractiveSeekPhase::None;
 	PlaybackMode interactive_seek_preview_resume_mode = PlaybackMode::None;
 	int interactive_seek_preview_resume_end_ms = 0;
 
@@ -197,6 +201,7 @@ class VideoController final {
 	void RequestPendingInspectionStepTarget();
 	void StepSingleFrame(int delta);
 	void StopPlayback(bool clear_interactive_seek_preview, bool schedule_paused_prefetch = true);
+	bool StopIfAudioEnded();
 	void StartPlayback(PlaybackMode mode, int range_end_ms = 0);
 	bool PreparePlayback(PlaybackMode mode, int start_frame, int range_end_ms = 0, bool keep_audio_playing = false);
 	void StartPlaybackTimer();
@@ -259,7 +264,7 @@ public:
 	void PreviewToFrameLatest(int n);
 	/// Warm one source frame in the provider cache without presenting it.
 	void PrefetchFrame(int frame) noexcept;
-	/// Begin an interactive seek preview, pausing playback once if needed.
+	/// Capture the seek gesture's playback intent; playback continues until a preview.
 	void BeginInteractiveSeekPreview();
 	/// Commit an interactive seek preview and resume prior playback once if needed.
 	void CommitInteractiveSeekPreviewToTime(int ms, agi::vfr::Time end = DefaultJumpToTimeMode);

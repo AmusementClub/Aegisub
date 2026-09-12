@@ -275,6 +275,40 @@ void FillSyntheticLongFadeFrame(int n, VideoFrame& frame) {
 	FillSyntheticVisibilityFrame(n, frame, visibility, false);
 }
 
+void FillSyntheticWhiteTextSceneFrame(int n, VideoFrame& frame, bool white_background_after_text = false) {
+	// The text first becomes visible at frame 6, reaches full opacity at 15,
+	// starts fading after 65, and is completely absent from frame 75 onward.
+	int const visibility = std::clamp(std::min(n - 5, 75 - n) * 10, 0, 100);
+	int const width = static_cast<int>(frame.width);
+	int const height = static_cast<int>(frame.height);
+	for (int y = 0; y < height; ++y) {
+		for (int x = 0; x < width; ++x) {
+			int background = 32;
+			if (n >= 30 && n < 50)
+				background = 208;
+			else if (n >= 50)
+				background = (x / 12 + y / 10) % 2 ? 224 : 48;
+			if (white_background_after_text && n >= 75)
+				background = 236;
+
+			// A box with a middle stroke and three separate horizontal strokes
+			// provide glyph edges in both directions without relying on a font.
+			bool const horizontal = (y >= 24 && y < 26) || (y >= 31 && y < 33) || (y >= 39 && y < 41);
+			bool const box = x >= 34 && x < 48 && y >= 24 && y < 41 && (x < 36 || x >= 46 || horizontal);
+			bool const bars = x >= 55 && x < 71 && horizontal;
+			int value = box || bars
+							? (255 * visibility + background * (100 - visibility)) / 100
+							: background;
+			// The clicked pixel stays white after the text vanishes, but the
+			// small replacement block does not have the selected glyph's shape.
+			if (white_background_after_text && n >= 75 && x >= 39 && x < 42 && y >= 23 && y < 26)
+				value = 255;
+			auto const channel = static_cast<unsigned char>(value);
+			SetBgraPixel(frame, x, y, channel, channel, channel);
+		}
+	}
+}
+
 class FakeSubtitlesProvider final : public SubtitlesProvider {
 public:
 	int load_calls = 0;
@@ -2104,6 +2138,122 @@ TEST(async_video_provider, find_key_point_range_reanchors_a_partially_faded_sele
 	EXPECT_EQ(25, result.fade_in_end);
 	EXPECT_EQ(45, result.fade_out_start);
 	EXPECT_EQ(64, result.right);
+}
+
+TEST(async_video_provider, find_key_point_range_tracks_white_text_across_three_scenes) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 96;
+	video->frame_height = 64;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		FillSyntheticWhiteTextSceneFrame(n, frame);
+	};
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	// The middle scene's pale background lies within the default color
+	// tolerance, so same-color horizontal and vertical runs expand at the cut.
+	for (int anchor : {22, 40, 58}) {
+		SCOPED_TRACE(anchor);
+		auto result = provider.FindKeyPointRange({.frame = anchor,
+												  .x = 40,
+												  .y = 24,
+												  .r = 255,
+												  .g = 255,
+												  .b = 255,
+												  .tolerance = 20,
+												  .scan_step = 1,
+												  .bounds_tolerance = 5,
+												  .detect_fade = true,
+												  .max_fade_frames = 80});
+
+		ASSERT_EQ(KeyPointRangeScanStatus::Success, result.status);
+		EXPECT_TRUE(result.fade_in_detected);
+		EXPECT_TRUE(result.fade_out_detected);
+		EXPECT_EQ(6, result.left);
+		EXPECT_EQ(15, result.fade_in_end);
+		EXPECT_EQ(65, result.fade_out_start);
+		EXPECT_EQ(74, result.right);
+	}
+}
+
+TEST(async_video_provider, find_key_point_range_does_not_follow_white_background_after_text_disappears) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 96;
+	video->frame_height = 64;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		FillSyntheticWhiteTextSceneFrame(n, frame, true);
+	};
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	// Include a 70%-opaque click: calibration must recover the text plateau,
+	// even though a later unrelated white block also covers the clicked pixel.
+	for (int anchor : {12, 22, 40, 58}) {
+		SCOPED_TRACE(anchor);
+		unsigned char const color = anchor == 12 ? 188 : 255;
+		auto result = provider.FindKeyPointRange({.frame = anchor,
+												  .x = 40,
+												  .y = 24,
+												  .r = color,
+												  .g = color,
+												  .b = color,
+												  .tolerance = 20,
+												  .scan_step = 1,
+												  .bounds_tolerance = 5,
+												  .detect_fade = true,
+												  .max_fade_frames = 80});
+
+		ASSERT_EQ(KeyPointRangeScanStatus::Success, result.status);
+		EXPECT_TRUE(result.fade_in_detected);
+		EXPECT_TRUE(result.fade_out_detected);
+		EXPECT_EQ(6, result.left);
+		EXPECT_EQ(15, result.fade_in_end);
+		EXPECT_EQ(65, result.fade_out_start);
+		EXPECT_EQ(74, result.right);
+	}
+}
+
+TEST(async_video_provider, find_key_point_range_keeps_low_visibility_ends_of_thirty_frame_fades) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 24;
+	video->frame_height = 24;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		int const visibility = std::clamp(std::min(n - 5, 95 - n) * 100 / 30, 0, 100);
+		FillSyntheticVisibilityFrame(n, frame, visibility, false);
+	};
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	// Samples below 8% visibility still belong to the 30-frame fade; they
+	// must not terminate the scan before its transparent plateau is found.
+	auto const result = provider.FindKeyPointRange({.frame = 50,
+													.x = 10,
+													.y = 10,
+													.r = 100,
+													.g = 148,
+													.b = 196,
+													.tolerance = 20,
+													.scan_step = 1,
+													.bounds_tolerance = 5,
+													.detect_fade = true,
+													.max_fade_frames = 48});
+
+	ASSERT_EQ(KeyPointRangeScanStatus::Success, result.status);
+	EXPECT_TRUE(result.fade_in_detected);
+	EXPECT_TRUE(result.fade_out_detected);
+	EXPECT_EQ(6, result.left);
+	EXPECT_EQ(35, result.fade_in_end);
+	EXPECT_EQ(65, result.fade_out_start);
+	EXPECT_EQ(94, result.right);
 }
 
 TEST(async_video_provider, find_key_point_range_does_not_extend_beyond_fade_budget) {

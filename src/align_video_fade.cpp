@@ -285,8 +285,9 @@ CurveFit FitVisibilityCurve(std::span<double const> samples, int plateau_samples
 	for (int end = 2; end <= outside_count; ++end) {
 		for (int start = 0; start + 2 <= end; ++start) {
 			for (double gamma : gammas) {
-				double const loss = ModelLoss(normalized, start, end, gamma, delta)
-					+ 0.0005 * (end - start);
+				// Normalize both terms over the sampled window. Otherwise adding
+				// transparent confirmation frames penalizes the same fade more.
+				double const loss = ModelLoss(normalized, start, end, gamma, delta) + 0.0005 * (end - start) / count;
 				if (loss < best_loss) {
 					best_loss = loss;
 					best_start = start;
@@ -310,7 +311,9 @@ CurveFit FitVisibilityCurve(std::span<double const> samples, int plateau_samples
 	// explicitly confirmed, so its first sample is the fade completion point.
 	double const visible_threshold = std::clamp(3.0 * noise, 0.01, 0.10);
 	int first_visible = -1;
-	for (int i = 0; i < outside_count; ++i) {
+	// Earlier background edges can briefly resemble the foreground. The
+	// fitted onset constrains the search to the ramp that reaches the anchor.
+	for (int i = best_start; i < outside_count; ++i) {
 		if (normalized[i] < visible_threshold)
 			continue;
 		bool const persists = (i + 1 < count && normalized[i + 1] >= visible_threshold)

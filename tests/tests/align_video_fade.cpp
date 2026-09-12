@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -49,6 +50,31 @@ TEST(align_video_fade, reports_first_visible_frame_and_confirmed_plateau) {
 	ASSERT_TRUE(fit.detected);
 	EXPECT_EQ(4, fit.outer_index);
 	EXPECT_EQ(23, fit.inner_index);
+}
+
+TEST(align_video_fade, fits_a_thirty_frame_fade_independently_of_transparent_padding) {
+	constexpr int fade_frames = 30;
+	constexpr int plateau_samples = 4;
+	for (int padding : {4, 24}) {
+		SCOPED_TRACE(padding);
+		std::vector<double> samples(padding, 0.0);
+		for (int frame = 1; frame < fade_frames; ++frame)
+			samples.push_back(static_cast<double>(frame) / fade_frames);
+		samples.insert(samples.end(), plateau_samples, 1.0);
+
+		// Transparent lead-in length must not change whether the same ramp
+		// is recognized or move either boundary relative to its own samples.
+		auto const fit = aegisub::align_video_fade::FitVisibilityCurve(samples, plateau_samples);
+		EXPECT_TRUE(fit.detected);
+		EXPECT_EQ(padding, fit.outer_index);
+		EXPECT_EQ(padding + fade_frames - 1, fit.inner_index);
+
+		// Keep the same observation count and plateau, but replace the ramp
+		// with transparency. A long observation window alone is not a fade.
+		std::fill(samples.begin(), samples.end() - plateau_samples, 0.0);
+		auto const hard_cut = aegisub::align_video_fade::FitVisibilityCurve(samples, plateau_samples);
+		EXPECT_FALSE(hard_cut.detected);
+	}
 }
 
 TEST(align_video_fade, confirms_the_first_frame_matching_a_full_platform) {

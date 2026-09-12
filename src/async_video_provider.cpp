@@ -365,7 +365,8 @@ std::vector<FadeTemplateSample> BuildFadeTemplate(
 	VideoFrame const& frame,
 	int x,
 	int y,
-	aegisub::keypoint::ColorMatcher& matcher) {
+	aegisub::keypoint::ColorMatcher& matcher,
+	double core_tolerance = 1.0) {
 	constexpr int horizontal_radius = 48;
 	constexpr int vertical_radius = 32;
 	constexpr size_t maximum_samples = 96;
@@ -383,13 +384,35 @@ std::vector<FadeTemplateSample> BuildFadeTemplate(
 	int const bottom = std::min(height - 1, normalized_y + vertical_radius);
 	int const roi_width = right - left + 1;
 	int const roi_height = bottom - top + 1;
+	// The user's search tolerance also accepts pale backgrounds. Build the
+	// shape from the core color of the clicked stroke, not that wider palette.
+	auto const *anchor = GetFramePixel(frame, x, normalized_y);
+	aegisub::keypoint::ColorMatcher core_matcher(
+		anchor[0], anchor[1], anchor[2], core_tolerance * core_tolerance);
 	std::vector<unsigned char> matches(static_cast<size_t>(roi_width) * roi_height, 0);
 	auto mask_at = [&](int px, int py) -> unsigned char& {
 		return matches[static_cast<size_t>(py - top) * roi_width + (px - left)];
 	};
 	for (int py = top; py <= bottom; ++py) {
 		for (int px = left; px <= right; ++px)
-			mask_at(px, py) = KeyPointPixelMatches(frame, px, py, matcher);
+			mask_at(px, py) = KeyPointPixelMatches(frame, px, py, matcher) && KeyPointPixelMatches(frame, px, py, core_matcher);
+	}
+	// Restrict foreground samples to the connected stroke containing the
+	// click. Other similarly colored objects in the ROI are not anchors.
+	std::vector<std::array<int, 2>> connected = {{x, normalized_y}};
+	mask_at(x, normalized_y) = 2;
+	for (size_t i = 0; i < connected.size(); ++i) {
+		auto const [px, py] = connected[i];
+		for (int dy = -1; dy <= 1; ++dy) {
+			for (int dx = -1; dx <= 1; ++dx) {
+				int const nx = px + dx;
+				int const ny = py + dy;
+				if (nx >= left && nx <= right && ny >= top && ny <= bottom && mask_at(nx, ny) == 1) {
+					mask_at(nx, ny) = 2;
+					connected.push_back({nx, ny});
+				}
+			}
+		}
 	}
 
 	constexpr std::array<std::array<int, 2>, 16> offsets = {{
@@ -401,7 +424,7 @@ std::vector<FadeTemplateSample> BuildFadeTemplate(
 	std::vector<FadeTemplateSample> candidates;
 	for (int py = top; py <= bottom; ++py) {
 		for (int px = left; px <= right; ++px) {
-			if (!mask_at(px, py))
+			if (mask_at(px, py) != 2)
 				continue;
 
 			auto const* foreground = GetFramePixel(frame, px, py);
@@ -468,7 +491,8 @@ std::vector<FadeTemplateSample> BuildFadeTemplate(
 
 double FadeVisibilityScore(
 	VideoFrame const& frame,
-	std::vector<FadeTemplateSample> const& samples) {
+	std::vector<FadeTemplateSample> const& samples,
+	bool require_shape_support = false) {
 	constexpr size_t maximum_samples = 96;
 	std::array<double, maximum_samples> ratios{};
 	size_t ratio_count = 0;
@@ -486,7 +510,7 @@ double FadeVisibilityScore(
 			expected_difference[0] * expected_difference[0]
 			+ expected_difference[1] * expected_difference[1]
 			+ expected_difference[2] * expected_difference[2];
-		if (expected_energy < 1.0)
+		if (expected_energy < 64.0)
 			continue;
 		double const dot =
 			(static_cast<double>(foreground[0]) - neighbour[0]) * expected_difference[0]
@@ -501,21 +525,22 @@ double FadeVisibilityScore(
 		// substantially more contrast than that initial template.
 		ratios[ratio_count++] = std::clamp(dot / expected_energy, -1.0, 8.0);
 	}
-	if (ratio_count == 0)
+	if (ratio_count < 4)
 		return 0.0;
 
 	auto begin = ratios.begin();
 	auto end = begin + ratio_count;
-	auto const middle = begin + ratio_count / 2;
+	// A few background edges can have the right contrast after the glyph is
+	// gone. Continuing the range requires support from most of the stroke.
+	auto const middle = begin + ratio_count / (require_shape_support ? 4 : 2);
 	std::nth_element(begin, middle, end);
 	double result = *middle;
-	if (ratio_count % 2 == 0) {
+	if (!require_shape_support && ratio_count % 2 == 0) {
 		auto const lower = std::max_element(begin, middle);
 		result = (*lower + result) * 0.5;
 	}
 	return result;
 }
-
 }
 
 std::shared_ptr<VideoFrame> BakePacketForCpuReadback(VideoRenderPacket const& packet) {
@@ -1457,6 +1482,7 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 				: KeyPointRangeScanStatus::AnchorMismatch;
 		};
 
+		std::vector<FadeTemplateSample> fade_template;
 		auto probe_frame = [&](
 			int frame_number,
 			aegisub::keypoint::ColorMatcher& active_matcher,
@@ -1465,24 +1491,42 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 			if (status != KeyPointRangeScanStatus::Success)
 				return status;
 
-			return MatchesKeyPointBoundsWithinTolerance(
+			bool const bounds_match = MatchesKeyPointBoundsWithinTolerance(
 				frame,
 				request.x,
 				request.y,
 				active_matcher,
 				active_anchor_bounds,
-				request.bounds_tolerance)
-				? KeyPointRangeScanStatus::Success
-				: KeyPointRangeScanStatus::AnchorMismatch;
+				request.bounds_tolerance);
+			if (fade_template.size() < 4)
+				return bounds_match ? KeyPointRangeScanStatus::Success : KeyPointRangeScanStatus::AnchorMismatch;
+			double const shape_support = FadeVisibilityScore(frame, fade_template, true);
+			if (bounds_match && shape_support > 0.1)
+				return KeyPointRangeScanStatus::Success;
+
+			// A pale scene can join the foreground's horizontal/vertical color
+			// runs without removing the text. Require the original stroke's
+			// color and local contrast before continuing across that boundary.
+			auto const matching_samples = std::count_if(
+				fade_template.begin(), fade_template.end(), [&](auto const& sample) {
+					return KeyPointPixelMatches(frame, sample.foreground_x,
+												sample.foreground_y, active_matcher);
+				});
+			if (matching_samples * 4 >= static_cast<int>(fade_template.size()) * 3 && shape_support >= 0.8)
+				return KeyPointRangeScanStatus::Success;
+			return KeyPointRangeScanStatus::AnchorMismatch;
 		};
 
 		KeyPointBounds anchor_bounds;
 		result.status = probe_anchor_frame(request.frame, matcher, anchor_bounds);
 		if (result.status != KeyPointRangeScanStatus::Success)
 			return;
-		auto fade_template = request.detect_fade
-			? BuildFadeTemplate(frame, request.x, request.y, matcher)
-			: std::vector<FadeTemplateSample>{};
+		// A partially transparent click includes some background color inside
+		// the stroke. Allow that variation during calibration, then rebuild a
+		// precise core template on the confirmed fully-visible platform.
+		fade_template = request.detect_fade
+							? BuildFadeTemplate(frame, request.x, request.y, matcher, 5.0)
+							: std::vector<FadeTemplateSample>{};
 		double const anchor_visibility = request.detect_fade
 			? FadeVisibilityScore(frame, fade_template)
 			: 0.0;
@@ -1609,13 +1653,16 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 				}
 			}
 
-			// A score materially above the clicked frame means that the user
-			// selected the key point while it was still fading. Re-anchor on the
-			// brightest stable platform so that 100% means fully visible, then
-			// repeat the strict scan with the inferred full-strength color.
-			if (plateau.found
-				&& plateau.level > std::max(anchor_visibility * 1.01, anchor_visibility + 0.01)) {
-				result.status = load_frame(plateau.frame);
+			// Refine the initial template on the brightest stable platform. Its
+			// core color no longer contains a partially visible background.
+			if (plateau.found) {
+				// Small score changes are edge/compression noise, not evidence
+				// that a fully visible click should move to another scene.
+				int const refined_anchor_frame = plateau.level > std::max(
+																	 anchor_visibility * 1.05, anchor_visibility + 0.05)
+													 ? plateau.frame
+													 : request.frame;
+				result.status = load_frame(refined_anchor_frame);
 				if (result.status != KeyPointRangeScanStatus::Success)
 					return;
 				int normalized_y = 0;
@@ -1636,14 +1683,14 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 							request.y,
 							plateau_matcher);
 						if (plateau_template.size() >= 4) {
+							fade_template = std::move(plateau_template);
+							visibility_cache.clear();
 							result.status = scan_strict_range(
-								plateau.frame,
+								refined_anchor_frame,
 								plateau_matcher,
 								plateau_bounds);
 							if (result.status != KeyPointRangeScanStatus::Success)
 								return;
-							fade_template = std::move(plateau_template);
-							visibility_cache.clear();
 						}
 					}
 				}
@@ -1659,6 +1706,11 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 				}
 				full_platform_reference = aegisub::align_video_fade::BuildPlateauReference(
 					full_platform_scores);
+				// A cut changes the antialiased edge's background, so its alpha
+				// estimate can shift slightly even on a fully opaque stroke.
+				// Still require a temporally flat run when confirming each end.
+				full_platform_reference.level_band = std::max(
+					full_platform_reference.level_band, full_platform_reference.level * 0.04);
 			}
 		}
 
@@ -1739,8 +1791,14 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 					++low_signal_run;
 				else
 					low_signal_run = 0;
-				if (low_signal_run >= low_signal_confirmation)
-					break;
+				if (low_signal_run >= low_signal_confirmation) {
+					// Low opacity is still part of the fade. Stop only on a flat
+					// background run, not four declining samples near the tail.
+					auto const recent = std::span<double const>(outside_scores).last(low_signal_confirmation);
+					auto const [minimum, maximum] = std::ranges::minmax_element(recent);
+					if (*maximum - *minimum <= plateau_level * 0.01)
+						break;
+				}
 			}
 			if (outside_scores.size() < 3)
 				return direction_result;

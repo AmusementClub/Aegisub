@@ -41,10 +41,13 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <deque>
 #include <exception>
 #include <limits>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 enum {
 	NEW_SUBS_FILE = -1,
@@ -224,23 +227,62 @@ private:
 	AsyncVideoProvider const& provider;
 };
 
-bool NormalizeFrameY(VideoFrame const& frame, int y, int& normalized_y) {
+// Retain only pixels used by alignment: the local template and the complete
+// anchor row/column. The latter preserve exact bounds for strokes larger than
+// the template ROI. Coordinates are normalized once to logical video rows.
+struct KeyPointPixels {
+	static constexpr int horizontal_radius = 48;
+	static constexpr int vertical_radius = 32;
+	int width;
+	int height;
+	int anchor_y;
+	int left;
+	int top;
+	int roi_width;
+	int roi_height;
+	std::vector<unsigned char> data;
+
+	KeyPointPixels(VideoFrame const& source, int x, int y)
+		: width(static_cast<int>(source.width)), height(static_cast<int>(source.height)), anchor_y(y), left(std::max(0, x - horizontal_radius)), top(std::max(0, y - vertical_radius)), roi_width(std::min(width - 1, x + horizontal_radius) - left + 1), roi_height(std::min(height - 1, y + vertical_radius) - top + 1), data((static_cast<size_t>(roi_width) * roi_height + width + height) * 4) {
+		auto source_row = [&](int row) {
+			int const physical = aegisub::motion_track::LogicalRowToPhysicalRow(row, height, source.flipped);
+			return source.data.data() + static_cast<size_t>(physical) * source.pitch;
+		};
+		for (int row = 0; row < roi_height; ++row)
+			std::copy_n(source_row(top + row) + static_cast<size_t>(left) * 4,
+						static_cast<size_t>(roi_width) * 4, data.data() + static_cast<size_t>(row) * roi_width * 4);
+		auto *row_pixels = data.data() + static_cast<size_t>(roi_width) * roi_height * 4;
+		std::copy_n(source_row(y), static_cast<size_t>(width) * 4, row_pixels);
+		auto *column_pixels = row_pixels + static_cast<size_t>(width) * 4;
+		for (int row = 0; row < height; ++row)
+			std::copy_n(source_row(row) + static_cast<size_t>(x) * 4, 4, column_pixels + static_cast<size_t>(row) * 4);
+	}
+
+	[[nodiscard]] unsigned char const *Pixel(int x, int y) const {
+		if (x >= left && x < left + roi_width && y >= top && y < top + roi_height)
+			return data.data() + (static_cast<size_t>(y - top) * roi_width + x - left) * 4;
+		auto const *row_pixels = data.data() + static_cast<size_t>(roi_width) * roi_height * 4;
+		if (y == anchor_y)
+			return row_pixels + static_cast<size_t>(x) * 4;
+		return row_pixels + (static_cast<size_t>(width) + y) * 4;
+	}
+};
+
+bool NormalizeFrameY(KeyPointPixels const& frame, int y, int& normalized_y) {
 	int const height = static_cast<int>(frame.height);
 	if (y < 0 || y >= height)
 		return false;
 
-	normalized_y = aegisub::motion_track::LogicalRowToPhysicalRow(y, height, frame.flipped);
+	normalized_y = y;
 	return normalized_y >= 0 && normalized_y < height;
 }
 
-unsigned char const* GetFramePixel(VideoFrame const& frame, int x, int y) {
-	return frame.data.data()
-		+ static_cast<size_t>(y) * frame.pitch
-		+ static_cast<size_t>(x) * 4;
+unsigned char const *GetFramePixel(KeyPointPixels const& frame, int x, int y) {
+	return frame.Pixel(x, y);
 }
 
 bool KeyPointPixelMatches(
-	VideoFrame const& frame,
+	KeyPointPixels const& frame,
 	int x,
 	int y,
 	aegisub::keypoint::ColorMatcher& matcher) {
@@ -249,7 +291,7 @@ bool KeyPointPixelMatches(
 }
 
 bool CalculateKeyPointBounds(
-	VideoFrame const& frame,
+	KeyPointPixels const& frame,
 	int x,
 	int y,
 	aegisub::keypoint::ColorMatcher& matcher,
@@ -287,7 +329,7 @@ bool CalculateKeyPointBounds(
 }
 
 bool MatchesKeyPointBoundsWithinTolerance(
-	VideoFrame const& frame,
+	KeyPointPixels const& frame,
 	int x,
 	int y,
 	aegisub::keypoint::ColorMatcher& matcher,
@@ -362,13 +404,13 @@ struct FadeTemplateSample {
 };
 
 std::vector<FadeTemplateSample> BuildFadeTemplate(
-	VideoFrame const& frame,
+	KeyPointPixels const& frame,
 	int x,
 	int y,
 	aegisub::keypoint::ColorMatcher& matcher,
 	double core_tolerance = 1.0) {
-	constexpr int horizontal_radius = 48;
-	constexpr int vertical_radius = 32;
+	constexpr int horizontal_radius = KeyPointPixels::horizontal_radius;
+	constexpr int vertical_radius = KeyPointPixels::vertical_radius;
 	constexpr size_t maximum_samples = 96;
 	constexpr double minimum_energy = 64.0;
 
@@ -489,10 +531,15 @@ std::vector<FadeTemplateSample> BuildFadeTemplate(
 	return selected;
 }
 
-double FadeVisibilityScore(
-	VideoFrame const& frame,
-	std::vector<FadeTemplateSample> const& samples,
-	bool require_shape_support = false) {
+struct FadeVisibility {
+	double level = 0.0;
+	double shape_support = 0.0;
+	bool valid = false;
+};
+
+FadeVisibility FadeVisibilityScore(
+	KeyPointPixels const& frame,
+	std::vector<FadeTemplateSample> const& samples) {
 	constexpr size_t maximum_samples = 96;
 	std::array<double, maximum_samples> ratios{};
 	size_t ratio_count = 0;
@@ -526,20 +573,22 @@ double FadeVisibilityScore(
 		ratios[ratio_count++] = std::clamp(dot / expected_energy, -1.0, 8.0);
 	}
 	if (ratio_count < 4)
-		return 0.0;
+		return {};
 
 	auto begin = ratios.begin();
 	auto end = begin + ratio_count;
 	// A few background edges can have the right contrast after the glyph is
 	// gone. Continuing the range requires support from most of the stroke.
-	auto const middle = begin + ratio_count / (require_shape_support ? 4 : 2);
+	auto const middle = begin + ratio_count / 2;
 	std::nth_element(begin, middle, end);
 	double result = *middle;
-	if (!require_shape_support && ratio_count % 2 == 0) {
+	if (ratio_count % 2 == 0) {
 		auto const lower = std::max_element(begin, middle);
 		result = (*lower + result) * 0.5;
 	}
-	return result;
+	auto const lower_quartile = begin + ratio_count / 4;
+	std::nth_element(begin, lower_quartile, middle);
+	return {.level = result, .shape_support = *lower_quartile, .valid = true};
 }
 }
 
@@ -1449,23 +1498,38 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 			static_cast<double>(request.tolerance) * static_cast<double>(request.tolerance);
 		aegisub::keypoint::ColorMatcher matcher(request.b, request.g, request.r, tolerance_squared);
 
-		VideoFrame frame;
+		VideoFrame decoded;
+		KeyPointPixels const *frame = nullptr;
+		std::unordered_map<int, KeyPointPixels> pixel_cache;
+		std::deque<int> cache_order;
+		size_t cached_pixel_bytes = 0;
+		constexpr size_t pixel_cache_budget = 16 * 1024 * 1024;
 		auto load_frame = [&](int frame_number) -> KeyPointRangeScanStatus {
+			if (auto const cached = pixel_cache.find(frame_number); cached != pixel_cache.end()) {
+				frame = &cached->second;
+				return KeyPointRangeScanStatus::Success;
+			}
 			try {
-				source_provider->GetFrame(frame_number, frame);
+				source_provider->GetFrame(frame_number, decoded);
 			}
 			catch (VideoProviderError const&) {
 				return KeyPointRangeScanStatus::FrameUnavailable;
 			}
-
-			if (frame.data.empty()
-				|| frame.width == 0
-				|| frame.height == 0
-				|| frame.pitch < frame.width * 4
-				|| frame.data.size() < frame.pitch * frame.height) {
+			if (std::cmp_not_equal(decoded.width, width) || std::cmp_not_equal(decoded.height, height) || decoded.pitch < decoded.width * 4 || decoded.height == 0 || decoded.pitch > decoded.data.size() / decoded.height)
 				return KeyPointRangeScanStatus::FrameUnavailable;
-			}
 
+			KeyPointPixels pixels(decoded, request.x, request.y);
+			size_t const pixel_bytes = pixels.data.size();
+			while (!cache_order.empty() && cached_pixel_bytes + pixel_bytes > pixel_cache_budget) {
+				auto const oldest = pixel_cache.find(cache_order.front());
+				cached_pixel_bytes -= oldest->second.data.size();
+				pixel_cache.erase(oldest);
+				cache_order.pop_front();
+			}
+			auto const entry = pixel_cache.emplace(frame_number, std::move(pixels)).first;
+			cache_order.push_back(frame_number);
+			cached_pixel_bytes += pixel_bytes;
+			frame = &entry->second;
 			return KeyPointRangeScanStatus::Success;
 		};
 
@@ -1477,44 +1541,52 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 			if (status != KeyPointRangeScanStatus::Success)
 				return status;
 
-			return CalculateKeyPointBounds(frame, request.x, request.y, active_matcher, bounds)
-				? KeyPointRangeScanStatus::Success
-				: KeyPointRangeScanStatus::AnchorMismatch;
+			return CalculateKeyPointBounds(*frame, request.x, request.y, active_matcher, bounds)
+					   ? KeyPointRangeScanStatus::Success
+					   : KeyPointRangeScanStatus::AnchorMismatch;
 		};
 
+		enum class ProbeResult : std::uint8_t { Match,
+												Mismatch,
+												Unknown,
+												FrameUnavailable };
+		constexpr int maximum_unknown_frames = 4;
 		std::vector<FadeTemplateSample> fade_template;
 		auto probe_frame = [&](
-			int frame_number,
-			aegisub::keypoint::ColorMatcher& active_matcher,
-			KeyPointBounds const& active_anchor_bounds) -> KeyPointRangeScanStatus {
+							   int frame_number,
+							   aegisub::keypoint::ColorMatcher& active_matcher,
+							   KeyPointBounds const& active_anchor_bounds) -> ProbeResult {
 			auto const status = load_frame(frame_number);
 			if (status != KeyPointRangeScanStatus::Success)
-				return status;
+				return ProbeResult::FrameUnavailable;
 
 			bool const bounds_match = MatchesKeyPointBoundsWithinTolerance(
-				frame,
+				*frame,
 				request.x,
 				request.y,
 				active_matcher,
 				active_anchor_bounds,
 				request.bounds_tolerance);
 			if (fade_template.size() < 4)
-				return bounds_match ? KeyPointRangeScanStatus::Success : KeyPointRangeScanStatus::AnchorMismatch;
-			double const shape_support = FadeVisibilityScore(frame, fade_template, true);
+				return bounds_match ? ProbeResult::Match : ProbeResult::Mismatch;
+			auto const visibility = FadeVisibilityScore(*frame, fade_template);
+			if (!visibility.valid)
+				return ProbeResult::Unknown;
+			double const shape_support = visibility.shape_support;
 			if (bounds_match && shape_support > 0.1)
-				return KeyPointRangeScanStatus::Success;
+				return ProbeResult::Match;
 
 			// A pale scene can join the foreground's horizontal/vertical color
 			// runs without removing the text. Require the original stroke's
 			// color and local contrast before continuing across that boundary.
 			auto const matching_samples = std::count_if(
 				fade_template.begin(), fade_template.end(), [&](auto const& sample) {
-					return KeyPointPixelMatches(frame, sample.foreground_x,
+					return KeyPointPixelMatches(*frame, sample.foreground_x,
 												sample.foreground_y, active_matcher);
 				});
 			if (matching_samples * 4 >= static_cast<int>(fade_template.size()) * 3 && shape_support >= 0.8)
-				return KeyPointRangeScanStatus::Success;
-			return KeyPointRangeScanStatus::AnchorMismatch;
+				return ProbeResult::Match;
+			return ProbeResult::Mismatch;
 		};
 
 		KeyPointBounds anchor_bounds;
@@ -1525,17 +1597,17 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 		// the stroke. Allow that variation during calibration, then rebuild a
 		// precise core template on the confirmed fully-visible platform.
 		fade_template = request.detect_fade
-							? BuildFadeTemplate(frame, request.x, request.y, matcher, 5.0)
+							? BuildFadeTemplate(*frame, request.x, request.y, matcher, 5.0)
 							: std::vector<FadeTemplateSample>{};
-		double const anchor_visibility = request.detect_fade
-			? FadeVisibilityScore(frame, fade_template)
-			: 0.0;
-		std::unordered_map<int, double> visibility_cache;
+		auto const anchor_visibility = request.detect_fade
+										   ? FadeVisibilityScore(*frame, fade_template)
+										   : FadeVisibility{};
+		std::unordered_map<int, FadeVisibility> visibility_cache;
 		if (request.detect_fade) {
 			visibility_cache.reserve(static_cast<size_t>(request.max_fade_frames) * 2 + 1);
 			visibility_cache.emplace(request.frame, anchor_visibility);
 		}
-		auto visibility_at = [&](int frame_number, double& visibility) {
+		auto visibility_at = [&](int frame_number, FadeVisibility& visibility) {
 			auto const cached = visibility_cache.find(frame_number);
 			if (cached != visibility_cache.end()) {
 				visibility = cached->second;
@@ -1544,7 +1616,7 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 			auto const status = load_frame(frame_number);
 			if (status != KeyPointRangeScanStatus::Success)
 				return status;
-			visibility = FadeVisibilityScore(frame, fade_template);
+			visibility = FadeVisibilityScore(*frame, fade_template);
 			visibility_cache.emplace(frame_number, visibility);
 			return KeyPointRangeScanStatus::Success;
 		};
@@ -1552,52 +1624,52 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 		int left = request.frame;
 		int right = request.frame;
 		auto scan_strict_range = [&](
-			int active_anchor_frame,
-			aegisub::keypoint::ColorMatcher& active_matcher,
-			KeyPointBounds const& active_anchor_bounds) -> KeyPointRangeScanStatus {
-			left = active_anchor_frame;
-			right = active_anchor_frame;
-
-			int missing_left = -1;
-			for (int pos = active_anchor_frame - request.scan_step; pos >= 0; pos -= request.scan_step) {
-				auto const status = probe_frame(pos, active_matcher, active_anchor_bounds);
-				if (status != KeyPointRangeScanStatus::Success) {
-					if (status == KeyPointRangeScanStatus::FrameUnavailable)
-						return status;
-					missing_left = pos;
-					break;
+									 int active_anchor_frame,
+									 aegisub::keypoint::ColorMatcher& active_matcher,
+									 KeyPointBounds const& active_anchor_bounds) -> KeyPointRangeScanStatus {
+			// A skipped frame could hide an entire unobservable interval. Fade
+			// tracking needs consecutive evidence; legacy color-only scans may
+			// still use the caller's coarse step.
+			int const scan_step = fade_template.size() >= 4 ? 1 : request.scan_step;
+			auto scan_direction = [&](int direction, int& boundary) {
+				boundary = active_anchor_frame;
+				int missing = direction < 0 ? -1 : frame_count;
+				int unknown_frames = 0;
+				for (int pos = active_anchor_frame + direction * scan_step;
+					 pos >= 0 && pos < frame_count; pos += direction * scan_step) {
+					auto const probe = probe_frame(pos, active_matcher, active_anchor_bounds);
+					if (probe == ProbeResult::FrameUnavailable)
+						return KeyPointRangeScanStatus::FrameUnavailable;
+					if (probe == ProbeResult::Unknown)
+						unknown_frames += scan_step;
+					else
+						unknown_frames = 0;
+					if (probe == ProbeResult::Mismatch || unknown_frames > maximum_unknown_frames) {
+						missing = pos;
+						break;
+					}
+					if (probe == ProbeResult::Match)
+						boundary = pos;
 				}
-				left = pos;
-			}
-			for (int pos = left - 1; pos > missing_left; --pos) {
-				auto const status = probe_frame(pos, active_matcher, active_anchor_bounds);
-				if (status == KeyPointRangeScanStatus::FrameUnavailable)
-					return status;
-				if (status != KeyPointRangeScanStatus::Success)
-					break;
-				left = pos;
-			}
-
-			int missing_right = frame_count;
-			for (int pos = active_anchor_frame + request.scan_step; pos < frame_count; pos += request.scan_step) {
-				auto const status = probe_frame(pos, active_matcher, active_anchor_bounds);
-				if (status != KeyPointRangeScanStatus::Success) {
-					if (status == KeyPointRangeScanStatus::FrameUnavailable)
-						return status;
-					missing_right = pos;
-					break;
+				unknown_frames = 0;
+				for (int pos = boundary + direction;
+					 direction < 0 ? pos > missing : pos < missing; pos += direction) {
+					auto const probe = probe_frame(pos, active_matcher, active_anchor_bounds);
+					if (probe == ProbeResult::FrameUnavailable)
+						return KeyPointRangeScanStatus::FrameUnavailable;
+					if (probe == ProbeResult::Unknown)
+						++unknown_frames;
+					else
+						unknown_frames = 0;
+					if (probe == ProbeResult::Mismatch || unknown_frames > maximum_unknown_frames)
+						break;
+					if (probe == ProbeResult::Match)
+						boundary = pos;
 				}
-				right = pos;
-			}
-			for (int pos = right + 1; pos < missing_right; ++pos) {
-				auto const status = probe_frame(pos, active_matcher, active_anchor_bounds);
-				if (status == KeyPointRangeScanStatus::FrameUnavailable)
-					return status;
-				if (status != KeyPointRangeScanStatus::Success)
-					break;
-				right = pos;
-			}
-			return KeyPointRangeScanStatus::Success;
+				return KeyPointRangeScanStatus::Success;
+			};
+			auto const status = scan_direction(-1, left);
+			return status == KeyPointRangeScanStatus::Success ? scan_direction(1, right) : status;
 		};
 
 		result.status = scan_strict_range(request.frame, matcher, anchor_bounds);
@@ -1615,7 +1687,7 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 				double level = 0.0;
 			};
 			std::vector<int> calibration_frames;
-			std::vector<double> calibration_scores;
+			std::vector<FadeVisibility> calibration_scores;
 			int const calibration_start = std::max(0, request.frame - request.max_fade_frames);
 			int const calibration_end = std::min(
 				frame_count - 1,
@@ -1623,7 +1695,7 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 			calibration_frames.reserve(calibration_end - calibration_start + 1);
 			calibration_scores.reserve(calibration_end - calibration_start + 1);
 			for (int pos = calibration_start; pos <= calibration_end; ++pos) {
-				double visibility = 0.0;
+				FadeVisibility visibility;
 				result.status = visibility_at(pos, visibility);
 				if (result.status != KeyPointRangeScanStatus::Success)
 					return;
@@ -1631,23 +1703,46 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 				calibration_scores.push_back(visibility);
 			}
 
+			int const anchor_index = request.frame - calibration_start;
+			auto connected_limit = [&](int direction) {
+				int limit = anchor_index;
+				int unknown_frames = 0;
+				for (int i = anchor_index + direction;
+					 i >= 0 && std::cmp_less(i, calibration_scores.size()); i += direction) {
+					auto const& sample = calibration_scores[i];
+					if (!sample.valid) {
+						if (++unknown_frames > maximum_unknown_frames)
+							break;
+						continue;
+					}
+					if (sample.level <= anchor_visibility.level * 0.08)
+						break;
+					unknown_frames = 0;
+					limit = i;
+				}
+				return limit;
+			};
+			int const connected_start = connected_limit(-1);
+			int const connected_end = connected_limit(1);
+
 			PlateauCandidate plateau;
-			for (int start = 0;
-				start + plateau_samples <= static_cast<int>(calibration_scores.size());
-				++start) {
+			for (int start = connected_start;
+				 start + plateau_samples <= connected_end + 1;
+				 ++start) {
 				std::array<double, plateau_samples> window{};
-				std::copy_n(calibration_scores.begin() + start, plateau_samples, window.begin());
-				std::sort(window.begin(), window.end());
+				auto const samples = std::span<FadeVisibility const>(calibration_scores).subspan(start, plateau_samples);
+				if (std::ranges::any_of(samples, [](auto const& sample) { return !sample.valid; }))
+					continue;
+				std::ranges::transform(samples, window.begin(), [](auto const& sample) { return sample.level; });
+				std::ranges::sort(window);
 				double const level = (window[1] + window[2]) * 0.5;
 				double const maximum_spread = std::max(0.03, std::abs(level) * 0.05);
 				if (level <= 0.10 || window.back() - window.front() > maximum_spread)
 					continue;
 				if (!plateau.found || level > plateau.level) {
-					auto const maximum = std::max_element(
-						calibration_scores.begin() + start,
-						calibration_scores.begin() + start + plateau_samples);
+					auto const maximum = std::ranges::max_element(samples, {}, &FadeVisibility::level);
 					plateau.found = true;
-					plateau.frame = calibration_frames[maximum - calibration_scores.begin()];
+					plateau.frame = calibration_frames[start + (maximum - samples.begin())];
 					plateau.start_index = start;
 					plateau.level = level;
 				}
@@ -1659,26 +1754,26 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 				// Small score changes are edge/compression noise, not evidence
 				// that a fully visible click should move to another scene.
 				int const refined_anchor_frame = plateau.level > std::max(
-																	 anchor_visibility * 1.05, anchor_visibility + 0.05)
+																	 anchor_visibility.level * 1.05, anchor_visibility.level + 0.05)
 													 ? plateau.frame
 													 : request.frame;
 				result.status = load_frame(refined_anchor_frame);
 				if (result.status != KeyPointRangeScanStatus::Success)
 					return;
 				int normalized_y = 0;
-				if (NormalizeFrameY(frame, request.y, normalized_y)) {
-					auto const* pixel = GetFramePixel(frame, request.x, normalized_y);
+				if (NormalizeFrameY(*frame, request.y, normalized_y)) {
+					auto const *pixel = GetFramePixel(*frame, request.x, normalized_y);
 					aegisub::keypoint::ColorMatcher plateau_matcher(
 						pixel[0], pixel[1], pixel[2], tolerance_squared);
 					KeyPointBounds plateau_bounds;
 					if (CalculateKeyPointBounds(
-						frame,
-						request.x,
-						request.y,
-						plateau_matcher,
-						plateau_bounds)) {
+							*frame,
+							request.x,
+							request.y,
+							plateau_matcher,
+							plateau_bounds)) {
 						auto plateau_template = BuildFadeTemplate(
-							frame,
+							*frame,
 							request.x,
 							request.y,
 							plateau_matcher);
@@ -1697,15 +1792,20 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 			}
 
 			if (plateau.found) {
+				bool platform_visible = true;
 				for (int i = 0; i < plateau_samples; ++i) {
-					result.status = visibility_at(
-						calibration_frames[plateau.start_index + i],
-						full_platform_scores[i]);
+					FadeVisibility sample;
+					result.status = visibility_at(calibration_frames[plateau.start_index + i], sample);
 					if (result.status != KeyPointRangeScanStatus::Success)
 						return;
+					if (!sample.valid) {
+						platform_visible = false;
+						break;
+					}
+					full_platform_scores[i] = sample.level;
 				}
-				full_platform_reference = aegisub::align_video_fade::BuildPlateauReference(
-					full_platform_scores);
+				if (platform_visible)
+					full_platform_reference = aegisub::align_video_fade::BuildPlateauReference(full_platform_scores);
 				// A cut changes the antialiased edge's background, so its alpha
 				// estimate can shift slightly even on a fully opaque stroke.
 				// Still require a temporally flat run when confirming each end.
@@ -1748,10 +1848,11 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 				int const pos = boundary - outward_direction * offset;
 				if (pos < left || pos > right)
 					break;
-				double score = 0.0;
-				if (visibility_at(pos, score) != KeyPointRangeScanStatus::Success) {
+				FadeVisibility visibility;
+				if (visibility_at(pos, visibility) != KeyPointRangeScanStatus::Success || !visibility.valid) {
 					return direction_result;
 				}
+				double const score = visibility.level;
 				inside_frames.push_back(pos);
 				inside_scores.push_back(score);
 				if (inside_scores.size() >= plateau_confirmation) {
@@ -1781,10 +1882,11 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 				int const pos = boundary + outward_direction * offset;
 				if (pos < 0 || pos >= frame_count)
 					break;
-				double score = 0.0;
-				if (visibility_at(pos, score) != KeyPointRangeScanStatus::Success) {
+				FadeVisibility visibility;
+				if (visibility_at(pos, visibility) != KeyPointRangeScanStatus::Success || !visibility.valid) {
 					return direction_result;
 				}
+				double const score = visibility.level;
 				outside_frames.push_back(pos);
 				outside_scores.push_back(score);
 				if (score <= plateau_level * 0.08)

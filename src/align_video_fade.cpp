@@ -55,6 +55,7 @@ double ModelLoss(
 	int start,
 	int end,
 	double gamma,
+	std::span<double const> powers,
 	double delta) {
 	double loss = 0.0;
 	for (int i = 0; i < static_cast<int>(values.size()); ++i) {
@@ -63,7 +64,7 @@ double ModelLoss(
 			predicted = 1.0;
 		else if (i > start) {
 			double const position = static_cast<double>(i - start) / (end - start);
-			predicted = std::pow(position, gamma);
+			predicted = powers.empty() ? std::pow(position, gamma) : powers[i - start - 1];
 		}
 		loss += Huber(values[i] - predicted, delta);
 	}
@@ -279,15 +280,33 @@ CurveFit FitVisibilityCurve(std::span<double const> samples, int plateau_samples
 		hard_loss = std::min(hard_loss, HardCutLoss(normalized, split, delta));
 
 	constexpr double gammas[] = { 0.5, 0.75, 1.0, 1.4, 2.0 };
+	// Cover the scanner's bounded fade window without quadratic allocation
+	// growth for callers supplying longer curves. Longer ramps use pow below.
+	int const cached_length = std::min(outside_count, 240);
+	std::vector<double> powers;
+	powers.reserve(std::size(gammas) * cached_length * (cached_length - 1) / 2);
+	for (int length = 2; length <= cached_length; ++length) {
+		for (double gamma : gammas) {
+			for (int position = 1; position < length; ++position)
+				powers.push_back(std::pow(static_cast<double>(position) / length, gamma));
+		}
+	}
+
 	double best_loss = 1e30;
 	int best_start = -1;
 	int best_end = -1;
 	for (int end = 2; end <= outside_count; ++end) {
 		for (int start = 0; start + 2 <= end; ++start) {
-			for (double gamma : gammas) {
+			int const length = end - start;
+			for (size_t gamma_index = 0; gamma_index < std::size(gammas); ++gamma_index) {
+				std::span<double const> model;
+				if (length <= cached_length) {
+					size_t const offset = std::size(gammas) * (length - 1) * (length - 2) / 2 + gamma_index * (length - 1);
+					model = std::span<double const>(powers).subspan(offset, length - 1);
+				}
 				// Normalize both terms over the sampled window. Otherwise adding
 				// transparent confirmation frames penalizes the same fade more.
-				double const loss = ModelLoss(normalized, start, end, gamma, delta) + 0.0005 * (end - start) / count;
+				double const loss = ModelLoss(normalized, start, end, gammas[gamma_index], model, delta) + 0.0005 * length / count;
 				if (loss < best_loss) {
 					best_loss = loss;
 					best_start = start;
@@ -325,6 +344,12 @@ CurveFit FitVisibilityCurve(std::span<double const> samples, int plateau_samples
 	}
 	if (first_visible < 0 || outside_count - first_visible < 2)
 		return result;
+	// A robust model can place its zero point just inside a faint ramp. Keep
+	// up to two earlier visible samples only when they connect to that ramp;
+	// a gap still separates an unrelated background edge from the text.
+	int const earliest_visible = std::max(0, best_start - 2);
+	while (first_visible > earliest_visible && normalized[first_visible - 1] >= visible_threshold)
+		--first_visible;
 
 	result.detected = true;
 	result.outer_index = first_visible;

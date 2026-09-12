@@ -77,6 +77,83 @@ TEST(align_video_fade, fits_a_thirty_frame_fade_independently_of_transparent_pad
 	}
 }
 
+TEST(align_video_fade, keeps_a_faint_tail_before_the_fitted_onset_without_following_earlier_edges) {
+	// Rounded visibility measurements from a compressed fade place the fitted
+	// zero point at index 5, although index 4 is already persistently visible.
+	std::array<double, 38> const ramp = {
+		0.0, 0.0, 0.0, 0.0, 0.0235163, 0.0475992, 0.0724951, 0.108740,
+		0.135616, 0.170366, 0.192825, 0.227594, 0.263102, 0.288894,
+		0.306876, 0.346978, 0.374082, 0.406510, 0.442202, 0.473199,
+		0.505204, 0.537107, 0.567875, 0.600505, 0.638760, 0.674550,
+		0.707517, 0.744465, 0.778445, 0.812005, 0.851473, 0.880566,
+		0.920157, 0.956269, 0.999215, 0.998403, 0.998504, 0.999228};
+	for (int padding : {0, 12}) {
+		SCOPED_TRACE(padding);
+		std::vector<double> samples(padding, 0.0);
+		if (padding) {
+			// A short background edge is brighter than the faint tail but
+			// separated from the actual fade by transparent frames.
+			samples[4] = 0.30;
+			samples[5] = 0.35;
+		}
+		samples.insert(samples.end(), ramp.begin(), ramp.end());
+
+		auto const fit = aegisub::align_video_fade::FitVisibilityCurve(samples, 4);
+		ASSERT_TRUE(fit.detected);
+		EXPECT_EQ(padding + 4, fit.outer_index);
+		EXPECT_EQ(padding + 34, fit.inner_index);
+	}
+}
+
+TEST(align_video_fade, does_not_extend_across_a_gap_to_an_isolated_background_edge) {
+	std::vector<double> samples(4, 0.0);
+	samples[2] = 0.02;
+	for (int frame = 1; frame < 30; ++frame)
+		samples.push_back(static_cast<double>(frame) / 30);
+	samples.insert(samples.end(), 4, 1.0);
+
+	// The isolated edge and the first ramp sample are two frames apart.
+	// Reusing the forward persistence check for lookback would join them.
+	auto const fit = aegisub::align_video_fade::FitVisibilityCurve(samples, 4);
+	ASSERT_TRUE(fit.detected);
+	EXPECT_EQ(4, fit.outer_index);
+	EXPECT_EQ(33, fit.inner_index);
+}
+
+TEST(align_video_fade, bounds_faint_tail_lookback_to_two_samples_before_the_fitted_onset) {
+	for (int faint_samples : {3, 4}) {
+		SCOPED_TRACE(faint_samples);
+		std::vector<double> samples(4, 0.0);
+		for (int frame = 0; frame < faint_samples; ++frame)
+			samples.push_back(0.012 + 0.005 * frame);
+		for (int frame = 1; frame < 30; ++frame)
+			samples.push_back(static_cast<double>(frame) / 30);
+		samples.insert(samples.end(), 4, 1.0);
+
+		auto const fit = aegisub::align_video_fade::FitVisibilityCurve(samples, 4);
+		ASSERT_TRUE(fit.detected);
+		EXPECT_EQ(faint_samples + 1, fit.outer_index);
+		EXPECT_EQ(faint_samples + 33, fit.inner_index);
+	}
+}
+
+TEST(align_video_fade, preserves_fade_boundaries_across_the_power_cache_limit) {
+	for (int fade_frames : {239, 240, 241}) {
+		SCOPED_TRACE(fade_frames);
+		std::vector<double> samples(4, 0.0);
+		for (int frame = 1; frame < fade_frames; ++frame)
+			samples.push_back(static_cast<double>(frame) / fade_frames);
+		samples.insert(samples.end(), 4, 1.0);
+
+		// The third ramp sample first exceeds 1% visibility. Its position
+		// and the confirmed plateau must survive the uncached long-ramp path.
+		auto const fit = aegisub::align_video_fade::FitVisibilityCurve(samples, 4);
+		ASSERT_TRUE(fit.detected);
+		EXPECT_EQ(6, fit.outer_index);
+		EXPECT_EQ(fade_frames + 3, fit.inner_index);
+	}
+}
+
 TEST(align_video_fade, confirms_the_first_frame_matching_a_full_platform) {
 	std::array<double, 8> samples = {
 		0.95, 0.97, 0.98, 0.99, 1.00, 1.00, 1.00, 1.00

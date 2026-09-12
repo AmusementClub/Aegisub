@@ -309,6 +309,26 @@ void FillSyntheticWhiteTextSceneFrame(int n, VideoFrame& frame, bool white_backg
 	}
 }
 
+void FillSyntheticWhiteGlyphFrame(VideoFrame& frame, int visibility, int glyph_x, int glyph_y, int background = 32) {
+	int const width = static_cast<int>(frame.width);
+	int const height = static_cast<int>(frame.height);
+	for (int y = 0; y < height; ++y) {
+		int const storage_y = frame.flipped ? height - 1 - y : y;
+		for (int x = 0; x < width; ++x) {
+			int const dx = x - glyph_x;
+			int const dy = y - glyph_y;
+			bool const horizontal = dy < 2 || (dy >= 7 && dy < 9) || dy >= 15;
+			bool const glyph = dx >= 0 && dx < 14 && dy >= 0 && dy < 17 && (dx < 2 || dx >= 12 || horizontal);
+			// Composite a white box glyph over a uniform background using the
+			// supplied opacity, independently of the scan's visibility model.
+			auto const channel = static_cast<unsigned char>(glyph
+																? (255 * visibility + background * (100 - visibility)) / 100
+																: background);
+			SetBgraPixel(frame, x, storage_y, channel, channel, channel);
+		}
+	}
+}
+
 class FakeSubtitlesProvider final : public SubtitlesProvider {
 public:
 	int load_calls = 0;
@@ -2254,6 +2274,325 @@ TEST(async_video_provider, find_key_point_range_keeps_low_visibility_ends_of_thi
 	EXPECT_EQ(35, result.fade_in_end);
 	EXPECT_EQ(65, result.fade_out_start);
 	EXPECT_EQ(94, result.right);
+}
+
+TEST(async_video_provider, find_key_point_range_reuses_decoded_pixels_only_within_one_request) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 240;
+	video->frame_height = 180;
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	for (int request_index : {0, 1}) {
+		SCOPED_TRACE(request_index);
+		int const time_shift = request_index * 8;
+		int const glyph_x = request_index == 0 ? 150 : 10;
+		int const glyph_y = request_index == 0 ? 100 : 10;
+		video->fill_frame = [=](int n, VideoFrame& frame) {
+			int const visibility = std::clamp(std::min(n - time_shift - 5, 75 + time_shift - n) * 10, 0, 100);
+			FillSyntheticWhiteGlyphFrame(frame, visibility, glyph_x, glyph_y);
+		};
+		{
+			std::scoped_lock lock(state->mutex);
+			state->requested_frames.clear();
+		}
+		auto const result = provider.FindKeyPointRange({.frame = 40,
+														.x = glyph_x + 6,
+														.y = glyph_y,
+														.r = 255,
+														.g = 255,
+														.b = 255,
+														.tolerance = 20,
+														.scan_step = 1,
+														.bounds_tolerance = 5,
+														.detect_fade = true,
+														.max_fade_frames = 80});
+
+		ASSERT_EQ(KeyPointRangeScanStatus::Success, result.status);
+		EXPECT_TRUE(result.fade_in_detected);
+		EXPECT_TRUE(result.fade_out_detected);
+		EXPECT_EQ(6 + time_shift, result.left);
+		EXPECT_EQ(15 + time_shift, result.fade_in_end);
+		EXPECT_EQ(65 + time_shift, result.fade_out_start);
+		EXPECT_EQ(74 + time_shift, result.right);
+
+		std::scoped_lock lock(state->mutex);
+		auto requested_frames = state->requested_frames;
+		std::ranges::sort(requested_frames);
+		// Recalibrating the template changes scores, but each frame's pixels
+		// need decoding once. A subsequent click starts with fresh pixels.
+		EXPECT_EQ(1, std::ranges::count(requested_frames, 40));
+		EXPECT_EQ(requested_frames.end(), std::ranges::adjacent_find(requested_frames));
+	}
+}
+
+TEST(async_video_provider, find_key_point_range_keeps_cached_region_coordinates_at_frame_edges) {
+	for (bool flipped : {false, true}) {
+		for (auto const& origin : {std::pair{150, 100}, std::pair{1, 2}, std::pair{224, 161}}) {
+			SCOPED_TRACE(::testing::Message() << "flipped=" << flipped << ", origin=" << origin.first << ',' << origin.second);
+			auto state = std::make_shared<VideoProviderState>();
+			auto *video = new FakeVideoProvider(state);
+			video->frame_width = 240;
+			video->frame_height = 180;
+			video->bgra_flipped = flipped;
+			video->fill_frame = [origin](int n, VideoFrame& frame) {
+				int const visibility = std::clamp(std::min(n - 5, 75 - n) * 10, 0, 100);
+				FillSyntheticWhiteGlyphFrame(frame, visibility, origin.first, origin.second);
+			};
+			AsyncVideoProvider provider(
+				std::unique_ptr<VideoProvider>(video),
+				std::unique_ptr<SubtitlesProvider>(),
+				AsyncVideoProviderEventSink{});
+			auto const result = provider.FindKeyPointRange({.frame = 40,
+															.x = origin.first + 6,
+															.y = origin.second,
+															.r = 255,
+															.g = 255,
+															.b = 255,
+															.tolerance = 20,
+															.scan_step = 1,
+															.bounds_tolerance = 5,
+															.detect_fade = true,
+															.max_fade_frames = 80});
+
+			ASSERT_EQ(KeyPointRangeScanStatus::Success, result.status);
+			EXPECT_TRUE(result.fade_in_detected);
+			EXPECT_TRUE(result.fade_out_detected);
+			EXPECT_EQ(6, result.left);
+			EXPECT_EQ(15, result.fade_in_end);
+			EXPECT_EQ(65, result.fade_out_start);
+			EXPECT_EQ(74, result.right);
+		}
+	}
+}
+
+TEST(async_video_provider, find_key_point_range_retains_long_anchor_runs_outside_cached_region) {
+	for (bool horizontal : {false, true}) {
+		SCOPED_TRACE(horizontal);
+		auto state = std::make_shared<VideoProviderState>();
+		auto *video = new FakeVideoProvider(state);
+		video->frame_width = 320;
+		video->frame_height = 240;
+		video->fill_frame = [horizontal](int n, VideoFrame& frame) {
+			bool const selected_shape = n >= 10 && n <= 20;
+			int const left = !selected_shape && horizontal ? 60 : 80;
+			int const top = !selected_shape && !horizontal ? 50 : 70;
+			for (int y = top; y < 180; ++y) {
+				for (int x = left; x < 240; ++x)
+					SetBgraPixel(frame, x, y, 255, 255, 255);
+			}
+		};
+		AsyncVideoProvider provider(
+			std::unique_ptr<VideoProvider>(video),
+			std::unique_ptr<SubtitlesProvider>(),
+			AsyncVideoProviderEventSink{});
+		// The complete local sample region is white in every frame. Only the
+		// distant end of the anchor's horizontal or vertical run changes.
+		auto const result = provider.FindKeyPointRange({.frame = 15,
+														.x = 160,
+														.y = 120,
+														.r = 255,
+														.g = 255,
+														.b = 255,
+														.tolerance = 20,
+														.scan_step = 1,
+														.bounds_tolerance = 5,
+														.detect_fade = true,
+														.max_fade_frames = 40});
+
+		ASSERT_EQ(KeyPointRangeScanStatus::Success, result.status);
+		EXPECT_EQ(10, result.strict_left);
+		EXPECT_EQ(20, result.strict_right);
+		EXPECT_EQ(10, result.left);
+		EXPECT_EQ(20, result.right);
+		EXPECT_FALSE(result.fade_in_detected);
+		EXPECT_FALSE(result.fade_out_detected);
+	}
+}
+
+TEST(async_video_provider, find_key_point_range_calibrates_within_the_clicked_text_event) {
+	for (bool brighter_event_first : {false, true}) {
+		SCOPED_TRACE(brighter_event_first);
+		auto state = std::make_shared<VideoProviderState>();
+		auto *video = new FakeVideoProvider(state);
+		video->frame_width = 96;
+		video->frame_height = 64;
+		video->fill_frame = [brighter_event_first](int n, VideoFrame& frame) {
+			int const first_visibility = std::clamp(std::min(n - 5, 35 - n) * 10, 0, brighter_event_first ? 100 : 70);
+			int const second_visibility = std::clamp(std::min(n - 50, 90 - n) * 10, 0, brighter_event_first ? 70 : 100);
+			FillSyntheticWhiteGlyphFrame(frame, std::max(first_visibility, second_visibility), 34, 24);
+		};
+		AsyncVideoProvider provider(
+			std::unique_ptr<VideoProvider>(video),
+			std::unique_ptr<SubtitlesProvider>(),
+			AsyncVideoProviderEventSink{});
+		int const clicked_frame = brighter_event_first ? 55 : 10;
+		// The click is at 50% opacity, its own event peaks at 70%, and the
+		// identical glyph elsewhere reaches 100%. Frames 35..50 are empty.
+		auto const result = provider.FindKeyPointRange({.frame = clicked_frame,
+														.x = 40,
+														.y = 24,
+														.r = 143,
+														.g = 143,
+														.b = 143,
+														.tolerance = 20,
+														.scan_step = 1,
+														.bounds_tolerance = 5,
+														.detect_fade = true,
+														.max_fade_frames = 80});
+
+		ASSERT_EQ(KeyPointRangeScanStatus::Success, result.status);
+		EXPECT_TRUE(result.fade_in_detected);
+		EXPECT_TRUE(result.fade_out_detected);
+		EXPECT_EQ(brighter_event_first ? 51 : 6, result.left);
+		EXPECT_EQ(brighter_event_first ? 57 : 12, result.fade_in_end);
+		EXPECT_EQ(brighter_event_first ? 83 : 28, result.fade_out_start);
+		EXPECT_EQ(brighter_event_first ? 89 : 34, result.right);
+	}
+}
+
+TEST(async_video_provider, find_key_point_range_bridges_brief_unobservable_text_without_a_false_fade) {
+	for (int anchor : {22, 58}) {
+		SCOPED_TRACE(anchor);
+		for (int scan_step : {1, 2, 6}) {
+			SCOPED_TRACE(scan_step);
+			auto state = std::make_shared<VideoProviderState>();
+			auto *video = new FakeVideoProvider(state);
+			video->frame_width = 96;
+			video->frame_height = 64;
+			video->fill_frame = [](int n, VideoFrame& frame) {
+				int const visibility = std::clamp(std::min(n - 5, 75 - n) * 10, 0, 100);
+				int const background = n >= 30 && n <= 31 ? 255 : 32;
+				FillSyntheticWhiteGlyphFrame(frame, visibility, 34, 24, background);
+			};
+			AsyncVideoProvider provider(
+				std::unique_ptr<VideoProvider>(video),
+				std::unique_ptr<SubtitlesProvider>(),
+				AsyncVideoProviderEventSink{});
+			// The glyph is opaque throughout the two white frames, but no local
+			// contrast can establish its presence until the dark scene resumes.
+			auto const result = provider.FindKeyPointRange({.frame = anchor,
+															.x = 40,
+															.y = 24,
+															.r = 255,
+															.g = 255,
+															.b = 255,
+															.tolerance = 20,
+															.scan_step = scan_step,
+															.bounds_tolerance = 5,
+															.detect_fade = true,
+															.max_fade_frames = 80});
+
+			ASSERT_EQ(KeyPointRangeScanStatus::Success, result.status);
+			EXPECT_TRUE(result.fade_in_detected);
+			EXPECT_TRUE(result.fade_out_detected);
+			EXPECT_EQ(6, result.left);
+			EXPECT_EQ(15, result.fade_in_end);
+			EXPECT_EQ(65, result.fade_out_start);
+			EXPECT_EQ(74, result.right);
+		}
+	}
+}
+
+TEST(async_video_provider, find_key_point_range_stops_at_sustained_unobservable_text_without_a_false_fade) {
+	for (int anchor : {22, 58}) {
+		SCOPED_TRACE(anchor);
+		for (int scan_step : {1, 2, 6}) {
+			SCOPED_TRACE(scan_step);
+			auto state = std::make_shared<VideoProviderState>();
+			auto *video = new FakeVideoProvider(state);
+			video->frame_width = 96;
+			video->frame_height = 64;
+			video->fill_frame = [](int n, VideoFrame& frame) {
+				int const visibility = std::clamp(std::min(n - 5, 75 - n) * 10, 0, 100);
+				int const background = n >= 30 && n <= 34 ? 255 : 32;
+				FillSyntheticWhiteGlyphFrame(frame, visibility, 34, 24, background);
+			};
+			AsyncVideoProvider provider(
+				std::unique_ptr<VideoProvider>(video),
+				std::unique_ptr<SubtitlesProvider>(),
+				AsyncVideoProviderEventSink{});
+			// Five frames without measurable contrast exceed the short gap budget.
+			// Stop at the last confirmed frame; unknown opacity is not a fade.
+			auto const result = provider.FindKeyPointRange({.frame = anchor,
+															.x = 40,
+															.y = 24,
+															.r = 255,
+															.g = 255,
+															.b = 255,
+															.tolerance = 20,
+															.scan_step = scan_step,
+															.bounds_tolerance = 5,
+															.detect_fade = true,
+															.max_fade_frames = 80});
+
+			ASSERT_EQ(KeyPointRangeScanStatus::Success, result.status);
+			if (anchor < 30) {
+				EXPECT_EQ(6, result.left);
+				EXPECT_EQ(15, result.fade_in_end);
+				EXPECT_TRUE(result.fade_in_detected);
+				EXPECT_EQ(29, result.strict_right);
+				EXPECT_EQ(29, result.right);
+				EXPECT_FALSE(result.fade_out_detected);
+			}
+			else {
+				EXPECT_EQ(35, result.strict_left);
+				EXPECT_EQ(35, result.left);
+				EXPECT_FALSE(result.fade_in_detected);
+				EXPECT_EQ(65, result.fade_out_start);
+				EXPECT_EQ(74, result.right);
+				EXPECT_TRUE(result.fade_out_detected);
+			}
+		}
+	}
+}
+
+TEST(async_video_provider, find_key_point_range_preserves_fade_boundaries_after_pixel_cache_eviction) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	// A very wide anchor row makes a complete event exceed the cache budget
+	// while keeping the decoded frame and the glyph template inexpensive.
+	video->frame_width = 160000;
+	video->frame_height = 1;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		int const visibility = std::clamp(std::min(n - 5, 75 - n) * 10, 0, 100);
+		auto const channel = static_cast<unsigned char>(255 * visibility / 100);
+		for (int x = 8; x < 22; ++x)
+			SetBgraPixel(frame, x, 0, channel, channel, channel);
+	};
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+	auto const result = provider.FindKeyPointRange({.frame = 40,
+													.x = 10,
+													.y = 0,
+													.r = 255,
+													.g = 255,
+													.b = 255,
+													.tolerance = 20,
+													.scan_step = 1,
+													.bounds_tolerance = 5,
+													.detect_fade = true,
+													.max_fade_frames = 80});
+
+	ASSERT_EQ(KeyPointRangeScanStatus::Success, result.status);
+	EXPECT_TRUE(result.fade_in_detected);
+	EXPECT_TRUE(result.fade_out_detected);
+	EXPECT_EQ(6, result.left);
+	EXPECT_EQ(15, result.fade_in_end);
+	EXPECT_EQ(65, result.fade_out_start);
+	EXPECT_EQ(74, result.right);
+
+	std::scoped_lock lock(state->mutex);
+	auto requested_frames = state->requested_frames;
+	std::ranges::sort(requested_frames);
+	// A repeated decode proves the result survived cache eviction rather
+	// than merely exercising a request whose pixels all stayed resident.
+	EXPECT_NE(requested_frames.end(), std::ranges::adjacent_find(requested_frames));
 }
 
 TEST(async_video_provider, find_key_point_range_does_not_extend_beyond_fade_budget) {

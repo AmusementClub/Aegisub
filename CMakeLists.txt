@@ -779,8 +779,11 @@ set(AEGISUB_CORE_SOURCES
     src/perspective_quad_geometry.cpp
     src/perspective_quad_edit_state.cpp
     src/perspective_tag_solver.cpp
-    # Motion tracking (translation slice)
+    # Motion tracking and ASS geometry output
     src/motion_track/apply_plan.cpp
+    src/motion_track/geometry_apply.cpp
+    src/motion_track/geometry_tags.cpp
+    src/motion_track/planar_backend.cpp
     src/motion_track/gray_convert.cpp
     src/motion_track/ncc.cpp
     src/motion_track/raw_batch_motion_frame_reader.cpp

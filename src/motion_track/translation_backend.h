@@ -120,8 +120,8 @@ public:
 	// Valid for the backend's lifetime; snapshot publishers must copy.
 	virtual std::string_view Name() const noexcept = 0;
 
-	// Copies template pixels into backend-owned storage. Non-Translation
-	// models return Unsupported. Invalid/degenerate views return InvalidInput.
+	// Copies template pixels into backend-owned storage. Models not supported
+	// by this backend return Unsupported; invalid views return InvalidInput.
 	virtual TrackStatus Reset(TrackerSeed const& seed) = 0;
 
 	// One estimate per call; no unbounded retries inside the backend.

@@ -546,6 +546,44 @@ TEST(motion_track_session, map_roi_to_frame_encloses_fractional_corners) {
 	EXPECT_EQ(22, mapped.h);
 }
 
+TEST(motion_track_session, homography_roi_ride_divides_by_projective_denominator) {
+	TrackSample projected = OkSample(1, 120, 90);
+	// T(20,-10) * K, where K has denominator 1 + 0.01*x.
+	projected.transform.matrix = {1.2, 0, 20, -0.1, 1, -10, 0.01, 0, 1};
+	auto snap = SnapshotWithSamples(TrackModel::Homography,
+									{OkSample(0, 100, 100), projected});
+	snap.origin_center_x = snap.origin_center_y = 100;
+	auto const anchor = RideAnchorAtFrame(snap, 0);
+	auto const mapped = MapRoiToFrame(snap, 1, {.x = 90, .y = 90, .w = 20, .h = 20}, anchor);
+	EXPECT_EQ(108, mapped.x);
+	EXPECT_EQ(78, mapped.y);
+	EXPECT_EQ(22, mapped.w);
+	EXPECT_EQ(24, mapped.h);
+	auto const projective_anchor = RideAnchorAtFrame(snap, 1);
+	EXPECT_DOUBLE_EQ(0.01, projective_anchor.p);
+	EXPECT_NEAR(1, projective_anchor.m00, 1e-12);
+	// The same-frame ride includes K^-1 and must preserve the rectangle.
+	auto const unchanged = MapRoiToFrame(snap, 1, mapped, projective_anchor);
+	EXPECT_EQ(mapped.x, unchanged.x);
+	EXPECT_EQ(mapped.y, unchanged.y);
+	EXPECT_EQ(mapped.w, unchanged.w);
+	EXPECT_EQ(mapped.h, unchanged.h);
+}
+
+TEST(motion_track_session, roi_crossing_projective_horizon_is_not_mapped) {
+	TrackSample projected = OkSample(1, 100, 100);
+	projected.transform.matrix[6] = 0.1;
+	auto snap = SnapshotWithSamples(TrackModel::Homography,
+									{OkSample(0, 100, 100), projected});
+	snap.origin_center_x = snap.origin_center_y = 100;
+	RoiRect const roi{.x = 80, .y = 90, .w = 40, .h = 20};
+	auto const mapped = MapRoiToFrame(snap, 1, roi, RideAnchorAtFrame(snap, 0));
+	EXPECT_EQ(roi.x, mapped.x);
+	EXPECT_EQ(roi.y, mapped.y);
+	EXPECT_EQ(roi.w, mapped.w);
+	EXPECT_EQ(roi.h, mapped.h);
+}
+
 TEST(motion_track_session, reseed_roi_anchor_uses_accumulated_linear_part) {
 	TrackSample rotated = OkSample(5, 150, 120);
 	rotated.transform.matrix = {0.0, -1.0, 0.0,
@@ -704,6 +742,201 @@ TEST(motion_track_session, continue_keeps_translation_linear_identity) {
 // With no Ok sample to measure a base from (samples invalidated), Continue
 // degrades to the old behavior: identity linear parts and a fresh origin at
 // the new seed.
+namespace {
+class ScriptedPlanarBackend final : public TrackerBackend {
+	int seed_frame_ = 0;
+
+	public:
+	std::vector<TrackStepRequest> requests;
+	[[nodiscard]] TrackModel Model() const override { return TrackModel::Homography; }
+	[[nodiscard]] std::string_view Name() const noexcept override { return "scripted-planar"; }
+	TrackStatus Reset(TrackerSeed const& seed) override {
+		seed_frame_ = seed.seed_frame;
+		requests.clear();
+		return TrackStatus::Ok;
+	}
+	TrackStepResult Step(TrackStepRequest const& request) override {
+		// Store the prior only; the borrowed image does not outlive Step.
+		auto saved = request;
+		saved.image = {};
+		requests.push_back(saved);
+		double const d = request.frame - seed_frame_;
+		TrackStepResult result;
+		result.frame = request.frame;
+		result.status = TrackStatus::Ok;
+		result.candidate_center_x = 100 + 2 * request.frame;
+		result.candidate_center_y = 80;
+		result.transform.matrix = {1, 0.01 * d, 0, 0.02 * d, 1, 0,
+								   0.0001 * d, -0.0002 * d, 1};
+		return result;
+	}
+};
+} // namespace
+
+TEST(motion_track_session, homography_continue_composes_complete_reseed_matrix) {
+	ScriptedPlanarBackend backend;
+	FlatReader reader;
+	RoiRect const roi{.x = 88, .y = 72, .w = 24, .h = 16};
+	MotionTrackSession session(Domains(0, 4), roi, TrackDirection::Forward,
+							   TrackModel::Homography);
+	session.SetBackendSeed(0, roi, 100, 80);
+	auto lease = FreshLease();
+	auto handle = lease->Acquire();
+	ASSERT_EQ(AnalyzeStopReason::Completed, session.RunAnalyze(reader, backend, handle, {}));
+	ASSERT_EQ(4u, backend.requests.size());
+	EXPECT_DOUBLE_EQ(0, backend.requests[0].init_transform.matrix[6]);
+	EXPECT_DOUBLE_EQ(0.0001, backend.requests[1].init_transform.matrix[6]);
+	// Reseeding preserves K2; the next step reports K1 relative to the new
+	// image, so its published shape must be K1*K2, not K1 or an affine cut.
+	session.SetBackendSeed(2, {.x = 92, .y = 72, .w = 24, .h = 16}, 104, 80);
+	handle = lease->Acquire();
+	ASSERT_EQ(AnalyzeStopReason::Completed, session.RunAnalyze(reader, backend, handle, {}));
+	ASSERT_EQ(2u, backend.requests.size());
+	EXPECT_DOUBLE_EQ(0, backend.requests[0].init_transform.matrix[6]);
+	EXPECT_DOUBLE_EQ(0.0001, backend.requests[1].init_transform.matrix[6]);
+	auto const snapshot = session.Capture();
+	EXPECT_EQ(0, snapshot->origin_seed_frame);
+	auto const *seed = FindSample(snapshot->samples, 2);
+	ASSERT_NE(nullptr, seed);
+	EXPECT_NEAR(0.0002, seed->transform.matrix[6], 1e-12);
+	auto const *result = FindSample(snapshot->samples, 3);
+	ASSERT_NE(nullptr, result);
+	EXPECT_NEAR(0.000292, result->transform.matrix[6], 1e-12);
+	EXPECT_NEAR(-0.000598, result->transform.matrix[7], 1e-12);
+	EXPECT_NEAR(1.002152, result->transform.matrix[0], 1e-12);
+	EXPECT_NEAR(0.026412, result->transform.matrix[1], 1e-12);
+	EXPECT_NEAR(0.06, result->transform.matrix[3], 1e-12);
+	EXPECT_NEAR(1.0004, result->transform.matrix[4], 1e-12);
+	EXPECT_DOUBLE_EQ(6, result->transform.matrix[2]);
+	EXPECT_DOUBLE_EQ(106, result->center_x);
+}
+
+TEST(motion_track_session, homography_bidirectional_priors_are_independent) {
+	ScriptedPlanarBackend backend;
+	FlatReader reader;
+	RoiRect const roi{.x = 92, .y = 72, .w = 24, .h = 16};
+	MotionTrackSession session(Domains(0, 4), roi, TrackDirection::Bidirectional,
+							   TrackModel::Homography);
+	session.SetBackendSeed(2, roi, 104, 80);
+	auto lease = FreshLease();
+	auto handle = lease->Acquire();
+	ASSERT_EQ(AnalyzeStopReason::Completed, session.RunAnalyze(reader, backend, handle, {}));
+	ASSERT_EQ(4u, backend.requests.size());
+	EXPECT_EQ(3, backend.requests[0].frame);
+	EXPECT_EQ(1, backend.requests[2].frame);
+	EXPECT_DOUBLE_EQ(0, backend.requests[0].init_transform.matrix[6]);
+	EXPECT_DOUBLE_EQ(0, backend.requests[2].init_transform.matrix[6]);
+	EXPECT_DOUBLE_EQ(0.0001, backend.requests[1].init_transform.matrix[6]);
+	EXPECT_DOUBLE_EQ(-0.0001, backend.requests[3].init_transform.matrix[6]);
+}
+
+TEST(motion_track_session, rebuilt_seed_anchor_drops_previous_projective_shape) {
+	ScriptedPlanarBackend backend;
+	FlatReader reader;
+	RoiRect const roi{.x = 88, .y = 72, .w = 24, .h = 16};
+	MotionTrackSession previous(Domains(0, 4), roi, TrackDirection::Forward,
+								TrackModel::Homography);
+	previous.SetBackendSeed(0, roi, 100, 80);
+	auto lease = FreshLease();
+	auto handle = lease->Acquire();
+	ASSERT_EQ(AnalyzeStopReason::Completed, previous.RunAnalyze(reader, backend, handle, {}));
+	auto const previous_snapshot = previous.Capture();
+	auto const previous_anchor = RideAnchorAtFrame(*previous_snapshot, 4);
+	ASSERT_NE(0, previous_anchor.p);
+	ASSERT_NE(0, previous_anchor.m01);
+
+	// Changing direction rebuilds the session after the ROI has been moved
+	// into the current frame's storage coordinates. The old shape must not
+	// be installed as the new session's overlay anchor.
+	RoiRect const current_roi{.x = 96, .y = 72, .w = 24, .h = 16};
+	MotionTrackSession rebuilt(Domains(0, 4), current_roi, TrackDirection::Backward,
+							   TrackModel::Homography);
+	auto const anchor = rebuilt.SetBackendSeed(4, current_roi, 108, 80);
+	EXPECT_TRUE(anchor.valid);
+	EXPECT_EQ(4, anchor.frame);
+	EXPECT_DOUBLE_EQ(108, anchor.center_x);
+	EXPECT_DOUBLE_EQ(80, anchor.center_y);
+	EXPECT_DOUBLE_EQ(1, anchor.m00);
+	EXPECT_DOUBLE_EQ(1, anchor.m11);
+	EXPECT_DOUBLE_EQ(0, anchor.m01);
+	EXPECT_DOUBLE_EQ(0, anchor.m10);
+	EXPECT_DOUBLE_EQ(0, anchor.p);
+	EXPECT_DOUBLE_EQ(0, anchor.q);
+	handle = lease->Acquire();
+	ASSERT_EQ(AnalyzeStopReason::Completed, rebuilt.RunAnalyze(reader, backend, handle, {}));
+	auto const snapshot = rebuilt.Capture();
+	EXPECT_EQ(4, snapshot->origin_seed_frame);
+	auto const mapped = MapRoiToFrame(*snapshot, 4, current_roi, anchor);
+	EXPECT_EQ(current_roi.x, mapped.x);
+	EXPECT_EQ(current_roi.y, mapped.y);
+	EXPECT_EQ(current_roi.w, mapped.w);
+	EXPECT_EQ(current_roi.h, mapped.h);
+	// The old session remains a distinct trajectory, with its old origin.
+	EXPECT_EQ(0, previous_snapshot->origin_seed_frame);
+	EXPECT_EQ(5u, previous_snapshot->samples.size());
+}
+
+TEST(motion_track_session, continued_seed_anchor_matches_published_projective_shape) {
+	ScriptedPlanarBackend backend;
+	FlatReader reader;
+	RoiRect const roi{.x = 88, .y = 72, .w = 24, .h = 16};
+	MotionTrackSession session(Domains(0, 4), roi, TrackDirection::Forward,
+							   TrackModel::Homography);
+	session.SetBackendSeed(0, roi, 100, 80);
+	auto lease = FreshLease();
+	auto handle = lease->Acquire();
+	ASSERT_EQ(AnalyzeStopReason::Completed, session.RunAnalyze(reader, backend, handle, {}));
+
+	RoiRect const reseeded_roi{.x = 92, .y = 72, .w = 24, .h = 16};
+	auto const anchor = session.SetBackendSeed(2, reseeded_roi, 104, 80);
+	EXPECT_NEAR(0.02, anchor.m01, 1e-12);
+	EXPECT_NEAR(0.04, anchor.m10, 1e-12);
+	EXPECT_NEAR(0.0002, anchor.p, 1e-12);
+	EXPECT_NEAR(-0.0004, anchor.q, 1e-12);
+	handle = lease->Acquire();
+	ASSERT_EQ(AnalyzeStopReason::Completed, session.RunAnalyze(reader, backend, handle, {}));
+	auto const snapshot = session.Capture();
+	auto const published = RideAnchorAtFrame(*snapshot, 2);
+	EXPECT_EQ(0, snapshot->origin_seed_frame);
+	EXPECT_DOUBLE_EQ(anchor.center_x, published.center_x);
+	EXPECT_DOUBLE_EQ(anchor.center_y, published.center_y);
+	EXPECT_DOUBLE_EQ(anchor.m00, published.m00);
+	EXPECT_DOUBLE_EQ(anchor.m01, published.m01);
+	EXPECT_DOUBLE_EQ(anchor.m10, published.m10);
+	EXPECT_DOUBLE_EQ(anchor.m11, published.m11);
+	EXPECT_DOUBLE_EQ(anchor.p, published.p);
+	EXPECT_DOUBLE_EQ(anchor.q, published.q);
+	auto const mapped = MapRoiToFrame(*snapshot, 2, reseeded_roi, anchor);
+	EXPECT_EQ(reseeded_roi.x, mapped.x);
+	EXPECT_EQ(reseeded_roi.y, mapped.y);
+	EXPECT_EQ(reseeded_roi.w, mapped.w);
+	EXPECT_EQ(reseeded_roi.h, mapped.h);
+}
+
+TEST(motion_track_session, changed_model_or_direction_rejects_apply_until_controls_match_again) {
+	ScriptedPlanarBackend backend;
+	FlatReader reader;
+	MotionTrackSession session(Domains(0, 4), kObject, TrackDirection::Forward,
+							   TrackModel::Homography);
+	session.SetBackendSeed(0, kObject, 100, 80);
+	auto lease = FreshLease();
+	auto handle = lease->Acquire();
+	ASSERT_EQ(AnalyzeStopReason::Completed, session.RunAnalyze(reader, backend, handle, {}));
+	auto const snapshot = session.Capture();
+	ASSERT_EQ(5, snapshot->success_count);
+	EXPECT_TRUE(MotionTrackSettingsMatch(*snapshot, TrackDirection::Forward, TrackModel::Homography));
+	EXPECT_FALSE(MotionTrackSettingsMatch(*snapshot, TrackDirection::Forward, TrackModel::Translation));
+	EXPECT_FALSE(MotionTrackSettingsMatch(*snapshot, TrackDirection::Backward, TrackModel::Homography));
+	EXPECT_FALSE(MotionTrackSettingsMatch(*snapshot, TrackDirection::Bidirectional, TrackModel::Affine));
+	// Switching controls back uses the original samples; it must not reset
+	// the session or reinterpret the trajectory under a different model.
+	EXPECT_TRUE(MotionTrackSettingsMatch(*snapshot, TrackDirection::Forward, TrackModel::Homography));
+	EXPECT_EQ(snapshot, session.Capture());
+	EXPECT_EQ(0, session.Capture()->origin_seed_frame);
+	EXPECT_EQ(5u, session.Capture()->samples.size());
+	EXPECT_NEAR(0.0004, FindSample(session.Capture()->samples, 4)->transform.matrix[6], 1e-12);
+}
+
 TEST(motion_track_session, continue_after_invalidate_uses_identity_base) {
 	ScriptedSimilarityBackend backend;
 	FlatReader reader;

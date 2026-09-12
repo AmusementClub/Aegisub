@@ -1,7 +1,9 @@
 #include "apply_plan.h"
+#include "geometry_apply.h"
 
 #include "../align_video_fade.h"
 #include "../ass_tag_scanner.h"
+#include "../perspective_ass_state.h"
 
 #include "ass_compat.h"
 #include "ass_dialogue.h"
@@ -12,6 +14,7 @@
 #include <libaegisub/ass/time.h>
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <iterator>
@@ -37,8 +40,8 @@ struct PositionInfo {
 	// one bound is 0 (libass falls back to the whole event only when BOTH
 	// are non-positive). A 4-arg \move leaves this false.
 	bool has_move_window = false;
-	// \org / \clip / \iclip present in the raw tag bytes: the line needs a
-	// manual-review warning (see MotionTrackApplyPlan).
+	// Presence of absolute geometry in the raw tag bytes. The full geometry
+	// planner validates and transforms these tags when applying the motion.
 	bool has_org = false;
 	bool has_clip = false;
 	int alignment_override = 0; // \\an / \\a (already converted to \\an space)
@@ -627,8 +630,13 @@ std::string ReplaceTagsDropping(std::string const& text,
 			if (span.empty())
 				return;
 			AssOverrideTag const parsed{std::string(span)};
-			if (!ShouldDropOverrideTag(parsed.Name, drop_transform_tags,
-									   extra_drops))
+			bool drop = ShouldDropOverrideTag(parsed.Name, drop_transform_tags, extra_drops);
+			if (drop_transform_tags && !drop)
+				ass_tag_scanner::ScanRawTags(span, [&](auto const& raw) {
+					AssOverrideTag const canonical("\\" + std::string(raw.name));
+					drop = drop || IsRotationZTag(canonical.Name) || canonical.Name == "\\fscx" || canonical.Name == "\\fscy";
+				});
+			if (!drop)
 				kept += span;
 		};
 		for (size_t i = 1; i < body.size(); ++i) {
@@ -676,7 +684,8 @@ std::string ReplaceTagsDropping(std::string const& text,
 // position pass has already dropped the tags it replaces, so nothing here
 // needs dropping -- not even \pos, which ReplaceTagsDropping always strips.
 std::string AppendTagToFirstBlock(std::string const& text,
-								  std::string const& tag) {
+								  std::string const& tag,
+								  bool repeat_after_reset = false) {
 	AssDialogue line;
 	line.Text = text;
 	auto blocks = line.ParseTags();
@@ -689,7 +698,14 @@ std::string AppendTagToFirstBlock(std::string const& text,
 		}
 		out += '{';
 		out += block->GetRawText();
-		if (!appended) {
+		bool reset = false;
+		if (repeat_after_reset)
+			ass_tag_scanner::ScanRawTags(block->GetRawText(), [&](auto const& raw) {
+				// Reset style names are part of the raw name, so use the
+				// renderer's prefix rule rather than requiring a numeric suffix.
+				reset = reset || ass_tag_scanner::NameHasPrefix(raw.name, "r");
+			});
+		if (!appended || reset) {
 			out += tag;
 			appended = true;
 		}
@@ -758,6 +774,239 @@ std::string FormatCoord(double v, int decimals) {
 // agi::Time::operator int(), which drives event serialization.
 int CentisecondRounded(int ms) {
 	return int(agi::Time(ms));
+}
+
+struct SourceTimeTag {
+	enum class Kind : std::uint8_t { Fade,
+									 Transform,
+									 Move } kind;
+	std::string bytes;
+	std::array<std::int64_t, 7> values{};
+	std::string animated;
+	std::string acceleration = "1";
+	std::array<std::string, 4> coordinates;
+};
+
+bool AnimationInteger(std::string_view text, std::int64_t& value) {
+	if (!text.empty() && text.front() == '+')
+		text.remove_prefix(1);
+	int parsed = 0;
+	auto const result = std::from_chars(text.data(), text.data() + text.size(), parsed);
+	value = parsed;
+	return result.ec == std::errc{} && result.ptr == text.data() + text.size();
+}
+
+bool ColorAlphaTransform(std::string_view body) {
+	bool found = false, valid = true;
+	ass_tag_scanner::ScanRawTags(body, [&](auto const& tag) {
+		found = true;
+		bool color = false;
+		for (auto const name : {"c", "1c", "2c", "3c", "4c", "alpha", "1a", "2a", "3a", "4a"})
+			color = color || ass_tag_scanner::NameIs(tag.name, name);
+		valid = valid && color && !tag.has_paren;
+	});
+	return found && valid;
+}
+
+// Preserve source event-relative effects in every emitted event. The limited
+// supported transform bundle is deliberate: arbitrary ASS geometry animation,
+// nested transforms and karaoke require more than a change of event origin.
+std::string CollectSourceTimeTags(AssDialogue const& line, std::vector<SourceTimeTag>& tags) {
+	using ass_tag_scanner::NameHasPrefix;
+	std::string error;
+	std::int64_t const duration = static_cast<int>(line.End) - static_cast<int>(line.Start);
+	for (auto const& block : line.ParseTags()) {
+		if (block->GetType() != AssBlockType::OVERRIDE)
+			continue;
+		ass_tag_scanner::ScanRawTags(block->GetRawText(), [&](auto const& raw) {
+			if (!error.empty())
+				return;
+			if (NameHasPrefix(raw.name, "k") || NameHasPrefix(raw.name, "K")) {
+				error = "make karaoke static before applying motion tracking";
+				return;
+			}
+			bool const fade = NameHasPrefix(raw.name, "fad");
+			bool const transform = NameHasPrefix(raw.name, "t");
+			bool const move = NameHasPrefix(raw.name, "move");
+			if (!fade && !transform && !move)
+				return;
+			auto const args = ass_tag_scanner::SplitLibassArgs(raw.args);
+			SourceTimeTag tag{.kind = SourceTimeTag::Kind::Fade, .bytes = std::string(raw.bytes)};
+			bool valid = raw.has_paren && raw.bytes.back() == ')';
+			if (fade) {
+				if (args.size() == 2) {
+					tag.values = {255, 0, 255, 0, 0, 0, duration};
+					valid = valid && AnimationInteger(args[0], tag.values[4]) && AnimationInteger(args[1], tag.values[5]);
+					valid = valid && tag.values[4] >= 0 && tag.values[5] >= 0;
+					tag.values[5] = duration - tag.values[5];
+				}
+				else if (args.size() == 7) {
+					for (size_t i = 0; i < args.size(); ++i)
+						valid = AnimationInteger(args[i], tag.values[i]) && valid;
+					if (tag.values[3] == -1 && tag.values[6] == -1) {
+						tag.values[3] = 0;
+						tag.values[6] = duration;
+						tag.values[5] = duration - tag.values[5];
+					}
+					valid = valid && tag.values[3] < tag.values[6];
+					for (size_t i = 0; i < 3; ++i)
+						valid = valid && tag.values[i] >= 0 && tag.values[i] <= 255;
+				}
+				else
+					valid = false;
+			}
+			else if (transform) {
+				tag.kind = SourceTimeTag::Kind::Transform;
+				valid = valid && !args.empty() && args.size() <= 4 && ColorAlphaTransform(args.back());
+				if (valid) {
+					tag.animated = args.back();
+					tag.values[0] = 0;
+					tag.values[1] = duration;
+					if (args.size() >= 3) {
+						valid = AnimationInteger(args[0], tag.values[0]) && AnimationInteger(args[1], tag.values[1]);
+						if (tag.values[1] == 0)
+							tag.values[1] = duration;
+					}
+					if (args.size() == 2 || args.size() == 4) {
+						tag.acceleration = args[args.size() - 2];
+						double acceleration = 0;
+						auto const& value = tag.acceleration;
+						auto const parsed = std::from_chars(value.data(), value.data() + value.size(), acceleration);
+						valid = valid && parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() &&
+								std::isfinite(acceleration) && acceleration > 0;
+					}
+					valid = valid && tag.values[0] <= tag.values[1];
+				}
+			}
+			else {
+				tag.kind = SourceTimeTag::Kind::Move;
+				valid = valid && (args.size() == 4 || args.size() == 6);
+				if (valid) {
+					for (size_t i = 0; i < 4; ++i)
+						tag.coordinates[i] = args[i];
+					tag.values[1] = duration;
+					if (args.size() == 6) {
+						valid = AnimationInteger(args[4], tag.values[0]) && AnimationInteger(args[5], tag.values[1]);
+						if (tag.values[0] > tag.values[1])
+							std::swap(tag.values[0], tag.values[1]);
+						if (tag.values[0] <= 0 && tag.values[1] <= 0) {
+							tag.values[0] = 0;
+							tag.values[1] = duration;
+						}
+					}
+				}
+			}
+			if (!valid)
+				error = "unsupported event animation; motion tracking supports standard fades and color/alpha transforms";
+			else
+				tags.push_back(std::move(tag));
+		});
+	}
+	return error;
+}
+
+std::string RetimeSourceTags(std::string_view text, std::vector<SourceTimeTag> const& tags,
+							 std::int64_t offset, bool covered) {
+	std::string output;
+	size_t consumed = 0;
+	for (size_t open = 0; (open = text.find('{', open)) != std::string_view::npos;) {
+		size_t const end = text.find('}', ++open);
+		if (end == std::string_view::npos)
+			break;
+		ass_tag_scanner::ScanRawTags(text.substr(open, end - open), [&](auto const& raw) {
+			auto const found = std::ranges::find_if(tags, [&](auto const& tag) {
+				return tag.bytes == raw.bytes && (!covered || tag.kind != SourceTimeTag::Kind::Move);
+			});
+			if (found == tags.end())
+				return;
+			auto const& tag = *found;
+			std::string replacement;
+			if (tag.kind == SourceTimeTag::Kind::Fade) {
+				replacement = "\\fade(";
+				for (size_t i = 0; i < 7; ++i) {
+					if (i)
+						replacement += ',';
+					replacement += std::to_string(tag.values[i] - (i >= 3 ? offset : 0));
+				}
+				replacement += ')';
+			}
+			else if (tag.kind == SourceTimeTag::Kind::Transform) {
+				// A zero end time means the new event duration to ASS, so an
+				// already-completed transform must become its static target.
+				if (tag.values[1] <= offset)
+					replacement = tag.animated;
+				else
+					replacement = "\\t(" + std::to_string(tag.values[0] - offset) + "," +
+								  std::to_string(tag.values[1] - offset) + "," + tag.acceleration + "," + tag.animated + ")";
+			}
+			else {
+				auto const& p = tag.coordinates;
+				if (tag.values[1] <= offset)
+					replacement = "\\pos(" + p[2] + "," + p[3] + ")";
+				else
+					replacement = "\\move(" + p[0] + "," + p[1] + "," + p[2] + "," + p[3] + "," +
+								  std::to_string(tag.values[0] - offset) + "," + std::to_string(tag.values[1] - offset) + ")";
+			}
+			auto const start = static_cast<size_t>(raw.bytes.data() - text.data());
+			output.append(text.substr(consumed, start - consumed));
+			output += replacement;
+			consumed = start + raw.bytes.size();
+		});
+		open = end + 1;
+	}
+	output.append(text.substr(consumed));
+	return output;
+}
+
+// Only the channels flattened by the simple Similarity writer need to agree
+// between visible runs. Font, size, weight and color runs retain their scope.
+std::string ResolveSimilarityBase(AssFile const& file, AssDialogue const& line,
+								  ApplyPlanInput const& input, PositionInfo& info) {
+	std::string geometry;
+	bool reset = false;
+	for (auto const& block : line.ParseTags()) {
+		if (block->GetType() != AssBlockType::OVERRIDE) {
+			if (block->GetType() != AssBlockType::COMMENT && !block->GetRawText().empty())
+				geometry += 'x';
+			continue;
+		}
+		std::string tags;
+		bool missing_style = false;
+		ass_tag_scanner::ScanRawTags(block->GetRawText(), [&](auto const& raw) {
+			AssOverrideTag const tag("\\" + std::string(raw.name) + (raw.has_paren ? "(" + std::string(raw.args) + ")" : ""));
+			if (IsRotationZTag(tag.Name) || tag.Name == "\\fscx" || tag.Name == "\\fscy") {
+				tags += raw.bytes;
+				info.has_frz = info.has_frz || IsRotationZTag(tag.Name);
+				info.has_fscx = info.has_fscx || tag.Name == "\\fscx";
+				info.has_fscy = info.has_fscy || tag.Name == "\\fscy";
+			}
+			else if (tag.Name == "\\r") {
+				reset = true;
+				std::string const name = tag.Params.empty() ? line.Style.get() : tag.Params[0].Get<std::string>(line.Style.get());
+				auto const *style = const_cast<AssFile&>(file).GetStyle(name.empty() ? line.Style.get() : name);
+				if (!style)
+					missing_style = true;
+				else
+					tags += "\\frz" + FormatCoord(style->angle, 6) + "\\fscx" + FormatCoord(style->scalex, 6) + "\\fscy" + FormatCoord(style->scaley, 6);
+			}
+		});
+		if (missing_style)
+			return "Similarity cannot resolve a reset style";
+		if (!tags.empty())
+			geometry += "{" + tags + "}";
+	}
+	AssDialogue scoped(line);
+	scoped.Text = geometry;
+	auto const state = perspective::EvaluateEffectiveAssState({.file = &file, .line = &scoped, .play_resolution = {.width = static_cast<double>(input.script_width), .height = static_cast<double>(input.script_height)}, .capture_time_ms = std::clamp(input.seed_time_ms, line.Start.GetMillisecond(), line.End.GetMillisecond() - 1)});
+	if (!state)
+		return "Similarity cannot flatten different rotation or scale between text runs";
+	info.has_frz = info.has_frz || reset;
+	info.has_fscx = info.has_fscx || reset;
+	info.has_fscy = info.has_fscy || reset;
+	info.frz = state.value.transform.rotation_z;
+	info.fscx = state.value.transform.scale_x;
+	info.fscy = state.value.transform.scale_y;
+	return {};
 }
 
 TrackSample const *FindOkAt(std::vector<TrackSample> const& samples, int frame) {
@@ -1056,15 +1305,13 @@ std::vector<FitPiece> RefineSimilarityPieces(
 				continue;
 			}
 
-			double const u = first.frame == last.frame
-								 ? 0.0
-								 : static_cast<double>(
-									   points[worst].frame - first.frame) /
-									   static_cast<double>(last.frame - first.frame);
 			FitPiece left{piece};
 			left.i1 = worst;
-			left.x1 = piece.x0 + ((piece.x1 - piece.x0) * u);
-			left.y1 = piece.y0 + ((piece.y1 - piece.y0) * u);
+			int const split_time = timecodes.TimeAtFrame(points[worst].frame);
+			left.x1 = InterpolateByTime(piece.x0, piece.x1, first_time,
+										last_time, split_time);
+			left.y1 = InterpolateByTime(piece.y0, piece.y1, first_time,
+										last_time, split_time);
 			FitPiece right{piece};
 			right.i0 = worst;
 			right.x0 = left.x1;
@@ -1077,74 +1324,79 @@ std::vector<FitPiece> RefineSimilarityPieces(
 	return refined;
 }
 
-// Solves the continuous piecewise-linear least-squares fit for one axis.
+struct FittedKnots {
+	std::vector<double> x, y;
+};
+
+// Solves both axes of the continuous piecewise-linear least-squares fit.
 // `knots` are ascending sample indices; the unknowns are the knot values, the
-// basis functions are the hats over adjacent knot frames, so the normal
+// basis functions are the hats over adjacent knot times, so the normal
 // matrix is tridiagonal (symmetric positive definite; Thomas, no pivoting)
-// and position continuity between segments holds by construction.
-std::vector<double> FitKnotAxis(std::vector<ResolvedPoint> const& points,
-								std::vector<size_t> const& knots,
-								bool y_axis) {
+// and position continuity between segments holds by construction. Timecodes
+// are cached once per run, and both axes share assembly and factorization.
+FittedKnots FitKnotPositions(std::vector<ResolvedPoint> const& points,
+							 std::vector<size_t> const& knots, std::vector<int> const& times) {
 	size_t const K = knots.size();
-	std::vector<double> diag(K, 0.0), off(K - 1, 0.0), rhs(K, 0.0);
-	auto const sample = [&](ResolvedPoint const& p) {
-		return y_axis ? p.y : p.x;
-	};
+	std::vector<double> diag(K, 0.0), off(K - 1, 0.0);
+	FittedKnots fit{.x = std::vector<double>(K), .y = std::vector<double>(K)};
 	size_t seg = 0;
 	for (size_t s = knots.front(); s <= knots.back(); ++s) {
-		int const f = points[s].frame;
-		while (points[knots[seg + 1]].frame < f)
+		while (knots[seg + 1] < s)
 			++seg;
-		int const fa = points[knots[seg]].frame;
-		int const fb = points[knots[seg + 1]].frame;
+		int const time = times[s - knots.front()];
+		int const ta = times[knots[seg] - knots.front()];
+		int const tb = times[knots[seg + 1] - knots.front()];
 		double wa = 1.0, wb = 0.0;
-		if (fb > fa) {
-			wb = double(f - fa) / double(fb - fa);
+		if (tb > ta) {
+			wb = static_cast<double>(time - ta) / static_cast<double>(tb - ta);
 			wa = 1.0 - wb;
 		}
-		double const v = sample(points[s]);
 		diag[seg] += wa * wa;
 		diag[seg + 1] += wb * wb;
 		off[seg] += wa * wb;
-		rhs[seg] += wa * v;
-		rhs[seg + 1] += wb * v;
+		fit.x[seg] += wa * points[s].x;
+		fit.x[seg + 1] += wb * points[s].x;
+		fit.y[seg] += wa * points[s].y;
+		fit.y[seg + 1] += wb * points[s].y;
 	}
 	for (size_t i = 1; i < K; ++i) {
 		double const m = off[i - 1] / diag[i - 1];
 		diag[i] -= m * off[i - 1];
-		rhs[i] -= m * rhs[i - 1];
+		fit.x[i] -= m * fit.x[i - 1];
+		fit.y[i] -= m * fit.y[i - 1];
 	}
-	std::vector<double> c(K);
-	c[K - 1] = rhs[K - 1] / diag[K - 1];
-	for (size_t i = K - 1; i-- > 0;)
-		c[i] = (rhs[i] - off[i] * c[i + 1]) / diag[i];
-	return c;
+	fit.x[K - 1] /= diag[K - 1];
+	fit.y[K - 1] /= diag[K - 1];
+	for (size_t i = K - 1; i-- > 0;) {
+		fit.x[i] = (fit.x[i] - off[i] * fit.x[i + 1]) / diag[i];
+		fit.y[i] = (fit.y[i] - off[i] * fit.y[i + 1]) / diag[i];
+	}
+	return fit;
 }
 
 // Max storage-space deviation of the samples from the fitted spline over
 // `knots`; optionally reports the worst sample index.
 double MaxDeviation(std::vector<ResolvedPoint> const& points,
 					std::vector<size_t> const& knots,
-					std::vector<double> const& cx,
-					std::vector<double> const& cy,
+					FittedKnots const& fit, std::vector<int> const& times,
 					double inv_scale_x, double inv_scale_y,
 					size_t *worst = nullptr) {
 	double worst_d = -1.0;
 	size_t worst_s = knots.front();
 	size_t seg = 0;
 	for (size_t s = knots.front(); s <= knots.back(); ++s) {
-		int const f = points[s].frame;
-		while (points[knots[seg + 1]].frame < f)
+		while (knots[seg + 1] < s)
 			++seg;
-		int const fa = points[knots[seg]].frame;
-		int const fb = points[knots[seg + 1]].frame;
+		int const time = times[s - knots.front()];
+		int const ta = times[knots[seg] - knots.front()];
+		int const tb = times[knots[seg + 1] - knots.front()];
 		double wa = 1.0, wb = 0.0;
-		if (fb > fa) {
-			wb = double(f - fa) / double(fb - fa);
+		if (tb > ta) {
+			wb = static_cast<double>(time - ta) / static_cast<double>(tb - ta);
 			wa = 1.0 - wb;
 		}
-		double const ex = cx[seg] * wa + cx[seg + 1] * wb;
-		double const ey = cy[seg] * wa + cy[seg + 1] * wb;
+		double const ex = fit.x[seg] * wa + fit.x[seg + 1] * wb;
+		double const ey = fit.y[seg] * wa + fit.y[seg + 1] * wb;
 		double const d = std::hypot(
 			(points[s].x - ex) * inv_scale_x,
 			(points[s].y - ey) * inv_scale_y);
@@ -1158,6 +1410,45 @@ double MaxDeviation(std::vector<ResolvedPoint> const& points,
 	return worst_d;
 }
 
+// An endpoint interpolant supplies a feasible starting partition. Splitting
+// all curved pieces before the first spline refit avoids repeatedly solving
+// the whole run as one knot at a time is added to a long curved trajectory.
+std::vector<size_t> InitialCompactKnots(
+	std::vector<ResolvedPoint> const& points,
+	std::pair<size_t, size_t> const& run, std::vector<int> const& times,
+	double eps_storage, double inv_scale_x, double inv_scale_y) {
+	std::vector<size_t> knots{run.first};
+	std::vector<std::pair<size_t, size_t>> pending{run};
+	while (!pending.empty()) {
+		auto const [first, last] = pending.back();
+		pending.pop_back();
+		double worst_error = eps_storage;
+		size_t worst = first;
+		for (size_t i = first + 1; i < last; ++i) {
+			double const x = InterpolateByTime(points[first].x, points[last].x,
+											   times[first - run.first], times[last - run.first],
+											   times[i - run.first]);
+			double const y = InterpolateByTime(points[first].y, points[last].y,
+											   times[first - run.first], times[last - run.first],
+											   times[i - run.first]);
+			double const error = std::hypot((points[i].x - x) * inv_scale_x,
+											(points[i].y - y) * inv_scale_y);
+			if (error > worst_error) {
+				worst = i;
+				worst_error = error;
+			}
+		}
+		if (worst == first) {
+			knots.push_back(last);
+		}
+		else {
+			pending.emplace_back(worst, last);
+			pending.emplace_back(first, worst);
+		}
+	}
+	return knots;
+}
+
 // Adaptive fit over one forced run: start with a single segment, solve for
 // knot values, and add knots at the frame of maximum deviation — measured in
 // storage pixels, so the threshold means on-screen error — until EVERY frame
@@ -1167,16 +1458,21 @@ double MaxDeviation(std::vector<ResolvedPoint> const& points,
 // least-squares residuals peak at knots, and only added freedom next to them
 // can shrink those.
 //
+// If the single line fails, seed the refinement with a feasible interpolant
+// instead of growing every curved region serially. Keep that interpolant as
+// a fallback: least-squares minimizes total error, not the maximum, so fitting
+// and pruning must never leave more events than that already feasible fit.
 // A backward-elimination pass then greedily drops every interior knot whose
 // removal keeps all frames within eps. The forward loop alone over-splits
 // badly on curved paths (residuals shuffle around as knots are added, so it
 // keeps adding until nearly every frame is a knot); pruning that feasible
-// set lands below the old Douglas-Peucker segment count while keeping the
-// least-squares fit and the per-frame epsilon guarantee.
+// set reduces unnecessary knots while retaining the per-frame epsilon
+// guarantee. The endpoint fallback also keeps that guarantee by construction.
 std::vector<FitPiece> FitRunPieces(std::vector<ResolvedPoint> const& points,
 								   std::pair<size_t, size_t> const& run,
 								   double eps_storage, double inv_scale_x,
-								   double inv_scale_y) {
+								   double inv_scale_y,
+								   agi::vfr::Framerate const& timecodes) {
 	std::vector<FitPiece> pieces;
 	size_t const n = run.second - run.first + 1;
 	if (n < 2) {
@@ -1188,20 +1484,31 @@ std::vector<FitPiece> FitRunPieces(std::vector<ResolvedPoint> const& points,
 		return pieces;
 	}
 
+	std::vector<int> times(n);
+	for (size_t i = run.first; i <= run.second; ++i)
+		times[i - run.first] = timecodes.TimeAtFrame(points[i].frame);
 	std::vector<size_t> knots{run.first, run.second};
-	std::vector<double> cx, cy;
+	std::vector<size_t> initial_knots;
+	FittedKnots fit;
 	auto is_knot = [&](size_t s) {
-		return std::binary_search(knots.begin(), knots.end(), s);
+		return std::ranges::binary_search(knots, s);
 	};
 	while (true) {
-		cx = FitKnotAxis(points, knots, false);
-		cy = FitKnotAxis(points, knots, true);
+		fit = FitKnotPositions(points, knots, times);
 		size_t worst = run.first;
 		double const worst_d =
-			MaxDeviation(points, knots, cx, cy, inv_scale_x, inv_scale_y,
+			MaxDeviation(points, knots, fit, times, inv_scale_x, inv_scale_y,
 						 &worst);
 		if (worst_d <= eps_storage || knots.size() >= n)
 			break;
+		if (initial_knots.empty()) {
+			initial_knots = InitialCompactKnots(points, run, times,
+												eps_storage, inv_scale_x, inv_scale_y);
+			if (initial_knots.size() > knots.size()) {
+				knots = initial_knots;
+				continue;
+			}
+		}
 		size_t add = worst;
 		if (is_knot(worst)) {
 			// The worst frame is itself a knot: its least-squares residual
@@ -1221,7 +1528,7 @@ std::vector<FitPiece> FitRunPieces(std::vector<ResolvedPoint> const& points,
 			if (add == SIZE_MAX)
 				break; // every frame is a knot already
 		}
-		knots.insert(std::lower_bound(knots.begin(), knots.end(), add), add);
+		knots.insert(std::ranges::lower_bound(knots, add), add);
 	}
 
 	bool removed_any = true;
@@ -1231,13 +1538,11 @@ std::vector<FitPiece> FitRunPieces(std::vector<ResolvedPoint> const& points,
 		while (k + 1 < knots.size()) {
 			std::vector<size_t> cand(knots);
 			cand.erase(cand.begin() + k);
-			auto chk_x = FitKnotAxis(points, cand, false);
-			auto chk_y = FitKnotAxis(points, cand, true);
-			if (MaxDeviation(points, cand, chk_x, chk_y, inv_scale_x,
+			auto candidate_fit = FitKnotPositions(points, cand, times);
+			if (MaxDeviation(points, cand, candidate_fit, times, inv_scale_x,
 							 inv_scale_y) <= eps_storage) {
 				knots = std::move(cand);
-				cx = std::move(chk_x);
-				cy = std::move(chk_y);
+				fit = std::move(candidate_fit);
 				removed_any = true;
 				// A new knot slides into slot k; try it too.
 			}
@@ -1247,14 +1552,24 @@ std::vector<FitPiece> FitRunPieces(std::vector<ResolvedPoint> const& points,
 		}
 	}
 
+	if (!initial_knots.empty() && initial_knots.size() < knots.size()) {
+		knots = std::move(initial_knots);
+		fit.x.resize(knots.size());
+		fit.y.resize(knots.size());
+		for (size_t k = 0; k < knots.size(); ++k) {
+			fit.x[k] = points[knots[k]].x;
+			fit.y[k] = points[knots[k]].y;
+		}
+	}
+
 	for (size_t k = 0; k + 1 < knots.size(); ++k) {
 		FitPiece p;
 		p.i0 = knots[k];
 		p.i1 = knots[k + 1];
-		p.x0 = cx[k];
-		p.y0 = cy[k];
-		p.x1 = cx[k + 1];
-		p.y1 = cy[k + 1];
+		p.x0 = fit.x[k];
+		p.y0 = fit.y[k];
+		p.x1 = fit.x[k + 1];
+		p.y1 = fit.y[k + 1];
 		pieces.push_back(p);
 	}
 	return pieces;
@@ -1262,10 +1577,10 @@ std::vector<FitPiece> FitRunPieces(std::vector<ResolvedPoint> const& points,
 
 } // namespace
 
-MotionTrackApplyPlan BuildApplyPlan(
+MotionTrackApplyPlan BuildPositionApplyPlan(
 	AssFile const& file,
 	std::vector<AssDialogue *> const& targets,
-	ApplyPlanInput const& input) {
+	ApplyPlanInput const& input, bool frame_parts) {
 	MotionTrackApplyPlan plan;
 
 	if (input.model != TrackModel::Translation && input.model != TrackModel::Similarity) {
@@ -1365,15 +1680,18 @@ MotionTrackApplyPlan BuildApplyPlan(
 		if (dom_end_ms <= dom_start_ms)
 			continue;
 
-		PositionInfo const info = ExtractPositionInfo(*line);
-		// \org and \clip pin absolute script-space geometry: a rotation
-		// origin or clip rectangle does not follow the emitted \pos/\move,
-		// so text swung around a stale \org wobbles and text pushed out of
-		// a stale \clip disappears. Following them is a design question,
-		// so the plan applies anyway and the line is flagged for the
-		// caller's manual-review warning.
-		if (info.has_org || info.has_clip)
-			plan.needs_manual_review.push_back(line);
+		std::vector<SourceTimeTag> source_time_tags;
+		std::string animation_error = CollectSourceTimeTags(*line, source_time_tags);
+		PositionInfo info = ExtractPositionInfo(*line);
+		if (animation_error.empty() && input.model == TrackModel::Similarity)
+			animation_error = ResolveSimilarityBase(file, *line, input, info);
+		if (!animation_error.empty()) {
+			plan.status = ApplyPlanStatus::InvalidInput;
+			plan.message = std::move(animation_error);
+			return plan;
+		}
+		// The full geometry writer handles origins and clips after this
+		// planner has resolved temporal coverage and per-frame boundaries.
 
 		double origin_x = 0.0, origin_y = 0.0;
 		if (!ResolveDialogueOriginInfo(file, info, *line, input.seed_time_ms,
@@ -1584,8 +1902,12 @@ MotionTrackApplyPlan BuildApplyPlan(
 				return std::round(v * 100.0) / 100.0;
 			};
 			auto same_rounded = [&](size_t a, size_t b) {
+				if (frame_parts)
+					return false;
+				int const decimals = input.options.position_decimals;
 				bool const same_pos =
-					std::round(points[a].x) == std::round(points[b].x) && std::round(points[a].y) == std::round(points[b].y);
+					FormatCoord(points[a].x, decimals) == FormatCoord(points[b].x, decimals) &&
+					FormatCoord(points[a].y, decimals) == FormatCoord(points[b].y, decimals);
 				if (!same_pos || input.model != TrackModel::Similarity)
 					return same_pos;
 				return rounded2(points[a].rot_deg) == rounded2(points[b].rot_deg) && rounded2(points[a].scale_pct_x) == rounded2(points[b].scale_pct_x) && rounded2(points[a].scale_pct_y) == rounded2(points[b].scale_pct_y);
@@ -1617,10 +1939,17 @@ MotionTrackApplyPlan BuildApplyPlan(
 			// boundary position exactly (no artificial velocity steps at
 			// simplification vertices), and knots are added until the
 			// storage-space deviation is within the threshold.
+			// Each rounded endpoint can move by half a coordinate quantum on
+			// both axes. Reserve that storage-space error before fitting; when
+			// it consumes the budget, try an exact fit and validate its emitted
+			// coordinates below, since integral positions may still be exact.
+			double const rounding_error = 0.5 * std::pow(10.0, -input.options.position_decimals) *
+										  std::hypot(inv_scale_x, inv_scale_y);
+			double const fit_epsilon = std::max(0.0, input.options.compact_epsilon - rounding_error);
 			for (auto const& run : runs) {
 				auto run_pieces = FitRunPieces(
-					points, run, input.options.compact_epsilon,
-					inv_scale_x, inv_scale_y);
+					points, run, fit_epsilon,
+					inv_scale_x, inv_scale_y, input.timecodes);
 				pieces.insert(pieces.end(),
 							  std::make_move_iterator(run_pieces.begin()),
 							  std::make_move_iterator(run_pieces.end()));
@@ -1657,6 +1986,11 @@ MotionTrackApplyPlan BuildApplyPlan(
 			part.start_ms = std::clamp(part.start_ms, cursor, dom_end_ms);
 			part.end_ms = std::clamp(part.end_ms, part.start_ms, dom_end_ms);
 			cursor = part.end_ms;
+			// Preserve the plan's raw frame boundaries while using ASS's
+			// centisecond event clock for Compact windows and knot rebasing.
+			bool const compact = input.options.mode == ApplyMode::Compact && !frame_parts;
+			int const event_start_ms = compact ? CentisecondRounded(part.start_ms) : part.start_ms;
+			int const event_end_ms = compact ? CentisecondRounded(part.end_ms) : part.end_ms;
 
 			if (input.model == TrackModel::Similarity &&
 				input.options.mode == ApplyMode::Compact) {
@@ -1669,22 +2003,22 @@ MotionTrackApplyPlan BuildApplyPlan(
 				ResolvedPoint const& last = points[piece.i1];
 				int const ta = input.timecodes.TimeAtFrame(first.frame);
 				int const tb = input.timecodes.TimeAtFrame(last.frame);
-				int const dur = part.end_ms - part.start_ms;
+				int const dur = event_end_ms - event_start_ms;
 				int const t1 = std::clamp(
-					ta - part.start_ms, 0, std::max(0, dur - 1));
+					ta - event_start_ms, 0, std::max(0, dur - 1));
 				int const t2 = std::clamp(
-					tb - part.start_ms, t1 + 1, std::max(t1 + 1, dur));
+					tb - event_start_ms, t1 + 1, std::max(t1 + 1, dur));
 				auto const rounded2 = [](double v) {
 					return std::round(v * 100.0) / 100.0;
 				};
 				// The preceding part owns the knot's frame, so this event can
 				// start after ta. Rebase every channel onto its actual start.
 				double const start_rot = InterpolateByTime(
-					first.rot_deg, last.rot_deg, ta, tb, part.start_ms);
+					first.rot_deg, last.rot_deg, ta, tb, event_start_ms);
 				double const start_scale_x = InterpolateByTime(
-					first.scale_pct_x, last.scale_pct_x, ta, tb, part.start_ms);
+					first.scale_pct_x, last.scale_pct_x, ta, tb, event_start_ms);
 				double const start_scale_y = InterpolateByTime(
-					first.scale_pct_y, last.scale_pct_y, ta, tb, part.start_ms);
+					first.scale_pct_y, last.scale_pct_y, ta, tb, event_start_ms);
 				bool const rotation_changed =
 					rounded2(start_rot) != rounded2(last.rot_deg);
 				bool const scale_changed =
@@ -1699,14 +2033,14 @@ MotionTrackApplyPlan BuildApplyPlan(
 
 				int const dec = input.options.position_decimals;
 				double const ex0 = InterpolateByTime(
-					piece.x0, piece.x1, ta, tb, part.start_ms);
+					piece.x0, piece.x1, ta, tb, event_start_ms);
 				double const ey0 = InterpolateByTime(
-					piece.y0, piece.y1, ta, tb, part.start_ms);
+					piece.y0, piece.y1, ta, tb, event_start_ms);
 				double const ex1 = piece.x1;
 				double const ey1 = piece.y1;
 				std::string position_tag;
-				if (std::round(ex0) == std::round(ex1) &&
-					std::round(ey0) == std::round(ey1)) {
+				if (FormatCoord(ex0, dec) == FormatCoord(ex1, dec) &&
+					FormatCoord(ey0, dec) == FormatCoord(ey1, dec)) {
 					position_tag = "\\pos(" + FormatCoord(ex0, dec) + "," +
 								   FormatCoord(ey0, dec) + ")";
 				}
@@ -1745,7 +2079,7 @@ MotionTrackApplyPlan BuildApplyPlan(
 												true);
 				if (!static_transforms.empty() || !animated_transforms.empty())
 					part.text = AppendTagToFirstBlock(
-						part.text, static_transforms + animated_transforms);
+						part.text, static_transforms + animated_transforms, true);
 				part.covered = true;
 				part.x0 = ex0;
 				part.y0 = ey0;
@@ -1885,7 +2219,7 @@ MotionTrackApplyPlan BuildApplyPlan(
 				part.text = ReplaceTagsDropping(line->Text, pos_tag, true,
 												true, growth_drops);
 				if (!transforms.empty())
-					part.text = AppendTagToFirstBlock(part.text, transforms);
+					part.text = AppendTagToFirstBlock(part.text, transforms, true);
 				part.x0 = part.x1 = pt.x;
 				part.y0 = part.y1 = pt.y;
 				part.covered = true;
@@ -1907,8 +2241,8 @@ MotionTrackApplyPlan BuildApplyPlan(
 									 : 0.0;
 				return ka + (kb - ka) * u;
 			};
-			double const ex0 = spline_at(part.start_ms, piece.x0, piece.x1);
-			double const ey0 = spline_at(part.start_ms, piece.y0, piece.y1);
+			double const ex0 = spline_at(event_start_ms, piece.x0, piece.x1);
+			double const ey0 = spline_at(event_start_ms, piece.y0, piece.y1);
 			double const ex1 = piece.x1; // t2 below anchors on tb exactly
 			double const ey1 = piece.y1;
 
@@ -1916,7 +2250,7 @@ MotionTrackApplyPlan BuildApplyPlan(
 			std::string const x0s = FormatCoord(ex0, dec);
 			std::string const y0s = FormatCoord(ey0, dec);
 			std::string tag;
-			if (input.options.mode == ApplyMode::Exact || (std::round(ex0) == std::round(ex1) && std::round(ey0) == std::round(ey1))) {
+			if (input.options.mode == ApplyMode::Exact || (FormatCoord(ex0, dec) == FormatCoord(ex1, dec) && FormatCoord(ey0, dec) == FormatCoord(ey1, dec))) {
 				tag = "\\pos(" + x0s + "," + y0s + ")";
 			}
 			else {
@@ -1927,11 +2261,11 @@ MotionTrackApplyPlan BuildApplyPlan(
 				// t1 = 0 with a positive t2 is honored and emitted verbatim.
 				// Only a window with BOTH bounds non-positive would degrade
 				// to the whole event.
-				int const dur = part.end_ms - part.start_ms;
+				int const dur = event_end_ms - event_start_ms;
 				int const t1 = std::clamp(
-					ta - part.start_ms, 0, std::max(0, dur - 1));
+					ta - event_start_ms, 0, std::max(0, dur - 1));
 				int const t2 = std::clamp(
-					tb - part.start_ms, t1 + 1, std::max(t1 + 1, dur));
+					tb - event_start_ms, t1 + 1, std::max(t1 + 1, dur));
 				tag = "\\move(" + x0s + "," + y0s + "," + FormatCoord(ex1, dec) + "," + FormatCoord(ey1, dec) + "," + std::to_string(t1) + "," + std::to_string(t2) + ")";
 			}
 			part.text = ReplacePositionTag(line->Text, tag);
@@ -1958,7 +2292,7 @@ MotionTrackApplyPlan BuildApplyPlan(
 		// Adapted from croni1012/Aegisub src/typesetting_motion.cpp
 		// (ISC license) -- extending the previous output event when the
 		// next frame's generated line is identical.
-		if (input.options.mode == ApplyMode::Exact) {
+		if (input.options.mode == ApplyMode::Exact && !frame_parts) {
 			size_t write = 1;
 			for (size_t read = 1; read < pl.parts.size(); ++read) {
 				PlannedLinePart& prev = pl.parts[write - 1];
@@ -2000,6 +2334,20 @@ MotionTrackApplyPlan BuildApplyPlan(
 			suffix.covered = false;
 			pl.parts.push_back(std::move(suffix));
 		}
+
+		// Claim the original fade representation before retiming can turn a
+		// completed alpha transform into a static tag which is no longer
+		// recognizable as the source fade. Uncovered parts are stripped too.
+		if (fade_active)
+			for (auto& part : pl.parts)
+				part.text = align_video_fade::StripClaimableFade(part.text);
+
+		// Remaining source effects use the source event clock, even in
+		// uncovered parts. The session fade written below is already local.
+		if (!source_time_tags.empty())
+			for (auto& part : pl.parts)
+				part.text = RetimeSourceTags(part.text, source_time_tags,
+											 CentisecondRounded(part.start_ms) - line_start, part.covered);
 
 		// Per-part fade slicing (options.apply_fad): the dialog turns each
 		// planned part into a SEPARATE ASS event, and an event's fade
@@ -2045,13 +2393,8 @@ MotionTrackApplyPlan BuildApplyPlan(
 			};
 
 			for (auto& part : pl.parts) {
-				// Stale fade representations (all \fad/\fade plus the
-				// leading overall-alpha \t form ApplyAssFade would claim)
-				// are stripped from EVERY part: covered parts receive their
-				// own slice below, while uncovered prefix/suffix parts
-				// render outside the tracked domain and never get a new
-				// one.
-				part.text = align_video_fade::StripClaimableFade(part.text);
+				// Original fades were stripped above; only covered parts
+				// receive a new slice of the detected session fade.
 				if (!part.covered)
 					continue;
 
@@ -2110,6 +2453,51 @@ MotionTrackApplyPlan BuildApplyPlan(
 			}
 		}
 
+		if (input.options.mode == ApplyMode::Compact && !frame_parts) {
+			// Validate what ASS actually renders after fitting, splitting,
+			// time quantization and coordinate serialization. Walk both sorted
+			// sequences together and parse each emitted part only once.
+			size_t part_index = 0;
+			bool parsed_part = false;
+			AssDialogue emitted(*line);
+			PositionInfo emitted_info;
+			int const rendered_start = CentisecondRounded(dom_start_ms);
+			int const rendered_end = CentisecondRounded(dom_end_ms);
+			for (auto const& point : points) {
+				int const time = input.timecodes.TimeAtFrame(point.frame);
+				if (time < rendered_start || time >= rendered_end)
+					continue;
+				while (part_index < pl.parts.size() && time >= CentisecondRounded(pl.parts[part_index].end_ms)) {
+					++part_index;
+					parsed_part = false;
+				}
+				if (part_index >= pl.parts.size() || !pl.parts[part_index].covered ||
+					time < CentisecondRounded(pl.parts[part_index].start_ms)) {
+					plan.status = ApplyPlanStatus::InvalidInput;
+					plan.message = "Compact event timing cannot cover every tracked frame after ASS rounding";
+					return plan;
+				}
+				if (!parsed_part) {
+					auto const& part = pl.parts[part_index];
+					emitted.Start = CentisecondRounded(part.start_ms);
+					emitted.End = CentisecondRounded(part.end_ms);
+					emitted.Text = part.text;
+					emitted_info = ExtractPositionInfo(emitted);
+					parsed_part = true;
+				}
+				double x = 0, y = 0;
+				bool const resolved = ResolveDialogueOriginInfo(file, emitted_info, emitted,
+																time, input.script_width, input.script_height, x, y);
+				double const error = std::hypot((x - point.x) * inv_scale_x,
+												(y - point.y) * inv_scale_y);
+				if (!resolved || !std::isfinite(error) || error > input.options.compact_epsilon) {
+					plan.status = ApplyPlanStatus::InvalidInput;
+					plan.message = "Compact output exceeds the pixel error budget; increase Position decimals or Compact error";
+					return plan;
+				}
+			}
+		}
+
 		planned_lines.push_back(std::move(pl));
 	}
 
@@ -2125,6 +2513,75 @@ MotionTrackApplyPlan BuildApplyPlan(
 	plan.event_count = event_count;
 	plan.lines = std::move(planned_lines);
 	return plan;
+}
+
+MotionTrackApplyPlan BuildApplyPlan(AssFile const& file,
+									std::vector<AssDialogue *> const& targets, ApplyPlanInput const& input) {
+	auto invalid = [](std::string message) {
+		MotionTrackApplyPlan result;
+		result.status = ApplyPlanStatus::InvalidInput;
+		result.message = std::move(message);
+		return result;
+	};
+	if (input.model != TrackModel::Translation && input.model != TrackModel::Similarity &&
+		input.model != TrackModel::Affine && input.model != TrackModel::Homography) {
+		MotionTrackApplyPlan result;
+		result.status = ApplyPlanStatus::UnsupportedModel;
+		result.message = "unknown motion tracking model";
+		return result;
+	}
+	if (input.video_frame_count <= 0 || !input.timecodes.IsLoaded())
+		return invalid("motion tracking requires video frames and loaded timecodes");
+	if (input.storage_width <= 0 || input.storage_height <= 0 ||
+		input.script_width <= 0 || input.script_height <= 0)
+		return invalid("missing resolution information");
+	if (!std::isfinite(input.origin_center_x) || !std::isfinite(input.origin_center_y))
+		return invalid("motion tracking origin must be finite");
+	if (input.options.mode != ApplyMode::Compact && input.options.mode != ApplyMode::Exact)
+		return invalid("unknown motion tracking apply mode");
+	if (input.options.position_decimals < 0 || input.options.position_decimals > 6)
+		return invalid("position precision must be between zero and six decimal places");
+	if (input.options.mode == ApplyMode::Compact &&
+		(!std::isfinite(input.options.compact_epsilon) || input.options.compact_epsilon < 0))
+		return invalid("Compact error must be finite and non-negative");
+	MotionTrackApplyPlan result;
+	result.status = ApplyPlanStatus::Ok;
+	for (auto *line : targets) {
+		if (!line || line->Comment)
+			continue;
+		int const line_start = static_cast<int>(line->Start);
+		int const line_end = static_cast<int>(line->End);
+		if (input.options.mode == ApplyMode::Compact && line_end > line_start) {
+			int const first = std::max({0, input.direction_domain.first,
+										input.timecodes.FrameAtTime(line_start, agi::vfr::Time::START)});
+			int const last = std::min({input.video_frame_count - 1, input.direction_domain.last,
+									   input.timecodes.FrameAtTime(line_end, agi::vfr::Time::END)});
+			for (int frame = first; frame < last; ++frame) {
+				if (input.timecodes.TimeAtFrame(frame + 1) <= input.timecodes.TimeAtFrame(frame))
+					return invalid("Compact requires strictly increasing frame times in the applied range");
+			}
+		}
+		auto part = NeedsGeometryApply(*line, input.model)
+						? BuildGeometryApplyPlan(file, line, input)
+						: BuildPositionApplyPlan(file, {line}, input);
+		if (part.status == ApplyPlanStatus::IncompleteCoverage) {
+			result.uncovered.insert(result.uncovered.end(), part.uncovered.begin(), part.uncovered.end());
+			continue;
+		}
+		if (part.status != ApplyPlanStatus::Ok && part.status != ApplyPlanStatus::NeedsConfirmation)
+			return part;
+		result.event_count += part.event_count;
+		result.lines.insert(result.lines.end(), std::make_move_iterator(part.lines.begin()), std::make_move_iterator(part.lines.end()));
+	}
+	if (!result.uncovered.empty()) {
+		result.status = ApplyPlanStatus::IncompleteCoverage;
+		result.message = "trajectory does not cover every target line's apply domain";
+		result.lines.clear();
+		result.event_count = 0;
+	}
+	else if (result.event_count > 100)
+		result.status = ApplyPlanStatus::NeedsConfirmation;
+	return result;
 }
 
 } // namespace aegisub::motion_track

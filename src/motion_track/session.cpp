@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace aegisub::motion_track {
 
@@ -13,6 +14,44 @@ namespace {
 constexpr int kConfirmFrames = 1500;
 constexpr int kRejectFrames = 10000;
 constexpr int kMaxConsecutiveFailures = 3;
+
+TrackTransform Multiply(TrackTransform const& a, TrackTransform const& b) {
+	TrackTransform result;
+	result.matrix.fill(0);
+	for (int row = 0; row < 3; ++row)
+		for (int col = 0; col < 3; ++col)
+			for (int k = 0; k < 3; ++k)
+				result.matrix[static_cast<size_t>(row) * 3 + col] += a.matrix[static_cast<size_t>(row) * 3 + k] * b.matrix[static_cast<size_t>(k) * 3 + col];
+	return result;
+}
+
+TrackTransform Position(TrackTransform shape, double dx, double dy) {
+	for (int col = 0; col < 3; ++col) {
+		shape.matrix[col] += dx * shape.matrix[6 + col];
+		shape.matrix[3 + col] += dy * shape.matrix[6 + col];
+	}
+	return shape;
+}
+
+TrackTransform Centered(TrackSample const& sample, double origin_x, double origin_y) {
+	auto shape = Position(sample.transform, origin_x - sample.center_x, origin_y - sample.center_y);
+	shape.matrix[2] = shape.matrix[5] = 0;
+	return shape;
+}
+
+bool Inverse(TrackTransform const& transform, TrackTransform& inverse) {
+	auto const& m = transform.matrix;
+	auto& out = inverse.matrix;
+	out = {m[4] * m[8] - m[5] * m[7], m[2] * m[7] - m[1] * m[8], m[1] * m[5] - m[2] * m[4],
+		   m[5] * m[6] - m[3] * m[8], m[0] * m[8] - m[2] * m[6], m[2] * m[3] - m[0] * m[5],
+		   m[3] * m[7] - m[4] * m[6], m[1] * m[6] - m[0] * m[7], m[0] * m[4] - m[1] * m[3]};
+	double const determinant = m[0] * out[0] + m[1] * out[3] + m[2] * out[6];
+	if (!std::isfinite(determinant) || std::abs(determinant) < 1e-9)
+		return false;
+	for (double& value : out)
+		value /= determinant;
+	return true;
+}
 
 // --- Fade interval extraction, phase B ------------------------------------
 // Parameter conventions mirror dialog_align's key-point fade scan
@@ -81,8 +120,9 @@ RangeCheck MotionTrackSession::CheckRange() const {
 	return CheckDecodeInterval(domains_.decode_interval);
 }
 
-void MotionTrackSession::SetBackendSeed(int frame, RoiRect roi,
-										double center_x, double center_y) {
+RoiRideAnchor MotionTrackSession::SetBackendSeed(int frame, RoiRect roi,
+												 double center_x, double center_y) {
+	auto const anchor = ReseedRoiAnchor(*Capture(), frame, center_x, center_y);
 	roi_ = roi;
 	backend_seed_frame_ = frame;
 	backend_seed_x_ = center_x;
@@ -90,17 +130,13 @@ void MotionTrackSession::SetBackendSeed(int frame, RoiRect roi,
 	// The next run rebuilds the backend template from the reseed frame's
 	// pixels in their current pose, so the backend reports steps relative to
 	// that pose -- not relative to the original seed. Remember the old
-	// trajectory's accumulated linear part at the Ok sample nearest the new
+	// trajectory's accumulated centered warp at the Ok sample nearest the new
 	// seed (identity when there is none) so WriteSeedSample and RunAnalyze
 	// can compose it back in and published samples stay origin-relative.
 	// Captured before the seed-frame sample is erased below.
 	reseed_base_ = {};
-	if (TrackSample const *base = NearestOkSample(samples_, frame)) {
-		reseed_base_.m00 = base->transform.matrix[0];
-		reseed_base_.m01 = base->transform.matrix[1];
-		reseed_base_.m10 = base->transform.matrix[3];
-		reseed_base_.m11 = base->transform.matrix[4];
-	}
+	if (TrackSample const *base = NearestOkSample(samples_, frame))
+		reseed_base_ = Centered(*base, origin_center_x_, origin_center_y_);
 	// Continue replaces whatever sample sat on the seed frame with the manual
 	// Ok seed written at the start of the next run.
 	samples_.erase(
@@ -117,6 +153,7 @@ void MotionTrackSession::SetBackendSeed(int frame, RoiRect roi,
 	// next run's completion repopulates it.
 	fade_interval_ = FadeInterval{};
 	Publish(false);
+	return anchor;
 }
 
 void MotionTrackSession::Invalidate(AnalyzeStopReason reason,
@@ -148,16 +185,8 @@ void MotionTrackSession::WriteSeedSample() {
 		origin_center_x_ = backend_seed_x_;
 		origin_center_y_ = backend_seed_y_;
 	}
-	// A re-seeded backend measures against the template captured at the new
-	// seed's current pose, so the manual seed carries the old trajectory's
-	// accumulated linear part (identity on a fresh session); the translation
-	// entries stay the origin-center delta, shared by both models.
-	seed.transform.matrix[0] = reseed_base_.m00;
-	seed.transform.matrix[1] = reseed_base_.m01;
-	seed.transform.matrix[3] = reseed_base_.m10;
-	seed.transform.matrix[4] = reseed_base_.m11;
-	seed.transform.matrix[2] = backend_seed_x_ - origin_center_x_;
-	seed.transform.matrix[5] = backend_seed_y_ - origin_center_y_;
+	seed.transform = Position(reseed_base_, backend_seed_x_ - origin_center_x_,
+							  backend_seed_y_ - origin_center_y_);
 	auto it = std::lower_bound(
 		samples_.begin(), samples_.end(), seed.frame,
 		[](TrackSample const& s, int f) { return s.frame < f; });
@@ -385,6 +414,23 @@ AnalyzeStopReason MotionTrackSession::RunAnalyze(
 			}
 			RoiRect crop{expected_left_x - radius, expected_left_y - radius,
 						 roi_.w + 2 * radius, roi_.h + 2 * radius};
+			if (model_ == TrackModel::Affine || model_ == TrackModel::Homography) {
+				auto const& m = arm.state->last_transform.matrix;
+				double extent_x = roi_.w * 0.5, extent_y = roi_.h * 0.5;
+				for (double y : {-roi_.h * 0.5, roi_.h * 0.5})
+					for (double x : {-roi_.w * 0.5, roi_.w * 0.5}) {
+						double const w = m[6] * x + m[7] * y + m[8];
+						if (w <= 0.2)
+							continue;
+						extent_x = std::max(extent_x, std::abs((m[0] * x + m[1] * y) / w));
+						extent_y = std::max(extent_y, std::abs((m[3] * x + m[4] * y) / w));
+					}
+				// The prior was accepted on the previous frame; bound allocation
+				// to the actual video dimensions as a growing plane leaves view.
+				int const half_w = static_cast<int>(std::ceil(std::min(extent_x, static_cast<double>(std::max(roi_.w, domains_.storage_width))))) + radius;
+				int const half_h = static_cast<int>(std::ceil(std::min(extent_y, static_cast<double>(std::max(roi_.h, domains_.storage_height))))) + radius;
+				crop = {.x = static_cast<int>(std::floor(sx)) - half_w, .y = static_cast<int>(std::floor(sy)) - half_h, .w = 2 * half_w + 1, .h = 2 * half_h + 1};
+			}
 
 			GrayPatch patch;
 			auto read = fetch_frame(cursor_frame, crop, patch);
@@ -413,6 +459,7 @@ AnalyzeStopReason MotionTrackSession::RunAnalyze(
 			request.search_center_y = sy;
 			request.init_rotation = arm.state->last_rotation;
 			request.init_scale = arm.state->last_scale;
+			request.init_transform = arm.state->last_transform;
 			auto step = backend.Step(request);
 
 			++done_frames;
@@ -439,6 +486,7 @@ AnalyzeStopReason MotionTrackSession::RunAnalyze(
 				arm.state->last_scale = std::hypot(
 					step.transform.matrix[0], step.transform.matrix[3]);
 
+				arm.state->last_transform = step.transform;
 				TrackSample sample;
 				sample.frame = cursor_frame;
 				sample.model = model_;
@@ -448,31 +496,11 @@ AnalyzeStopReason MotionTrackSession::RunAnalyze(
 				sample.fade_visibility = step.fade_visibility;
 				sample.center_x = step.candidate_center_x;
 				sample.center_y = step.candidate_center_y;
-				// The backend reports the linear part relative to its current
-				// template. On a Continue that template is the reseed frame's
-				// pose -- the accumulated linear part SetBackendSeed captured
-				// -- so composing template-relative · base (column-vector
-				// order: base applies first, the same structure as
-				// MapRoiToFrame's dst·anchor⁻¹) keeps the published sample
-				// origin-relative; on a fresh seed, after Invalidate, and for
-				// the translation model both factors are identity and this is
-				// a no-op. The translation entries are anchored at the origin
-				// center, shared by both models. last_rotation/last_scale
-				// above stay template-relative on purpose: they prime the
-				// backend's per-step refinement against the current template.
-				sample.transform = step.transform;
-				sample.transform.matrix[0] =
-					step.transform.matrix[0] * reseed_base_.m00 + step.transform.matrix[1] * reseed_base_.m10;
-				sample.transform.matrix[1] =
-					step.transform.matrix[0] * reseed_base_.m01 + step.transform.matrix[1] * reseed_base_.m11;
-				sample.transform.matrix[3] =
-					step.transform.matrix[3] * reseed_base_.m00 + step.transform.matrix[4] * reseed_base_.m10;
-				sample.transform.matrix[4] =
-					step.transform.matrix[3] * reseed_base_.m01 + step.transform.matrix[4] * reseed_base_.m11;
-				sample.transform.matrix[2] =
-					step.candidate_center_x - origin_center_x_;
-				sample.transform.matrix[5] =
-					step.candidate_center_y - origin_center_y_;
+				// Shape remains template-relative in the direction state; the
+				// published transform composes the complete reseed homography.
+				sample.transform = Position(Multiply(step.transform, reseed_base_),
+											step.candidate_center_x - origin_center_x_,
+											step.candidate_center_y - origin_center_y_);
 				delta.push_back(sample);
 				cursor_frame += arm.step;
 				if (++frames_since_commit >= 8) {
@@ -485,6 +513,7 @@ AnalyzeStopReason MotionTrackSession::RunAnalyze(
 			if (step.status == TrackStatus::Failed) {
 				TrackSample sample;
 				sample.frame = cursor_frame;
+				sample.model = model_;
 				sample.status = TrackStatus::Failed;
 				sample.failure = step.failure;
 				// Last accepted position: where the tracker lost the object;
@@ -542,30 +571,19 @@ void FillApplyInputFromSnapshot(ApplyPlanInput& input,
 }
 
 namespace {
-struct Linear2 {
-	double m00, m01, m10, m11;
-};
-
-Linear2 LinearFromSample(TrackSample const& s, TrackModel model) {
-	if (model != TrackModel::Similarity)
-		return {1.0, 0.0, 0.0, 1.0};
-	return {s.transform.matrix[0], s.transform.matrix[1],
-			s.transform.matrix[3], s.transform.matrix[4]};
+TrackTransform ShapeFromSample(TrackSample const& sample, MotionTrackSnapshot const& snap) {
+	if (snap.model == TrackModel::Translation)
+		return {};
+	return Centered(sample, snap.origin_center_x, snap.origin_center_y);
 }
 
-bool Invert(Linear2 const& m, Linear2& out) {
-	double const det = m.m00 * m.m11 - m.m01 * m.m10;
-	if (std::abs(det) < 1e-9)
-		return false;
-	out = {m.m11 / det, -m.m01 / det, -m.m10 / det, m.m00 / det};
-	return true;
-}
-
-Linear2 Mul(Linear2 const& a, Linear2 const& b) {
-	return {a.m00 * b.m00 + a.m01 * b.m10,
-			a.m00 * b.m01 + a.m01 * b.m11,
-			a.m10 * b.m00 + a.m11 * b.m10,
-			a.m10 * b.m01 + a.m11 * b.m11};
+void SetAnchorShape(RoiRideAnchor& anchor, TrackTransform const& shape) {
+	anchor.m00 = shape.matrix[0];
+	anchor.m01 = shape.matrix[1];
+	anchor.m10 = shape.matrix[3];
+	anchor.m11 = shape.matrix[4];
+	anchor.p = shape.matrix[6];
+	anchor.q = shape.matrix[7];
 }
 } // namespace
 
@@ -578,11 +596,7 @@ RoiRideAnchor RideAnchorAtFrame(MotionTrackSnapshot const& snap, int frame) {
 	anchor.frame = frame;
 	anchor.center_x = s->center_x;
 	anchor.center_y = s->center_y;
-	Linear2 const m = LinearFromSample(*s, snap.model);
-	anchor.m00 = m.m00;
-	anchor.m01 = m.m01;
-	anchor.m10 = m.m10;
-	anchor.m11 = m.m11;
+	SetAnchorShape(anchor, ShapeFromSample(*s, snap));
 	return anchor;
 }
 
@@ -594,30 +608,41 @@ RoiRect MapRoiToFrame(MotionTrackSnapshot const& snap, int frame, RoiRect roi,
 	if (!dst || dst->status != TrackStatus::Ok)
 		return roi;
 
-	// Relative affine anchor -> destination: the ROI keeps its position
-	// relative to the tracked object across the ride, so user edits made at
-	// the anchor frame land where the box is displayed at the seed frame.
-	Linear2 const dst_m = LinearFromSample(*dst, snap.model);
-	Linear2 inv_anchor;
-	if (!Invert(Linear2{anchor.m00, anchor.m01, anchor.m10, anchor.m11},
-				inv_anchor))
+	// Map anchor-centered coordinates through the full relative projective
+	// transform. Both center translations remain explicit in storage space.
+	TrackTransform anchor_shape;
+	anchor_shape.matrix = {anchor.m00, anchor.m01, 0, anchor.m10, anchor.m11, 0,
+						   anchor.p, anchor.q, 1};
+	TrackTransform inverse;
+	if (!Inverse(anchor_shape, inverse))
 		return roi;
-	Linear2 const rel = Mul(dst_m, inv_anchor);
+	auto const relative = Multiply(ShapeFromSample(*dst, snap), inverse);
+	bool valid = true;
+	double denominator_sign = 0;
 	auto const map = [&](double x, double y) {
-		double const dx = x - anchor.center_x;
-		double const dy = y - anchor.center_y;
-		return std::pair<double, double>(
-			dst->center_x + rel.m00 * dx + rel.m01 * dy,
-			dst->center_y + rel.m10 * dx + rel.m11 * dy);
+		double const dx = x - anchor.center_x, dy = y - anchor.center_y;
+		auto const& m = relative.matrix;
+		double const w = m[6] * dx + m[7] * dy + m[8];
+		if (!std::isfinite(w) || std::abs(w) < 1e-9 || denominator_sign * w < 0)
+			valid = false;
+		denominator_sign = w;
+		return std::pair<double, double>(dst->center_x + (m[0] * dx + m[1] * dy + m[2]) / w,
+										 dst->center_y + (m[3] * dx + m[4] * dy + m[5]) / w);
 	};
 
 	// Half-open corners, matching the grips the overlay draws (roi.x .. x+w).
 	std::pair<double, double> const corners[4] = {
 		map(roi.x, roi.y), map(roi.x + roi.w, roi.y), map(roi.x, roi.y + roi.h),
 		map(roi.x + roi.w, roi.y + roi.h)};
+	if (!valid)
+		return roi;
 	double min_x = corners[0].first, max_x = min_x;
 	double min_y = corners[0].second, max_y = min_y;
 	for (auto const& c : corners) {
+		if (!std::isfinite(c.first) || !std::isfinite(c.second) ||
+			std::abs(c.first) > std::numeric_limits<int>::max() / 4.0 ||
+			std::abs(c.second) > std::numeric_limits<int>::max() / 4.0)
+			return roi;
 		min_x = std::min(min_x, c.first);
 		max_x = std::max(max_x, c.first);
 		min_y = std::min(min_y, c.second);
@@ -639,13 +664,8 @@ RoiRideAnchor ReseedRoiAnchor(MotionTrackSnapshot const& snap, int frame,
 	anchor.frame = frame;
 	anchor.center_x = center_x;
 	anchor.center_y = center_y;
-	if (TrackSample const *base = NearestOkSample(snap.samples, frame)) {
-		Linear2 const m = LinearFromSample(*base, snap.model);
-		anchor.m00 = m.m00;
-		anchor.m01 = m.m01;
-		anchor.m10 = m.m10;
-		anchor.m11 = m.m11;
-	}
+	if (TrackSample const *base = NearestOkSample(snap.samples, frame))
+		SetAnchorShape(anchor, ShapeFromSample(*base, snap));
 	return anchor;
 }
 

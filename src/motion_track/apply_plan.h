@@ -5,16 +5,23 @@
 // Semantics: full-domain coverage validation before any emission (zero
 // mutations on any uncovered frame), interior Failed gaps hold the previous
 // Ok pose only when bounded by Ok on both sides in time-ascending order,
-// out-of-domain prefixes/suffixes are preserved verbatim, Comment lines are
-// skipped. Translation and Similarity support Exact and Compact. Similarity
+// out-of-domain prefixes/suffixes preserve the source behavior (event-relative
+// animation clocks are rebased), Comment lines are
+// skipped. All four models support Exact and Compact. Similarity
 // Compact uses \move for the fitted position and \t for the fitted
 // \frz/\fscx/\fscy channels; Exact writes one static pose per part. In Exact
 // mode, adjacent covered parts whose
 // emitted text is identical (e.g. a pose held through a Failed gap that
 // matches the tracked pose) merge into one event that renders the same at
 // every frame time.
+// Affine, Homography and existing absolute/perspective tags use the full
+// geometry writer, which checks the rendered projection at every frame.
+// Source fades and nonnested color/alpha transforms retain their original
+// timing across parts. Unsupported animations/karaoke and incompatible
+// Similarity rotation/scale runs reject the complete plan.
 
 #include "types.h"
+#include "../perspective_ass_bounds.h"
 
 #include <libaegisub/vfr.h>
 
@@ -156,24 +163,28 @@ struct ApplyPlanInput {
 	/// planner output is byte-identical to the pre-feature planner.
 	std::optional<FadeInterval> fade_interval;
 	ApplyPlanOptions options;
+	// GUI supplies the platform font measurer; headless callers may use the
+	// deterministic bounds approximation provided by the perspective module.
+	perspective::AssTextExtentsProvider text_extents = nullptr;
 };
 
 enum class ApplyPlanStatus {
 	Ok,
 	NeedsConfirmation,  // plan is complete; it would create >100 events
 	IncompleteCoverage, // zero mutations; see uncovered
-	UnsupportedModel,   // non-Translation/Similarity trajectory
+	UnsupportedModel,   // unknown trajectory model
 	UnsupportedMode,    // reserved for an unsupported apply-mode combination
 	InvalidInput,       // malformed inputs: no frames, missing resolution
 };
 
 struct PlannedLinePart {
+	// Raw millisecond boundaries; ASS serialization rounds them to centiseconds.
 	int start_ms = 0;
 	int end_ms = 0;
 	std::string text;
 	bool covered = true; // false for preserved out-of-domain prefix/suffix
-	// Fitted position in script px at the part's own start/end instants;
-	// equal on both ends for \pos parts. Only meaningful while covered.
+	// Position endpoints in script px; equal for \pos parts. Compact may
+	// reach the second endpoint before the event ends. Only meaningful while covered.
 	double x0 = 0.0, y0 = 0.0, x1 = 0.0, y1 = 0.0;
 };
 
@@ -199,15 +210,9 @@ struct MotionTrackApplyPlan {
 	std::vector<LineUncovered> uncovered;
 	size_t event_count = 0; // new events the covered parts introduce
 
-	// Lines whose raw tag bytes carry \org, \clip or \iclip (rect or vector,
-	// including \t-animated instances): absolute script-space geometry the
-	// emitted \pos/\move cannot follow. A pinned \org keeps the rotation
-	// center fixed while the text moves (the swing arm changes length and
-	// direction), and text pushed out of a \clip/\iclip rectangle or vector
-	// disappears. The plan still applies -- following these tags is a
-	// separate design question -- so the caller warns that the listed lines
-	// need manual review afterwards. Pointers follow the same validity
-	// contract as lines/uncovered.
+	// Reserved diagnostics for lines requiring manual review. Supported
+	// absolute geometry follows the trajectory; unsupported geometry rejects
+	// the complete plan instead of leaving a partially transformed line.
 	std::vector<AssDialogue *> needs_manual_review;
 
 	bool needs_confirmation() const {

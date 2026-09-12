@@ -223,6 +223,11 @@ if(GTEST_FOUND)
         tests/tests/motion_track_similarity.cpp
         tests/tests/motion_track_raw_batch.cpp
         tests/tests/motion_track_apply_plan.cpp
+        tests/tests/motion_track_compact.cpp
+        tests/tests/motion_track_dialog_options.cpp
+        tests/tests/motion_track_geometry_apply.cpp
+        tests/tests/motion_track_geometry_tags.cpp
+        tests/tests/motion_track_planar.cpp
         tests/tests/motion_track_backend.cpp
         tests/tests/motion_track_gray_ncc.cpp
         tests/tests/motion_track_backend_real.cpp

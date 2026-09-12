@@ -37,8 +37,9 @@ enum class TrackStatus : std::int32_t {
 
 enum class TrackModel : std::int32_t {
 	Translation = 1,
-	Similarity = 2, // built-in backends return Unsupported
+	Similarity = 2,
 	Homography = 3,
+	Affine = 4,
 };
 
 // Config key "Apply Mode" stores this value directly.
@@ -92,7 +93,8 @@ struct TrackTransform {
 		0.0, 0.0, 1.0};
 };
 
-// Stable meaning: published transform is origin-seed-relative storage delta;
+// The published transform maps storage offsets from the origin seed center
+// to destination offsets from that same center, including projective division.
 // center_x/y are absolute storage pixel-center coordinates of the ROI center.
 struct TrackSample {
 	int frame = -1;
@@ -131,6 +133,9 @@ struct TrackStepRequest {
 	// ignore it.
 	double init_rotation = 0.0;
 	double init_scale = 1.0;
+	// Previous accepted center-relative planar warp, normalized to matrix[8]=1.
+	// Translation is supplied by search_center_x/y; matrix[2] and [5] are zero.
+	TrackTransform init_transform;
 };
 
 struct TrackStepResult {
@@ -139,9 +144,10 @@ struct TrackStepResult {
 	TrackFailureReason failure = TrackFailureReason::None; // only when Failed
 	double confidence = 0.0;
 	double residual = 0.0;
-	// Seed-relative linear part: identity for translation backends,
-	// s*R(rotation) for similarity. The translation entries stay zero here —
-	// the session anchors them at the origin center.
+	// Maps backend-seed-centered offsets to current-center-relative offsets.
+	// Identity for translation, s*R for similarity, a full projective matrix
+	// for homography. Translation entries are zero and matrix[8] is one;
+	// the session composes the reseed base and the absolute center separately.
 	TrackTransform transform;
 	double candidate_center_x = 0.0; // absolute storage; session normalizes
 	double candidate_center_y = 0.0; // into a TrackSample

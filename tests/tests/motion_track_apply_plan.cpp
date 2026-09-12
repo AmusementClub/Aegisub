@@ -3,6 +3,7 @@
 #include "../../src/motion_track/apply_plan.h"
 #include "../../src/motion_track/types.h"
 #include "../../src/perspective_ass_state.h"
+#include "../../src/ass_tag_scanner.h"
 
 #include <ass_dialogue.h>
 #include <ass_file.h>
@@ -542,11 +543,11 @@ TEST(motion_track_apply_plan, exact_over_hundred_events_needs_confirmation) {
 	EXPECT_FALSE(plan.lines.empty()); // plan still produced for confirmation
 }
 
-TEST(motion_track_apply_plan, homography_model_is_hard_error) {
+TEST(motion_track_apply_plan, unknown_model_is_hard_error) {
 	Fixture fx;
 	auto *line = fx.AddLine(0, 2000, "x");
 	auto input = BaseInput();
-	input.model = TrackModel::Homography;
+	input.model = static_cast<TrackModel>(99);
 	input.samples = LinearSamples(0, 29, 0, 0, 1.0, 0.0);
 
 	auto plan = BuildApplyPlan(fx.file, {line}, input);
@@ -1478,33 +1479,30 @@ TEST(motion_track_apply_plan, similarity_inline_fr_absorbed_and_transforms_stay_
 	EXPECT_EQ(text, zplan.lines[0].parts.front().text);
 }
 
-TEST(motion_track_apply_plan, absolute_coordinate_tags_flag_line_for_review) {
-	// \org / \clip / \iclip pin absolute script-space geometry the emitted
-	// \pos/\move cannot follow (including \t-animated instances), so the
-	// plan lists those lines for the caller's manual-review warning while
-	// still applying to them.
+TEST(motion_track_apply_plan, static_absolute_coordinate_tags_follow_translation) {
 	Fixture fx;
 	auto *org_line = fx.AddLine(0, 2000, R"({\org(960,540)\pos(10,10)}a)");
 	auto *clip_line = fx.AddLine(0, 2000, R"({\clip(0,0,100,100)\pos(10,10)}b)");
 	auto *iclip_line = fx.AddLine(0, 2000, R"({\iclip(0,0,100,100)\pos(10,10)}c)");
-	auto *animated = fx.AddLine(0, 2000, R"({\t(\org(5,5))\pos(10,10)}d)");
 	auto *clean = fx.AddLine(0, 2000, R"({\pos(10,10)}e)");
 	auto input = BaseInput();
-	input.samples = LinearSamples(0, 29, 0, 0, 0.0, 0.0);
+	input.samples = LinearSamples(0, 29, 15, 20, 0.0, 0.0);
 
 	auto plan = BuildApplyPlan(
-		fx.file, {org_line, clip_line, iclip_line, animated, clean}, input);
-	ASSERT_TRUE(plan.has_mutations());
-	ASSERT_EQ(size_t(4), plan.needs_manual_review.size());
-	EXPECT_EQ(org_line, plan.needs_manual_review[0]);
-	EXPECT_EQ(clip_line, plan.needs_manual_review[1]);
-	EXPECT_EQ(iclip_line, plan.needs_manual_review[2]);
-	EXPECT_EQ(animated, plan.needs_manual_review[3]);
-	EXPECT_EQ(std::end(plan.needs_manual_review),
-			  std::find(plan.needs_manual_review.begin(),
-						plan.needs_manual_review.end(), clean));
-	// The flagged lines still receive their planned rewrite.
-	ASSERT_EQ(size_t(5), plan.lines.size());
+		fx.file, {org_line, clip_line, iclip_line, clean}, input);
+	ASSERT_TRUE(plan.has_mutations()) << plan.message;
+	EXPECT_TRUE(plan.needs_manual_review.empty());
+	ASSERT_EQ(size_t(4), plan.lines.size());
+	EXPECT_NE(std::string::npos, plan.lines[1].parts[0].text.find("\\clip(15,20,115,120)"));
+	EXPECT_NE(std::string::npos, plan.lines[2].parts[0].text.find("\\iclip(15,20,115,120)"));
+	for (auto const& planned : plan.lines) {
+		AssDialogue applied(*planned.source);
+		applied.Text = planned.parts[0].text;
+		double x = 0, y = 0;
+		ASSERT_TRUE(ResolveDialogueOrigin(fx.file, applied, 0, 1920, 1080, x, y));
+		EXPECT_NEAR(25.0, x, 0.01);
+		EXPECT_NEAR(30.0, y, 0.01);
+	}
 }
 
 TEST(motion_track_apply_plan, compact_pieces_stay_within_epsilon_and_continuous) {
@@ -1788,4 +1786,237 @@ TEST(motion_track_apply_plan, disjoint_target_outside_domain_is_not_ok) {
 	EXPECT_EQ(ApplyPlanStatus::Ok, plan.status);
 	EXPECT_FALSE(plan.has_mutations());
 	EXPECT_TRUE(plan.lines.empty());
+}
+
+namespace {
+PlannedLinePart const *RenderedPart(MotionTrackApplyPlan const& plan, int time) {
+	if (plan.lines.size() != 1)
+		return nullptr;
+	for (auto const& part : plan.lines.front().parts)
+		if (static_cast<int>(agi::Time(part.start_ms)) <= time && time < static_cast<int>(agi::Time(part.end_ms)))
+			return &part;
+	return nullptr;
+}
+
+double WrittenFadeAlpha(PlannedLinePart const& part, int time) {
+	std::array<int, 7> fade{};
+	bool found = false;
+	AssDialogue line;
+	line.Text = part.text;
+	for (auto const& block : line.ParseTags()) {
+		if (block->GetType() != AssBlockType::OVERRIDE)
+			continue;
+		aegisub::ass_tag_scanner::ScanRawTags(block->GetRawText(), [&](auto const& raw) {
+			if (found || raw.name != "fade")
+				return;
+			auto const args = aegisub::ass_tag_scanner::SplitLibassArgs(raw.args);
+			if (args.size() != 7)
+				return;
+			for (size_t i = 0; i < fade.size(); ++i)
+				fade[i] = aegisub::ass_tag_scanner::ArgToInt(args[i]);
+			found = true;
+		});
+	}
+	EXPECT_TRUE(found) << part.text;
+	int const local = time - static_cast<int>(agi::Time(part.start_ms));
+	if (local < fade[3])
+		return fade[0];
+	if (local < fade[4])
+		return fade[0] + static_cast<double>(fade[1] - fade[0]) * (local - fade[3]) / (fade[4] - fade[3]);
+	if (local < fade[5])
+		return fade[1];
+	if (local < fade[6])
+		return fade[1] + static_cast<double>(fade[2] - fade[1]) * (local - fade[5]) / (fade[6] - fade[5]);
+	return fade[2];
+}
+}
+
+TEST(motion_track_apply_plan, exact_merging_uses_selected_serialized_position_precision) {
+	for (auto const model : {TrackModel::Translation, TrackModel::Similarity}) {
+		Fixture fx;
+		auto *line = fx.AddLine(0, 1000, R"({\pos(300,200)}subpixel)");
+		auto input = BaseInput();
+		input.model = model;
+		input.options.mode = ApplyMode::Exact;
+		input.options.position_decimals = 2;
+		input.samples = LinearSamples(0, 29, 0, 0, 0.04, 0.0);
+		auto const precise = BuildApplyPlan(fx.file, {line}, input);
+		ASSERT_TRUE(precise.has_mutations()) << precise.message;
+		EXPECT_EQ(10u, precise.event_count);
+		for (int frame = 0; frame < 10; ++frame) {
+			auto const *part = RenderedPart(precise, frame * 100);
+			ASSERT_NE(nullptr, part);
+			TagPos position;
+			ASSERT_TRUE(ParseTag(part->text, position));
+			EXPECT_NEAR(300 + frame * 0.04, position.x1, 1e-10);
+			EXPECT_DOUBLE_EQ(200, position.y1);
+		}
+		input.options.position_decimals = 0;
+		auto const rounded = BuildApplyPlan(fx.file, {line}, input);
+		ASSERT_TRUE(rounded.has_mutations()) << rounded.message;
+		EXPECT_EQ(1u, rounded.event_count);
+	}
+}
+
+TEST(motion_track_apply_plan, original_fad_keeps_global_fade_in_and_out_after_exact_splitting) {
+	for (auto const model : {TrackModel::Translation, TrackModel::Affine}) {
+		Fixture fx;
+		auto *line = fx.AddLine(0, 1000, R"({\an7\pos(100,100)\fad(300,200)\p1}m 0 0 l 100 0 100 40 0 40)");
+		auto const original = line->Text.get();
+		auto input = BaseInput();
+		input.model = model;
+		input.options.mode = ApplyMode::Exact;
+		input.samples = LinearSamples(0, 29, 0, 0, 2, 0);
+		for (auto& sample : input.samples)
+			sample.transform.matrix[2] = sample.center_x;
+		auto const plan = BuildApplyPlan(fx.file, {line}, input);
+		ASSERT_TRUE(plan.has_mutations()) << plan.message;
+		std::array const expected = {255.0, 170.0, 85.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 127.5};
+		for (int frame = 0; frame < 10; ++frame) {
+			auto const *part = RenderedPart(plan, frame * 100);
+			ASSERT_NE(nullptr, part);
+			EXPECT_NEAR(expected[frame], WrittenFadeAlpha(*part, frame * 100), 1e-10);
+		}
+		EXPECT_EQ(original, line->Text.get());
+	}
+}
+
+TEST(motion_track_apply_plan, original_seven_argument_fade_preserves_uncovered_prefix_and_suffix) {
+	Fixture fx;
+	auto *line = fx.AddLine(0, 1000, R"({\pos(100,100)\fade(200,40,230,100,300,700,900)}fade)");
+	auto input = BaseInput();
+	input.options.mode = ApplyMode::Exact;
+	input.direction_domain = {.first = 3, .last = 6};
+	input.samples = LinearSamples(0, 29, 0, 0, 2, 0);
+	auto const plan = BuildApplyPlan(fx.file, {line}, input);
+	ASSERT_TRUE(plan.has_mutations()) << plan.message;
+	ASSERT_FALSE(plan.lines.front().parts.front().covered);
+	ASSERT_FALSE(plan.lines.front().parts.back().covered);
+	std::array const expected = {200.0, 200.0, 120.0, 40.0, 40.0, 40.0, 40.0, 40.0, 135.0, 230.0};
+	for (int frame = 0; frame < 10; ++frame) {
+		auto const *part = RenderedPart(plan, frame * 100);
+		ASSERT_NE(nullptr, part);
+		EXPECT_NEAR(expected[frame], WrittenFadeAlpha(*part, frame * 100), 1e-10);
+	}
+}
+
+TEST(motion_track_apply_plan, source_color_alpha_transforms_keep_duration_acceleration_and_order) {
+	Fixture fx;
+	auto *line = fx.AddLine(0, 1000, R"({\pos(100,100)\c&HFFFFFF&\alpha&HFF&\t(2,\c&H0000FF&)\t(0,400,\alpha&H00&)\t(450,450,\3a&H20&)}color)");
+	auto input = BaseInput();
+	input.options.mode = ApplyMode::Exact;
+	input.samples = LinearSamples(0, 29, 0, 0, 2, 0);
+	auto const plan = BuildApplyPlan(fx.file, {line}, input);
+	ASSERT_TRUE(plan.has_mutations()) << plan.message;
+	auto const *middle = RenderedPart(plan, 500);
+	ASSERT_NE(nullptr, middle);
+	EXPECT_EQ(450, middle->start_ms);
+	EXPECT_NE(std::string::npos, middle->text.find(R"(\c&HFFFFFF&\alpha&HFF&\t(-450,550,2,\c&H0000FF&)\alpha&H00&\3a&H20&)"));
+	// A step transform ending exactly at this event's start is already
+	// complete; writing t(0,0,...) here would instead animate for its duration.
+	EXPECT_EQ(std::string::npos, middle->text.find(R"(\t(0,0,)"));
+	// These written bounds retain a 1000 ms span and a 500 ms source offset
+	// at this video time, rather than restarting at the part's 50 ms age.
+	auto const *early = RenderedPart(plan, 100);
+	ASSERT_NE(nullptr, early);
+	EXPECT_NE(std::string::npos, early->text.find(R"(\t(-50,350,1,\alpha&H00&))"));
+}
+
+TEST(motion_track_apply_plan, compact_hold_parts_keep_source_implicit_transform_clock) {
+	for (auto const model : {TrackModel::Translation, TrackModel::Affine}) {
+		Fixture fx;
+		auto *line = fx.AddLine(0, 1000, R"({\an7\pos(100,100)\t(\1c&H0000FF&)\p1}m 0 0 l 100 0 100 40 0 40)");
+		auto input = BaseInput();
+		input.model = model;
+		input.samples = LinearSamples(0, 29, 0, 0, 2, 0);
+		for (auto& sample : input.samples)
+			sample.transform.matrix[2] = sample.center_x;
+		MarkFailed(input.samples, 3, 4);
+		auto const plan = BuildApplyPlan(fx.file, {line}, input);
+		ASSERT_TRUE(plan.has_mutations()) << plan.message;
+		auto const *resumed = RenderedPart(plan, 600);
+		ASSERT_NE(nullptr, resumed);
+		EXPECT_NE(std::string::npos, resumed->text.find(R"(\t(-450,550,1,\1c&H0000FF&))"));
+		EXPECT_NE(std::string::npos, resumed->text.find(R"(\move()"));
+		EXPECT_LT(plan.event_count, 10u);
+		EXPECT_GE(resumed->end_ms - resumed->start_ms, 300);
+	}
+}
+
+TEST(motion_track_apply_plan, unsupported_source_animation_rejects_all_selected_mutations) {
+	for (auto const text : {R"({\t(0,1000,\frz90)}spin)", R"({\t(0,1000,\fscx150)}scale)",
+							R"({\t(0,1000,\t(\alpha&H00&))}nested)", R"({\kf50}karaoke)",
+							R"({\t(0,1000,-1,\alpha&H00&)}invalid)", R"({\fade(0,0,0,1,2,3,1)}invalid)"}) {
+		Fixture fx;
+		auto *first = fx.AddLine(0, 1000, "valid");
+		auto *second = fx.AddLine(0, 1000, text);
+		auto input = BaseInput();
+		input.samples = LinearSamples(0, 29, 0, 0, 2, 0);
+		auto const plan = BuildApplyPlan(fx.file, {first, second}, input);
+		EXPECT_EQ(ApplyPlanStatus::InvalidInput, plan.status) << text;
+		EXPECT_TRUE(plan.lines.empty()) << text;
+		EXPECT_EQ(0u, plan.event_count);
+		EXPECT_EQ("valid", first->Text.get());
+		EXPECT_EQ(text, second->Text.get());
+	}
+}
+
+TEST(motion_track_apply_plan, similarity_mixed_rotation_or_scale_rejects_atomically) {
+	for (auto const text : {R"({\fscx100}A{\fscx150}B)", R"({\frz0}A{\frz30}B)", R"({\ fscx100}A{\ fscx150}B)"}) {
+		Fixture fx;
+		auto *first = fx.AddLine(0, 1000, "valid");
+		auto *second = fx.AddLine(0, 1000, text);
+		auto input = BaseInput();
+		input.model = TrackModel::Similarity;
+		input.samples = LinearSamples(0, 29, 0, 0, 0, 0);
+		auto const plan = BuildApplyPlan(fx.file, {first, second}, input);
+		EXPECT_EQ(ApplyPlanStatus::InvalidInput, plan.status);
+		EXPECT_TRUE(plan.lines.empty());
+		EXPECT_EQ(0u, plan.event_count);
+		EXPECT_EQ(text, second->Text.get());
+	}
+}
+
+TEST(motion_track_apply_plan, similarity_preserves_font_color_and_reset_scope_with_equal_geometry) {
+	Fixture fx;
+	auto *alt = new AssStyle;
+	alt->name = "Alt";
+	alt->fontsize = 48;
+	fx.file.Styles.push_back(*alt);
+	auto *line = fx.AddLine(0, 1000, R"({\pos(100,100)\fscx100}A{\rAlt\b1\1c&H0000FF&}B{\r}C)");
+	auto input = BaseInput();
+	input.model = TrackModel::Similarity;
+	input.options.mode = ApplyMode::Exact;
+	input.samples = LinearSamples(0, 29, 0, 0, 0, 0);
+	for (auto& sample : input.samples)
+		FillPose(sample, 0, 0, 0, 1.2);
+	auto const plan = BuildApplyPlan(fx.file, {line}, input);
+	ASSERT_TRUE(plan.has_mutations()) << plan.message;
+	auto const& text = plan.lines.front().parts.front().text;
+	EXPECT_NE(std::string::npos, text.find(R"(A{\rAlt\b1\1c&H0000FF&\frz(0.00)\fscx(120.00)\fscy(120.00)}B)"));
+	EXPECT_NE(std::string::npos, text.find(R"(B{\r\frz(0.00)\fscx(120.00)\fscy(120.00)}C)"));
+}
+
+TEST(motion_track_apply_plan, uncovered_move_parts_retain_the_source_event_clock) {
+	Fixture fx;
+	auto *line = fx.AddLine(0, 1000, R"({\move(0,0,100,0)}move)");
+	auto input = BaseInput();
+	input.options.mode = ApplyMode::Exact;
+	input.direction_domain = {.first = 3, .last = 6};
+	input.samples = LinearSamples(0, 29, 0, 0, 2, 0);
+	auto const plan = BuildApplyPlan(fx.file, {line}, input);
+	ASSERT_TRUE(plan.has_mutations()) << plan.message;
+	for (int const time : {100, 200, 700, 800, 900}) {
+		auto const *part = RenderedPart(plan, time);
+		ASSERT_NE(nullptr, part);
+		ASSERT_FALSE(part->covered);
+		AssDialogue emitted(*line);
+		emitted.Start = static_cast<int>(agi::Time(part->start_ms));
+		emitted.End = static_cast<int>(agi::Time(part->end_ms));
+		emitted.Text = part->text;
+		double x = 0, y = 0;
+		ASSERT_TRUE(ResolveDialogueOrigin(fx.file, emitted, time, 1920, 1080, x, y));
+		EXPECT_NEAR(time / 10.0, x, 1e-10);
+		EXPECT_DOUBLE_EQ(0, y);
+	}
 }

@@ -48,6 +48,13 @@ struct MotionTrackSnapshot {
 	int storage_height = 0;
 };
 
+/// Apply and Continue must use the same model and direction as the analyzed
+/// samples. Changing a control does not reinterpret an existing trajectory.
+inline bool MotionTrackSettingsMatch(MotionTrackSnapshot const& snapshot,
+									 TrackDirection direction, TrackModel model) {
+	return snapshot.direction == direction && snapshot.model == model;
+}
+
 struct SessionDomains {
 	FrameInterval decode_interval;  // inclusive
 	FrameInterval direction_domain; // inclusive
@@ -58,9 +65,9 @@ struct SessionDomains {
 	int search_radius_override = 0;
 };
 
-/// The ride affine at one frame. The dialog ROI is expressed in the
+/// The ride transform at one frame. The dialog ROI is expressed in the
 /// coordinate space of the frame it was last edited at; the anchor is that
-/// frame's tracked center (absolute storage) and linear part, and makes the
+/// frame's tracked center (absolute storage) and centered warp, and makes the
 /// ROI's space concrete. Invalid when the frame has no Ok sample -- the ROI
 /// is then plain storage coordinates and no riding mapping is defined.
 struct RoiRideAnchor {
@@ -70,13 +77,15 @@ struct RoiRideAnchor {
 	double center_y = 0.0;
 	/// Linear part of the sample's transform; identity for Translation.
 	double m00 = 1.0, m01 = 0.0, m10 = 0.0, m11 = 1.0;
+	/// Projective denominator of the center-relative warp.
+	double p = 0.0, q = 0.0;
 };
 
 RoiRideAnchor RideAnchorAtFrame(MotionTrackSnapshot const& snap, int frame);
 
 /// Anchor for a Continue/reseed: the new seed center in storage, with the
-/// linear part of the Ok sample nearest `frame` (identity when there is
-/// none, or for Translation). The manual seed sample carries that linear
+/// centered warp of the Ok sample nearest `frame` (identity when there is
+/// none, or for Translation). The manual seed sample carries that warp
 /// part, so the overlay/spin ROI — already in storage at the seed frame —
 /// must be pinned to it rather than to identity.
 RoiRideAnchor ReseedRoiAnchor(MotionTrackSnapshot const& snap, int frame,
@@ -85,7 +94,7 @@ RoiRideAnchor ReseedRoiAnchor(MotionTrackSnapshot const& snap, int frame,
 /// Maps an ROI expressed at `anchor`'s frame to storage coordinates at
 /// `frame`, riding the trajectory between the two: the bounding box of the
 /// mapped corners (exact for Translation, inflating slightly for rotated
-/// Similarity quads). Returns `roi` unchanged when either end lacks an Ok
+/// or projected quads). Returns `roi` unchanged when either end lacks an Ok
 /// sample, so callers fall back to the raw rectangle.
 RoiRect MapRoiToFrame(MotionTrackSnapshot const& snap, int frame, RoiRect roi,
 					  RoiRideAnchor const& anchor);
@@ -133,8 +142,10 @@ class MotionTrackSession {
 	/// it. Backend seed: where Reset happens; Continue moves this.
 	/// Continue flow: the caller moves/redraws the ROI onto the object at
 	///  (mirroring the user dragging the box), then seeds there.
-	void SetBackendSeed(int frame, RoiRect roi, double center_x,
-						double center_y);
+	/// Returns the anchor matching this session's new seed. A fresh session
+	/// returns identity; Continue retains the accumulated tracked shape.
+	RoiRideAnchor SetBackendSeed(int frame, RoiRect roi, double center_x,
+								 double center_y);
 	int BackendSeedFrame() const { return backend_seed_frame_; }
 
 	/// Runs the analyze protocol on the current thread (the progress-task
@@ -178,6 +189,7 @@ class MotionTrackSession {
 		/// it to initialize the per-frame refinement); reset on re-seed.
 		double last_rotation = 0.0;
 		double last_scale = 1.0;
+		TrackTransform last_transform;
 		int consecutive_failures = 0;
 	};
 
@@ -193,18 +205,9 @@ class MotionTrackSession {
 	bool has_origin_ = false;
 	int backend_seed_frame_ = -1;
 	double backend_seed_x_ = 0.0, backend_seed_y_ = 0.0;
-	/// Linear part of the published transform at the frame the backend
-	/// template was last rebuilt on, captured by SetBackendSeed from the Ok
-	/// sample nearest the new seed ({m00, m01, m10, m11}, column-vector
-	/// layout). A re-seeded backend measures every step against its new
-	/// template -- the reseed frame's current pose -- so published samples
-	/// must compose this base back in (template-relative step · base) to stay
-	/// origin-relative; identity on a fresh session, after Invalidate, and
-	/// for the translation model (whose steps are identity anyway).
-	struct ReseedBase {
-		double m00 = 1.0, m01 = 0.0, m10 = 0.0, m11 = 1.0;
-	};
-	ReseedBase reseed_base_;
+	/// Center-relative warp at the nearest accepted reseed frame. Compose
+	/// template-relative step * base to preserve the origin reference.
+	TrackTransform reseed_base_;
 	DirectionState fwd_, back_;
 	std::vector<TrackSample> samples_;
 	/// Fade intervals extracted from samples_ at the end of the last

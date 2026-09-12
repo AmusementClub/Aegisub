@@ -21,16 +21,16 @@ class VisualToolMotionTrack final : public VisualToolBase {
 	public:
 	/// Pose mapping seed-space (dialog ROI) points to storage space for the
 	/// current edit: the riding sample's transform while a posed box is being
-	/// edited (similarity matrix, or a pure translation for Translation
+	/// edited (a projective matrix, or a pure translation for Translation
 	/// tracks), identity only for untracked axis-aligned editing. Mouse
 	/// points are transformed into seed space, so the drag/resize math works
 	/// unchanged; the drawn box is transformed back, so the user grabs and
 	/// drags the displayed rectangle/quad itself.
 	struct EditPose {
-		float m00 = 1.f, m01 = 0.f, m10 = 0.f, m11 = 1.f;
-		float obj_cx = 0.f, obj_cy = 0.f;   // storage-space anchor
-		float seed_cx = 0.f, seed_cy = 0.f; // matching seed-space anchor
+		aegisub::motion_track::TrackTransform forward;
+		aegisub::motion_track::TrackTransform inverse;
 		bool identity = true;
+		bool valid = true;
 	};
 
 	private:

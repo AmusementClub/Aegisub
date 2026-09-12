@@ -9,6 +9,7 @@
 #include "dialog_manager.h"
 #include "include/aegisub/context_ui.h"
 #include "project.h"
+#include "perspective_quad_geometry.h"
 #include "video_controller.h"
 #include "video_display.h"
 #include "video_overlay_draw_context.h"
@@ -25,6 +26,7 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <optional>
 
 using namespace aegisub::motion_track;
 
@@ -43,60 +45,83 @@ Vector2D ClampToFrame(Vector2D v, int sw, int sh) {
 					std::clamp(v.Y(), 0.f, float(sh)));
 }
 
-Vector2D PoseToStorage(VisualToolMotionTrack::EditPose const& pose,
-					   Vector2D seed_pt) {
+std::optional<Vector2D> PoseToStorage(VisualToolMotionTrack::EditPose const& pose,
+									  Vector2D seed_pt) {
+	if (!pose.valid)
+		return std::nullopt;
 	if (pose.identity)
 		return seed_pt;
-	float const dx = seed_pt.X() - pose.seed_cx;
-	float const dy = seed_pt.Y() - pose.seed_cy;
-	return Vector2D(pose.obj_cx + pose.m00 * dx + pose.m01 * dy,
-					pose.obj_cy + pose.m10 * dx + pose.m11 * dy);
+	auto const mapped = perspective::Homography(perspective::Matrix3(pose.forward.matrix))
+							.Map({.x = seed_pt.X(), .y = seed_pt.Y()});
+	if (!mapped)
+		return std::nullopt;
+	return Vector2D(static_cast<float>(mapped->x), static_cast<float>(mapped->y));
 }
 
-Vector2D PoseToSeed(VisualToolMotionTrack::EditPose const& pose,
-					Vector2D storage_pt) {
+std::optional<Vector2D> PoseToSeed(VisualToolMotionTrack::EditPose const& pose,
+								   Vector2D storage_pt) {
+	if (!pose.valid)
+		return std::nullopt;
 	if (pose.identity)
 		return storage_pt;
-	float const dx = storage_pt.X() - pose.obj_cx;
-	float const dy = storage_pt.Y() - pose.obj_cy;
-	float const det = pose.m00 * pose.m11 - pose.m01 * pose.m10;
-	if (std::abs(det) < 1e-9f)
-		return storage_pt;
-	return Vector2D(pose.seed_cx + (pose.m11 * dx - pose.m01 * dy) / det,
-					pose.seed_cy + (-pose.m10 * dx + pose.m00 * dy) / det);
+	auto const mapped = perspective::Homography(perspective::Matrix3(pose.inverse.matrix))
+							.Map({.x = storage_pt.X(), .y = storage_pt.Y()});
+	if (!mapped)
+		return std::nullopt;
+	return Vector2D(static_cast<float>(mapped->x), static_cast<float>(mapped->y));
+}
+
+bool PoseSupportsRoi(VisualToolMotionTrack::EditPose const& pose, RoiRect roi) {
+	if (!pose.valid)
+		return false;
+	if (pose.identity)
+		return true;
+	perspective::Homography const homography(perspective::Matrix3(pose.forward.matrix));
+	perspective::Rect const domain{.left = static_cast<double>(roi.x), .top = static_cast<double>(roi.y), .right = static_cast<double>(roi.x) + roi.w, .bottom = static_cast<double>(roi.y) + roi.h};
+	if (perspective::ValidateProjectionDomain(homography, domain) != perspective::GeometryError::None)
+		return false;
+	// Same-sign denominators prevent crossing infinity; successful corner
+	// maps also bound coordinates before display conversion or ROI editing.
+	for (auto const corner : perspective::MakeQuad(domain))
+		if (!homography.Map(corner))
+			return false;
+	return true;
 }
 
 // Pose from the ride sample onto the anchor's frame: maps the ROI's
 // coordinate space (the anchor frame, where the spin values were last
-// expressed) to storage coordinates at the ride's frame. The linear part is
-// the relative rotation/scale between the two frames; pure translation for
-// the Translation model.
+// expressed) to storage coordinates at the ride's frame, including the
+// projective denominator. Its inverse keeps editing in the ROI's own space.
 VisualToolMotionTrack::EditPose PoseFromAnchorRide(
 	TrackSample const& ride, aegisub::motion_track::RoiRideAnchor const& anchor,
 	TrackModel model) {
 	VisualToolMotionTrack::EditPose pose;
-	pose.identity = false;
-	pose.obj_cx = float(ride.center_x);
-	pose.obj_cy = float(ride.center_y);
-	pose.seed_cx = float(anchor.center_x);
-	pose.seed_cy = float(anchor.center_y);
-	if (model == TrackModel::Similarity) {
-		float const a00 = float(anchor.m00), a01 = float(anchor.m01);
-		float const a10 = float(anchor.m10), a11 = float(anchor.m11);
-		float const det = a00 * a11 - a01 * a10;
-		if (std::abs(det) < 1e-9f)
+	using perspective::Matrix3;
+	Matrix3 const to_ride({1, 0, ride.center_x, 0, 1, ride.center_y, 0, 0, 1});
+	Matrix3 const from_anchor({1, 0, -anchor.center_x, 0, 1, -anchor.center_y, 0, 0, 1});
+	Matrix3 relative;
+	if (model != TrackModel::Translation) {
+		auto const& m = ride.transform.matrix;
+		Matrix3 const centered({m[0] - m[2] * m[6], m[1] - m[2] * m[7], 0,
+								m[3] - m[5] * m[6], m[4] - m[5] * m[7], 0, m[6], m[7], 1});
+		auto const anchor_inverse = Matrix3({anchor.m00, anchor.m01, 0,
+											 anchor.m10, anchor.m11, 0, anchor.p, anchor.q, 1})
+										.Inverse();
+		if (!anchor_inverse) {
+			pose.valid = false;
 			return pose;
-		float const i00 = a11 / det, i01 = -a01 / det;
-		float const i10 = -a10 / det, i11 = a00 / det;
-		float const r00 = float(ride.transform.matrix[0]);
-		float const r01 = float(ride.transform.matrix[1]);
-		float const r10 = float(ride.transform.matrix[3]);
-		float const r11 = float(ride.transform.matrix[4]);
-		pose.m00 = r00 * i00 + r01 * i10;
-		pose.m01 = r00 * i01 + r01 * i11;
-		pose.m10 = r10 * i00 + r11 * i10;
-		pose.m11 = r10 * i01 + r11 * i11;
+		}
+		relative = centered * *anchor_inverse;
 	}
+	Matrix3 const forward = to_ride * relative * from_anchor;
+	auto const inverse = forward.Inverse();
+	if (!inverse) {
+		pose.valid = false;
+		return pose;
+	}
+	pose.forward.matrix = forward.Values();
+	pose.inverse.matrix = inverse->Values();
+	pose.identity = false;
 	return pose;
 }
 } // namespace
@@ -188,6 +213,8 @@ void VisualToolMotionTrack::PushRoi(RoiRect roi, bool reanchor,
 						   ::DialogMotionTrack::kMaxRoiSide);
 		roi.h = std::clamp(roi.h, ::DialogMotionTrack::kMinRoiSide,
 						   ::DialogMotionTrack::kMaxRoiSide);
+		if (!PoseSupportsRoi(drag_pose, roi))
+			return;
 	}
 	else {
 		// The dialog's spin controls define the accepted range; clamping here
@@ -295,7 +322,7 @@ void VisualToolMotionTrack::OnMouseEvent(wxMouseEvent& event) {
 		// Hit testing and dragging run in the ROI's anchor space, where the
 		// dialog ROI is axis-aligned even when the on-screen quad is rotated.
 		Vector2D const press = MouseToStorage(event);
-		Vector2D const p = PoseToSeed(drag_pose, press);
+		auto const p = PoseToSeed(drag_pose, press);
 		float const tol_x = video_res.X() > 0
 								? kHandleTolPx * float(sw) / float(video_res.X())
 								: 0.f;
@@ -303,7 +330,9 @@ void VisualToolMotionTrack::OnMouseEvent(wxMouseEvent& event) {
 								? kHandleTolPx * float(sh) / float(video_res.Y())
 								: 0.f;
 		RoiGrab const hit =
-			have_roi ? HitTest(p, roi, tol_x, tol_y) : RoiGrab::None;
+			have_roi && p && PoseSupportsRoi(drag_pose, roi)
+				? HitTest(*p, roi, tol_x, tol_y)
+				: RoiGrab::None;
 		// The frame test is on the untransformed storage point: the pose maps
 		// into anchor space, where an ROI riding off the frame is expected to
 		// sit outside it, so testing `p` would reject legitimate presses.
@@ -320,11 +349,11 @@ void VisualToolMotionTrack::OnMouseEvent(wxMouseEvent& event) {
 			// Grab inside the box moves it; grab on a grip resizes it; grab
 			// anywhere else draws a new one.
 			grab = RoiGrab::Move;
-			drag_offset = Vector2D(p.X() - roi.x, p.Y() - roi.y);
+			drag_offset = Vector2D(p->X() - roi.x, p->Y() - roi.y);
 		}
 		else if (visual_tool_roi_press_policy::PressMayStartBand(on_frame)) {
 			grab = RoiGrab::Band;
-			drag_pose.identity = true;
+			drag_pose = EditPose{};
 			band_start = press;
 			// Commit to the new box straight away: a click with no drag should
 			// still land a rectangle at the minimum size rather than nothing.
@@ -364,13 +393,18 @@ void VisualToolMotionTrack::OnMouseEvent(wxMouseEvent& event) {
 	}
 
 	if (event.Dragging() && grab == RoiGrab::Move && have_roi) {
-		Vector2D const p = PoseToSeed(drag_pose, MouseToStorage(event));
+		auto const p = PoseToSeed(drag_pose, MouseToStorage(event));
+		if (!p) {
+			event.Skip(false);
+			return;
+		}
 		// The pushed rectangle is in the anchor's space while a pose is
 		// active, plain storage coordinates otherwise; PushRoi clamps it in
 		// the matching space.
-		PushRoi(RoiRect{int(std::lround(p.X() - drag_offset.X())),
-						int(std::lround(p.Y() - drag_offset.Y())), roi.w,
-						roi.h},
+		PushRoi(RoiRect{.x = static_cast<int>(std::lround(p->X() - drag_offset.X())),
+						.y = static_cast<int>(std::lround(p->Y() - drag_offset.Y())),
+						.w = roi.w,
+						.h = roi.h},
 				/*reanchor=*/drag_pose.identity,
 				/*anchor_space=*/!drag_pose.identity);
 		event.Skip(false);
@@ -382,7 +416,11 @@ void VisualToolMotionTrack::OnMouseEvent(wxMouseEvent& event) {
 		// ROI. With a pose active the rectangle lives in that space, so PushRoi
 		// must not clamp it to the frame (anchor_space below); an identity pose
 		// yields plain storage coordinates and clamps as before.
-		Vector2D const p = PoseToSeed(drag_pose, MouseToStorage(event));
+		auto const p = PoseToSeed(drag_pose, MouseToStorage(event));
+		if (!p) {
+			event.Skip(false);
+			return;
+		}
 		bool const follow_l =
 			grab == RoiGrab::Nw || grab == RoiGrab::W || grab == RoiGrab::Sw;
 		bool const follow_r =
@@ -391,10 +429,10 @@ void VisualToolMotionTrack::OnMouseEvent(wxMouseEvent& event) {
 			grab == RoiGrab::Nw || grab == RoiGrab::N || grab == RoiGrab::Ne;
 		bool const follow_b =
 			grab == RoiGrab::Sw || grab == RoiGrab::S || grab == RoiGrab::Se;
-		float const l = follow_l ? p.X() : fixed_left;
-		float const r = follow_r ? p.X() : fixed_right;
-		float const t = follow_t ? p.Y() : fixed_top;
-		float const b = follow_b ? p.Y() : fixed_bottom;
+		float const l = follow_l ? p->X() : fixed_left;
+		float const r = follow_r ? p->X() : fixed_right;
+		float const t = follow_t ? p->Y() : fixed_top;
+		float const b = follow_b ? p->Y() : fixed_bottom;
 		// The pointer may cross a fixed edge mid-drag, so normalise instead of
 		// assuming which side leads; PushRoi enforces the minimum side from
 		// there, which grows the box back towards the mouse.
@@ -517,16 +555,28 @@ void VisualToolMotionTrack::DrawWith(VideoOverlayDrawContext& draw) {
 			Vector2D(roi.x + (roi.w - 1) / 2.0f, float(roi.y + roi.h)),
 			Vector2D(float(roi.x), float(roi.y + roi.h)),
 			Vector2D(float(roi.x), roi.y + (roi.h - 1) / 2.0f)};
+		bool valid_roi = PoseSupportsRoi(pose, roi);
+		Vector2D storage_pts[8];
+		if (valid_roi) {
+			for (int i = 0; i < 8; ++i) {
+				auto const point = PoseToStorage(pose, seed_pts[i]);
+				if (!point) {
+					valid_roi = false;
+					break;
+				}
+				storage_pts[i] = *point;
+			}
+		}
 
 		Vector2D box_top_left;
-		if (!pose.identity) {
-			// Similarity pose: the dialog ROI carried by the transform —
-			// a rotated quad in storage space.
+		if (valid_roi && !pose.identity) {
+			// A valid projective domain keeps the entire quad finite; no
+			// individual corner falls back to the untransformed ROI space.
 			Vector2D pts[8];
 			for (int i = 0; i < 8; ++i)
 				pts[i] = Vector2D(
-					float(video_pos.X() + PoseToStorage(pose, seed_pts[i]).X() * scale_x),
-					float(video_pos.Y() + PoseToStorage(pose, seed_pts[i]).Y() * scale_y));
+					static_cast<float>(video_pos.X() + storage_pts[i].X() * scale_x),
+					static_cast<float>(video_pos.Y() + storage_pts[i].Y() * scale_y));
 			Vector2D const quad[4] = {pts[0], pts[2], pts[4], pts[6]};
 			draw.SetFillColour(wxColour(0, 0, 0), 0.0f);
 			draw.DrawPolygon(quad, 4);
@@ -537,7 +587,7 @@ void VisualToolMotionTrack::DrawWith(VideoOverlayDrawContext& draw) {
 					Vector2D(p.X() + kHandleHalfPx, p.Y() + kHandleHalfPx));
 			box_top_left = pts[0];
 		}
-		else {
+		else if (valid_roi) {
 			// Identity pose: the raw dialog rectangle, exactly the storage
 			// coordinates CommitAnalyzeRequest would seed.
 			Vector2D const p1(float(video_pos.X() + roi.x * scale_x),
@@ -547,10 +597,10 @@ void VisualToolMotionTrack::DrawWith(VideoOverlayDrawContext& draw) {
 			draw.SetFillColour(wxColour(0, 0, 0), 0.0f);
 			draw.DrawRectangle(p1, p2);
 			draw.SetFillColour(line, 1.0f);
-			for (int i = 0; i < 8; ++i) {
+			for (auto const& storage_pt : storage_pts) {
 				Vector2D const p(
-					float(video_pos.X() + PoseToStorage(pose, seed_pts[i]).X() * scale_x),
-					float(video_pos.Y() + PoseToStorage(pose, seed_pts[i]).Y() * scale_y));
+					static_cast<float>(video_pos.X() + storage_pt.X() * scale_x),
+					static_cast<float>(video_pos.Y() + storage_pt.Y() * scale_y));
 				draw.DrawRectangle(
 					Vector2D(p.X() - kHandleHalfPx, p.Y() - kHandleHalfPx),
 					Vector2D(p.X() + kHandleHalfPx, p.Y() + kHandleHalfPx));
@@ -561,7 +611,7 @@ void VisualToolMotionTrack::DrawWith(VideoOverlayDrawContext& draw) {
 		// Per-frame readout above the box: scrub feedback without opening
 		// anything. Only meaningful inside the tracked span and not while
 		// the box is being edited.
-		if (grab == RoiGrab::None && in_range) {
+		if (valid_roi && grab == RoiGrab::None && in_range) {
 			auto const *s = FindSample(snap->samples, current_frame);
 			char label[32] = {0};
 			if (s && s->status == TrackStatus::Ok)

@@ -12,6 +12,7 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "ass_info_service.h"
+#include "auto4_base.h"
 #include "async_video_provider.h"
 #include "compat.h"
 #include "dialog_manager.h"
@@ -20,6 +21,7 @@
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
+#include "motion_track/dialog_option_events.h"
 #include "motion_track/raw_batch_motion_frame_reader.h"
 #include "motion_track/similarity_backend.h"
 #include "options.h"
@@ -39,6 +41,7 @@
 #include <wx/msgdlg.h>
 #include <wx/sizer.h>
 #include <wx/spinctrl.h>
+#include <wx/statbox.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
 
@@ -137,7 +140,8 @@ DialogMotionTrack::DialogMotionTrack(agi::Context *c)
 	auto *track_grid = new wxFlexGridSizer(2, 2, 5, 5);
 	track_grid->Add(new wxStaticText(track_box, -1, _("Direction")),
 					0, wxALIGN_CENTRE_VERTICAL);
-	direction = new wxComboBox(track_box, -1, _("Both directions"));
+	direction = new wxComboBox(track_box, -1, _("Both directions"),
+							   wxDefaultPosition, wxDefaultSize, 0, nullptr, wxCB_READONLY);
 	direction->Append(_("Forward"));
 	direction->Append(_("Backward"));
 	direction->Append(_("Both directions"));
@@ -147,13 +151,16 @@ DialogMotionTrack::DialogMotionTrack(agi::Context *c)
 
 	track_grid->Add(new wxStaticText(track_box, -1, _("Model")),
 					0, wxALIGN_CENTRE_VERTICAL);
-	model = new wxComboBox(track_box, -1, _("Translation"));
+	model = new wxComboBox(track_box, -1, _("Translation"),
+						   wxDefaultPosition, wxDefaultSize, 0, nullptr, wxCB_READONLY);
 	model->Append(_("Translation"));
 	model->Append(_("Similarity (rotation+scale)"));
+	model->Append(_("Affine (shear+non-uniform scale)"));
+	model->Append(_("Perspective (four corners)"));
 	model->SetSelection(std::clamp(
-		int(OPT_GET("Tool/Motion Track/Model")->GetInt()), 0, 1));
-	model->SetToolTip(_("Similarity tracks rotation and uniform scale too; "
-						"Compact uses \\move and \\t for the pose"));
+		static_cast<int>(OPT_GET("Tool/Motion Track/Model")->GetInt()), 0, 3));
+	model->SetToolTip(_("Track translation, rotation and scale, affine deformation, "
+						"or a perspective plane. Compact fits the written ASS geometry in video pixels."));
 	track_grid->Add(model, 1, wxEXPAND);
 
 	track_grid->Add(new wxStaticText(track_box, -1, _("Template refresh")),
@@ -171,7 +178,8 @@ DialogMotionTrack::DialogMotionTrack(agi::Context *c)
 	auto *apply_grid = new wxFlexGridSizer(2, 2, 5, 5);
 	apply_grid->Add(new wxStaticText(apply_box, -1, _("Apply mode")),
 					0, wxALIGN_CENTRE_VERTICAL);
-	apply_mode = new wxComboBox(apply_box, -1, _("Compact"));
+	apply_mode = new wxComboBox(apply_box, -1, _("Compact"),
+								wxDefaultPosition, wxDefaultSize, 0, nullptr, wxCB_READONLY);
 	apply_mode->Append(_("Compact"));
 	apply_mode->Append(_("Exact"));
 	apply_mode->SetSelection(std::clamp(
@@ -268,11 +276,17 @@ DialogMotionTrack::DialogMotionTrack(agi::Context *c)
 	analyze_btn->Bind(wxEVT_BUTTON, &DialogMotionTrack::OnAnalyze, this);
 	apply_btn->Bind(wxEVT_BUTTON, &DialogMotionTrack::OnApply, this);
 	preview->Bind(wxEVT_CHECKBOX, &DialogMotionTrack::OnPreviewToggle, this);
-	model->Bind(wxEVT_COMBOBOX,
-				[this](wxCommandEvent&) { UpdateApplyOptionAvailability(); });
-	apply_mode->Bind(
-		wxEVT_COMBOBOX,
-		[this](wxCommandEvent&) { UpdateApplyOptionAvailability(); });
+	for (wxComboBox *choice : {model, direction})
+		BindDialogOptionChanges(*choice, DialogOptionControl::Choice,
+								[this] { OnTrackingSettingsChanged(); });
+	BindDialogOptionChanges(*apply_mode, DialogOptionControl::Choice,
+							[this] { OnApplyOptionsChanged(); });
+	for (wxSpinCtrl *spin : {epsilon, decimals, smooth})
+		BindDialogOptionChanges(*spin, DialogOptionControl::Spin,
+								[this] { OnApplyOptionsChanged(); });
+	for (wxCheckBox *check : {stabilize, growth, apply_fad})
+		BindDialogOptionChanges(*check, DialogOptionControl::Check,
+								[this] { OnApplyOptionsChanged(); });
 	// Both events, because they cover different halves of the same edit: the
 	// arrows and the wrapped-up commit send wxEVT_SPINCTRL, while typing digits
 	// into the text field only sends wxEVT_TEXT until focus leaves. The handler
@@ -426,12 +440,9 @@ std::unique_ptr<MotionTrackSession> DialogMotionTrack::ContinueOrRebuild(
 	bool const same_targets =
 		MotionTrackContinueTargetsMatch(source_snapshot_, targets);
 
-	bool const can_continue = session && identity.Matches(last_identity)
-		&& dir == last_direction && track_model == last_model && same_targets;
+	bool const can_continue = session && identity.Matches(last_identity) && MotionTrackSettingsMatch(*session->Capture(), dir, track_model) && same_targets;
 
 	last_identity = identity;
-	last_direction = dir;
-	last_model = track_model;
 
 	if (can_continue) {
 		// Continue: origin seed and committed samples survive; SetBackendSeed
@@ -495,10 +506,8 @@ bool DialogMotionTrack::PrepareAnalyzeRequest(AnalyzeRequest& request) {
 	}
 
 	SessionDomains domains;
-	// decode_interval is the continuous hull of the selected frame
-	// intervals — for this single-line slice that is the line's own range,
-	// not the whole video (whole-video spans trip the 1500/10000-frame
-	// range caps regardless of how little actually gets tracked).
+	// Decode the continuous hull of the selected lines' frame intervals.
+	// The 1500/10000-frame limits therefore apply to the requested span.
 	domains.decode_interval = FrameInterval{first, last};
 	domains.direction_domain = FrameInterval{first, last};
 	domains.video_frame_count = frame_count;
@@ -511,15 +520,8 @@ bool DialogMotionTrack::PrepareAnalyzeRequest(AnalyzeRequest& request) {
 	domains.search_radius_override =
 		std::max(0, int(OPT_GET("Tool/Motion Track/Search Radius")->GetInt()));
 
-	TrackDirection dir = TrackDirection::Bidirectional;
-	switch (direction->GetSelection()) {
-		case 0: dir = TrackDirection::Forward; break;
-		case 1: dir = TrackDirection::Backward; break;
-		default: dir = TrackDirection::Bidirectional; break;
-	}
-	TrackModel track_model = model->GetSelection() == 1
-								 ? TrackModel::Similarity
-								 : TrackModel::Translation;
+	TrackDirection const dir = SelectedDirection();
+	TrackModel const track_model = SelectedModel();
 
 	// The spin ROI lives in the space of the frame it was last edited at, so
 	// ride it onto the new seed frame before handing it to the backend -- the
@@ -546,16 +548,6 @@ bool DialogMotionTrack::PrepareAnalyzeRequest(AnalyzeRequest& request) {
 	roi.h = std::clamp(roi.h, kMinRoiSide, std::min(kMaxRoiSide, sh));
 	roi.x = std::clamp(roi.x, 0, sw - roi.w);
 	roi.y = std::clamp(roi.y, 0, sh - roi.h);
-
-	double const cx = roi.x + (roi.w - 1) / 2.0;
-	double const cy = roi.y + (roi.h - 1) / 2.0;
-	// The seeded rectangle is storage coordinates at the seed frame, and the
-	// manual seed sample RunAnalyze writes carries exactly this center with
-	// the old trajectory's accumulated linear part as its reseed base -- pin
-	// the overlay anchor to that, not to identity.
-	request.reseed_anchor = snap
-								? ReseedRoiAnchor(*snap, seed_frame, cx, cy)
-								: RoiRideAnchor{true, seed_frame, cx, cy, 1.0, 0.0, 0.0, 1.0};
 
 	request.domains = domains;
 	request.roi = roi;
@@ -591,23 +583,20 @@ void DialogMotionTrack::CommitAnalyzeRequest(AnalyzeRequest const& request) {
 		return snap && snap->origin_seed_frame >= 0;
 	}();
 
-	double const cx = request.reseed_anchor.center_x;
-	double const cy = request.reseed_anchor.center_y;
-	session->SetBackendSeed(request.seed_frame, request.roi, cx, cy);
-	roi_anchor_ = request.reseed_anchor;
+	double const cx = request.roi.x + (request.roi.w - 1) / 2.0;
+	double const cy = request.roi.y + (request.roi.h - 1) / 2.0;
+	// The chosen session owns the anchor: rebuilds start at identity, while
+	// Continue carries the previous shape into both seed and overlay.
+	roi_anchor_ = session->SetBackendSeed(request.seed_frame, request.roi, cx, cy);
 	if (!keep_origin_seed_time)
 		seed_time_ms = request.seed_time_ms;
 
-	roi_x->SetValue(request.roi.x);
-	roi_y->SetValue(request.roi.y);
-	roi_w->SetValue(request.roi.w);
-	roi_h->SetValue(request.roi.h);
+	SetOverlayRoi(request.roi, false);
 }
 
 void DialogMotionTrack::OnAnalyze(wxCommandEvent&) {
 	// A stale preview must not survive a new trajectory.
-	plan_preview_.reset();
-	preview->SetValue(false);
+	InvalidatePlanPreview();
 	AnalyzeRequest request;
 	if (!PrepareAnalyzeRequest(request))
 		return;
@@ -617,10 +606,10 @@ void DialogMotionTrack::OnAnalyze(wxCommandEvent&) {
 
 	// Runtime knobs for the tracking backend, re-read per run so toggling the
 	// checkbox takes effect on the next Analyze without reopening the dialog.
-	TrackerBackend *backend = model->GetSelection() == 1
-								  ? static_cast<TrackerBackend *>(&similarity_backend)
-								  : static_cast<TrackerBackend *>(&translation_backend);
-	if (model->GetSelection() != 1) {
+	TrackerBackend *backends[]{&translation_backend, &similarity_backend,
+							   &affine_backend, &homography_backend};
+	TrackerBackend *backend = backends[std::clamp(model->GetSelection(), 0, 3)];
+	if (model->GetSelection() == 0) {
 		aegisub::motion_track::TranslationTrackerConfig backend_config;
 		backend_config.template_refresh = template_refresh->GetValue();
 		translation_backend.SetConfig(backend_config);
@@ -709,6 +698,11 @@ bool DialogMotionTrack::BuildApplyInput(ApplyPlanInput& input,
 					 _("Motion Track"), wxOK | wxICON_INFORMATION, this);
 		return false;
 	}
+	if (!MotionTrackSettingsMatch(*snap, SelectedDirection(), SelectedModel())) {
+		wxMessageBox(_("The model or direction changed since Analyze; re-run Analyze first."),
+					 _("Motion Track"), wxOK | wxICON_INFORMATION, this);
+		return false;
+	}
 	auto core = context->GetCore();
 	auto *provider = core.project->VideoProvider();
 	if (!provider || !provider->GetRawVideoIdentity().Matches(last_identity)) {
@@ -754,13 +748,14 @@ bool DialogMotionTrack::BuildApplyInput(ApplyPlanInput& input,
 		apply_mode->GetSelection() == 1 ? ApplyMode::Exact : ApplyMode::Compact;
 	input.options.compact_epsilon = epsilon->GetValue() / 100.0;
 	input.options.position_decimals = decimals->GetValue();
-	input.options.smooth_frames = smooth->GetValue();
-	input.options.stabilization.enable = stabilize->GetValue();
-	bool const growth_on = growth->GetValue();
+	input.options.smooth_frames = smooth->IsEnabled() ? smooth->GetValue() : 0;
+	input.options.stabilization.enable = stabilize->IsEnabled() && stabilize->GetValue();
+	bool const growth_on = growth->IsEnabled() && growth->GetValue();
 	input.options.scale_border = growth_on;
 	input.options.scale_shadow = growth_on;
 	input.options.scale_blur = growth_on;
-	input.options.apply_fad = apply_fad->GetValue();
+	input.options.apply_fad = apply_fad->IsEnabled() && apply_fad->GetValue();
+	input.text_extents = &Automation4::CalculateTextExtents;
 	return true;
 }
 
@@ -922,6 +917,40 @@ void DialogMotionTrack::OnRoiSpin(wxCommandEvent&) {
 	RefreshVideoDisplay();
 }
 
+TrackDirection DialogMotionTrack::SelectedDirection() const {
+	switch (direction->GetSelection()) {
+		case 0: return TrackDirection::Forward;
+		case 1: return TrackDirection::Backward;
+		default: return TrackDirection::Bidirectional;
+	}
+}
+
+TrackModel DialogMotionTrack::SelectedModel() const {
+	constexpr TrackModel models[]{TrackModel::Translation, TrackModel::Similarity,
+								  TrackModel::Affine, TrackModel::Homography};
+	return models[std::clamp(model->GetSelection(), 0, 3)];
+}
+
+void DialogMotionTrack::InvalidatePlanPreview() {
+	bool const visible = plan_preview_ || preview->GetValue();
+	plan_preview_.reset();
+	preview->SetValue(false);
+	if (visible)
+		RefreshVideoDisplay();
+}
+
+void DialogMotionTrack::OnTrackingSettingsChanged() {
+	UpdateApplyOptionAvailability();
+	InvalidatePlanPreview();
+	RefreshButtons();
+	RefreshReadonlyStats();
+}
+
+void DialogMotionTrack::OnApplyOptionsChanged() {
+	UpdateApplyOptionAvailability();
+	InvalidatePlanPreview();
+}
+
 void DialogMotionTrack::RefreshVideoDisplay() {
 	if (auto *display = context->GetUI().videoDisplay)
 		display->Render();
@@ -943,11 +972,14 @@ static std::string StopReasonText(AnalyzeStopReason reason) {
 }
 
 void DialogMotionTrack::RefreshButtons() {
-	analyze_btn->Enable();
+	analyze_btn->Enable(!analyze_running_);
 	auto snap = session ? session->Capture() : nullptr;
 	// A trajectory of nothing but Failed/Missing samples cannot produce a
 	// single \pos, and OnApply would only pop an error box.
-	apply_btn->Enable(snap && snap->success_count > 0);
+	bool const can_apply = !analyze_running_ && snap && snap->success_count > 0 &&
+						   MotionTrackSettingsMatch(*snap, SelectedDirection(), SelectedModel());
+	apply_btn->Enable(can_apply);
+	preview->Enable(can_apply);
 }
 
 void DialogMotionTrack::UpdateApplyOptionAvailability() {
@@ -956,6 +988,10 @@ void DialogMotionTrack::UpdateApplyOptionAvailability() {
 	bool const similarity = model->GetSelection() == 1;
 	bool const exact = apply_mode->GetSelection() == 1;
 	growth->Enable(similarity && exact);
+	template_refresh->Enable(model->GetSelection() == 0);
+	smooth->Enable(model->GetSelection() == 0);
+	stabilize->Enable(model->GetSelection() <= 1);
+	apply_fad->Enable(model->GetSelection() == 0);
 }
 
 void DialogMotionTrack::RefreshReadonlyStats() {
@@ -968,6 +1004,9 @@ void DialogMotionTrack::RefreshReadonlyStats() {
 		"ok/failed: %d/%d\nseed frame: %d\nstop reason: %s",
 		snap->success_count, snap->failure_count, snap->backend_seed_frame,
 		StopReasonText(snap->stop_reason));
+	if (!MotionTrackSettingsMatch(*snap, SelectedDirection(), SelectedModel()))
+		text = from_wx(_("The model or direction changed; run Analyze before Apply or preview.")) +
+			   "\n" + text;
 	if (!snap->diagnostic_message.empty())
 		text += "\ndiagnostic: " + snap->diagnostic_message;
 	if (snap->stop_reason == AnalyzeStopReason::UserCanceled || snap->stop_reason == AnalyzeStopReason::ConsecutiveFailures)

@@ -6,6 +6,7 @@
 #include "motion_track/apply_plan.h"
 #include "motion_track/session.h"
 #include "motion_track/similarity_backend.h"
+#include "motion_track/planar_backend.h"
 #include "motion_track/types.h"
 
 #include <wx/checkbox.h>
@@ -35,6 +36,8 @@ class DialogMotionTrack final : public wxDialog {
 	aegisub::motion_track::MotionTrackSourceSnapshot source_snapshot_;
 	aegisub::motion_track::TranslationTrackerBackend translation_backend;
 	aegisub::motion_track::SimilarityTrackerBackend similarity_backend;
+	aegisub::motion_track::PlanarTrackerBackend affine_backend{aegisub::motion_track::TrackModel::Affine};
+	aegisub::motion_track::PlanarTrackerBackend homography_backend{aegisub::motion_track::TrackModel::Homography};
 	RawVideoIdentity last_identity{};
 	int seed_time_ms = 0;
 	/// Coordinate space of the ROI spin values: the ride affine at the frame
@@ -47,10 +50,6 @@ class DialogMotionTrack final : public wxDialog {
 	/// wxEVT_TEXT on MSW, and re-anchoring there would overwrite the anchor
 	/// the overlay drag just established.
 	bool updating_roi_spins_ = false;
-	aegisub::motion_track::TrackDirection last_direction =
-		aegisub::motion_track::TrackDirection::Bidirectional;
-	aegisub::motion_track::TrackModel last_model =
-		aegisub::motion_track::TrackModel::Translation;
 
 	/// Ghost positions of the last built apply plan, for the overlay tool:
 	/// one polyline per target line, knots in storage pixels. Built by the
@@ -87,6 +86,11 @@ class DialogMotionTrack final : public wxDialog {
 	void OnAnalyze(wxCommandEvent&);
 	void OnApply(wxCommandEvent&);
 	void OnPreviewToggle(wxCommandEvent&);
+	void OnTrackingSettingsChanged();
+	void OnApplyOptionsChanged();
+	void InvalidatePlanPreview();
+	aegisub::motion_track::TrackDirection SelectedDirection() const;
+	aegisub::motion_track::TrackModel SelectedModel() const;
 	/// A user edit of one of the four ROI spin controls. Re-expresses the ROI
 	/// in the presented frame's space -- the numbers the user typed are the
 	/// numbers they see on that frame, not values riding an older anchor --
@@ -117,7 +121,6 @@ class DialogMotionTrack final : public wxDialog {
 		std::vector<AssDialogue *> targets;
 		int seed_frame = 0;
 		int seed_time_ms = 0;
-		aegisub::motion_track::RoiRideAnchor reseed_anchor;
 		aegisub::motion_track::RangeCheck range =
 			aegisub::motion_track::RangeCheck::Ok;
 	};
@@ -125,8 +128,8 @@ class DialogMotionTrack final : public wxDialog {
 	void CommitAnalyzeRequest(AnalyzeRequest const& request);
 	void RefreshReadonlyStats();
 
-	/// Analyze is always available; Apply only once the published trajectory
-	/// holds at least one Ok sample. Called on every path that leaves
+	/// Apply/preview require an Ok sample and controls matching the analyzed
+	/// model and direction. Called on every path that leaves
 	/// OnAnalyze so the pair never gets stuck disabled.
 	void RefreshButtons();
 
@@ -137,7 +140,7 @@ class DialogMotionTrack final : public wxDialog {
 
 	/// Reuse the existing session (Continue semantics: same video identity,
 	/// captured target set and direction) or build a fresh one that discards
-	/// the trajectory. Updates the cached continue keys either way.
+	/// the trajectory.
 	std::unique_ptr<aegisub::motion_track::MotionTrackSession>
 	ContinueOrRebuild(aegisub::motion_track::SessionDomains const& domains,
 					  aegisub::motion_track::RoiRect roi,

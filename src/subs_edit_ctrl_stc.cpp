@@ -1204,10 +1204,10 @@ void SubsStyledTextEditCtrl::UpdateCallTip() {
 }
 
 void SubsStyledTextEditCtrl::SetTextTo(std::string const& text) {
+	wxCharBuffer const buffer = GetTextRaw();
+	std::string const current_text(buffer.data(), buffer.length());
 	bool const template_line = IsTemplateLine(context);
-	if (text == line_text
-		&& style_context_valid
-		&& template_line == last_template_line)
+	if (text == current_text && text == line_text && style_context_valid && template_line == last_template_line)
 		return;
 
 	repeat_tag_name_bounds = {-1, 0};
@@ -1227,10 +1227,9 @@ void SubsStyledTextEditCtrl::SetTextTo(std::string const& text) {
 	{
 		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.caret_capture", text_bytes);
 		auto insertion_point = GetInsertionPoint();
-		if (static_cast<size_t>(insertion_point) > line_text.size())
-			line_text = GetTextRaw().data();
-		old_pos = agi::CharacterCount(line_text.begin(), line_text.begin() + insertion_point, 0);
-		text_change = aegisub::subtitle_edit_ops::FindMinimalTextChange(line_text, text);
+		// Styling is deferred, so line_text can still describe the previous edit.
+		old_pos = agi::CharacterCount(current_text.begin(), current_text.begin() + insertion_point, 0);
+		text_change = aegisub::subtitle_edit_ops::FindMinimalTextChange(current_text, text);
 	}
 
 	if (text_change.changed) {
@@ -1264,10 +1263,11 @@ void SubsStyledTextEditCtrl::SetTextTo(std::string const& text) {
 	{
 		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.selection_restore", text_bytes);
 		auto pos = agi::IndexOfCharacter(text, old_pos);
+		// Range replacement moves the native selection even when the controller's
+		// cached selection already equals the position we want to restore.
+		SetSelection(pos, pos);
 		if (context)
 			context->GetCore().textSelectionController->SetSelection(pos, pos);
-		else
-			SetSelection(pos, pos);
 	}
 
 	{

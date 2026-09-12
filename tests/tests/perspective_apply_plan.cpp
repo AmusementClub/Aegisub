@@ -11,8 +11,10 @@
 #include <libaegisub/signal.h>
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -336,6 +338,251 @@ TEST(perspective_apply_plan, scale_policy_preserve_ignores_size_and_fit_resizes)
 	EXPECT_TRUE(MatchesPerspectiveRepresentationPolicy(
 		constrained_fit.plan->Candidate().state,
 		PerspectiveRepresentationPolicy::FaxFrzOnly));
+}
+
+TEST(perspective_apply_plan, anchored_preserve_keeps_feasible_position_digits_through_apply) {
+	ApplyFixture fixture;
+	fixture.file.SetScriptInfo("PlayResX", "1920");
+	fixture.file.SetScriptInfo("PlayResY", "1080");
+	fixture.file.SetScriptInfo("LayoutResX", "1920");
+	fixture.file.SetScriptInfo("LayoutResY", "1080");
+	fixture.context.play_resolution = {.width = 1920.0, .height = 1080.0};
+	fixture.context.layout_resolution = Resolution{.width = 1920.0, .height = 1080.0};
+	fixture.context.video_storage_resolution = Resolution{.width = 1920.0, .height = 1080.0};
+	fixture.context.output_mapping = {.scale_x = 1.0, .scale_y = 1.0};
+	fixture.file.Styles.front().outline_w = 0.0;
+	fixture.file.Styles.front().shadow_w = 0.0;
+	fixture.line->Text = R"({\an7\pos(400,300)\p1}m 0 0 l 200 0 200 80 0 80)";
+	auto const capture = fixture.Capture();
+	ASSERT_TRUE(capture) << DescribePerspectivePlanError(capture.error);
+	Quad const target{{{.x = 519.96, .y = 360.0}, {.x = 720.12, .y = 360.0}, {.x = 720.12, .y = 440.0}, {.x = 519.96, .y = 440.0}}};
+
+	// The fixed-width result at x=520.04 misses either held endpoint by
+	// only 0.08 px; shortening it to x=520 would violate the right endpoint.
+	auto const planned = BuildPerspectiveMutationPlan(
+		fixture.file, fixture.context, *capture.source, target, 0.1, nullptr,
+		PerspectiveScalePolicy::Preserve, PerspectiveRepresentationPolicy::FaxFrzOnly,
+		4, PerspectiveEdgeAnchor::Top);
+	ASSERT_TRUE(planned) << DescribePerspectivePlanError(planned.error);
+	EXPECT_EQ(2U, planned.plan->Candidate().score.emitted_tag_count);
+	EXPECT_FALSE(planned.plan->Candidate().state.origin);
+	EXPECT_LE(planned.plan->Candidate().quantization_error, 0.1);
+	ASSERT_TRUE(ExecutePerspectiveMutationPlan(fixture.file, fixture.context, *planned.plan));
+	auto const applied = fixture.Capture();
+	ASSERT_TRUE(applied) << DescribePerspectivePlanError(applied.error);
+	EXPECT_DOUBLE_EQ(100.0, applied.source->state.transform.scale_x);
+	EXPECT_DOUBLE_EQ(100.0, applied.source->state.transform.scale_y);
+	auto const result = CurrentQuad(applied);
+	for (std::size_t index = 0; index < target.size(); ++index) {
+		EXPECT_LE(std::hypot(result[index].x - target[index].x,
+							 result[index].y - target[index].y),
+				  0.1)
+			<< "corner " << index;
+	}
+}
+
+TEST(perspective_apply_plan, preview_and_apply_share_style_and_reset_aware_candidate_cost) {
+	ApplyFixture fixture;
+	auto& style = fixture.file.Styles.front();
+	style.scalex = 120.0;
+	style.UpdateData();
+	fixture.line->Text = R"({\an7\pos(100,100)\fscx100}AB{\r\fscx100}CD)";
+	auto const capture = CapturePerspectiveSource(
+		fixture.file, *fixture.line, fixture.context, FixedTextExtents);
+	ASSERT_TRUE(capture);
+	auto target = Translate(CurrentQuad(capture), 30.0, -12.0);
+	double const added_width = (target[1].x - target[0].x) * 0.2;
+	for (auto index : {1, 2})
+		target[index].x += added_width;
+	SolverInput input;
+	input.target = target;
+	input.output_mapping = fixture.context.output_mapping;
+	input.max_error = 0.02;
+	input.shape_tolerance = 0.5;
+	input.maximum_decimals = 4;
+	auto prepared = input;
+	PreparePerspectiveSolverInput(*capture.source, prepared);
+	auto const preview = SolvePerspectiveTags(prepared);
+	ASSERT_TRUE(preview) << DescribeSolverError(preview.error);
+	auto const planned = BuildPerspectiveMutationPlan(fixture.file, fixture.context,
+													  *capture.source, target, input.max_error, FixedTextExtents,
+													  input.scale_policy, input.representation_policy, input.maximum_decimals,
+													  input.edge_anchor, input.shape_tolerance);
+	ASSERT_TRUE(planned) << DescribePerspectivePlanError(planned.error);
+	EXPECT_EQ(preview.candidate->family, planned.plan->Family());
+	EXPECT_EQ("{\\an7\\pos(130,88)}AB{\\r}CD", planned.plan->ReplacementText());
+	EXPECT_EQ(2u, preview.candidate->score.emitted_tag_count);
+	EXPECT_EQ(planned.plan->ReplacementText().size(), preview.candidate->score.token_count);
+	EXPECT_FALSE(preview.candidate->state.origin);
+	auto const predicted = ForwardQuad(capture.source->forward_input, preview.candidate->state);
+	ASSERT_TRUE(predicted);
+	for (std::size_t index = 0; index < target.size(); ++index) {
+		EXPECT_NEAR(predicted.quad[index].x, planned.plan->ResultQuad()[index].x, 1.0e-7);
+		EXPECT_NEAR(predicted.quad[index].y, planned.plan->ResultQuad()[index].y, 1.0e-7);
+	}
+	EXPECT_TRUE(ExecutePerspectiveMutationPlan(fixture.file, fixture.context, *planned.plan));
+	auto const recaptured = CapturePerspectiveSource(
+		fixture.file, *fixture.line, fixture.context, FixedTextExtents);
+	ASSERT_TRUE(recaptured);
+	EXPECT_DOUBLE_EQ(120.0, recaptured.source->state.transform.scale_x);
+	EXPECT_DOUBLE_EQ(130.0, recaptured.source->state.transform.position.x);
+	EXPECT_DOUBLE_EQ(88.0, recaptured.source->state.transform.position.y);
+}
+
+TEST(perspective_apply_plan, equivalent_style_rotation_survives_preview_and_apply) {
+	ApplyFixture fixture;
+	fixture.file.Styles.front().angle = 350.0;
+	fixture.line->Text = R"({\an7\pos(100,100)\frz0}AB{\r\frz0}CD)";
+	auto const capture = CapturePerspectiveSource(
+		fixture.file, *fixture.line, fixture.context, FixedTextExtents);
+	ASSERT_TRUE(capture);
+	auto desired = capture.source->state.transform;
+	desired.position = {.x = 130.0, .y = 88.0};
+	desired.rotation_z = -10.0;
+	auto const target = ForwardQuad(capture.source->forward_input, desired);
+	ASSERT_TRUE(target);
+	SolverInput input;
+	input.target = target.quad;
+	input.output_mapping = fixture.context.output_mapping;
+	input.max_error = 0.02;
+	PreparePerspectiveSolverInput(*capture.source, input);
+	auto const preview = SolvePerspectiveTags(input);
+	ASSERT_TRUE(preview);
+	auto const planned = BuildPerspectiveMutationPlan(
+		fixture.file, fixture.context, *capture.source, target.quad, input.max_error, FixedTextExtents);
+	ASSERT_TRUE(planned) << DescribePerspectivePlanError(planned.error);
+	EXPECT_EQ(R"({\an7\pos(130,88)}AB{\r}CD)", planned.plan->ReplacementText());
+	EXPECT_EQ(2U, preview.candidate->score.emitted_tag_count);
+	EXPECT_EQ(planned.plan->ReplacementText().size(), preview.candidate->score.token_count);
+	ASSERT_TRUE(ExecutePerspectiveMutationPlan(fixture.file, fixture.context, *planned.plan));
+	auto const applied = CapturePerspectiveSource(
+		fixture.file, *fixture.line, fixture.context, FixedTextExtents);
+	ASSERT_TRUE(applied);
+	EXPECT_DOUBLE_EQ(350.0, applied.source->state.transform.rotation_z);
+	auto const result = CurrentQuad(applied);
+	for (std::size_t index = 0; index < result.size(); ++index) {
+		EXPECT_LE(std::hypot((result[index].x - target.quad[index].x) * input.output_mapping.scale_x,
+							 (result[index].y - target.quad[index].y) * input.output_mapping.scale_y),
+				  input.max_error);
+	}
+}
+
+TEST(perspective_apply_plan, invalid_shape_tolerance_rejects_plan_without_mutation) {
+	ApplyFixture fixture;
+	auto const capture = fixture.Capture();
+	ASSERT_TRUE(capture);
+	auto const original_text = fixture.line->Text.get();
+	auto const target = Translate(CurrentQuad(capture), 15.0, -10.0);
+	for (double tolerance : {0.0, -1.0, std::numeric_limits<double>::infinity(),
+							 std::numeric_limits<double>::quiet_NaN()}) {
+		SCOPED_TRACE(tolerance);
+		auto const planned = BuildPerspectiveMutationPlan(fixture.file, fixture.context,
+														  *capture.source, target, 0.1, nullptr, PerspectiveScalePolicy::Fit,
+														  PerspectiveRepresentationPolicy::Automatic, 4,
+														  PerspectiveEdgeAnchor::None, tolerance);
+		EXPECT_EQ(PerspectivePlanError::InvalidErrorBudget, planned.error);
+		EXPECT_FALSE(planned.plan);
+		EXPECT_EQ(original_text, fixture.line->Text.get());
+	}
+}
+
+TEST(perspective_apply_plan, preserve_solver_cost_accepts_recursive_fit_scale_changes) {
+	ApplyFixture fixture;
+	auto& style = fixture.file.Styles.front();
+	style.scalex = 120.0;
+	style.UpdateData();
+	fixture.line->Text = R"({\an7\pos(100,100)\fscx100.00000}AB{\r\fscx100.00000}CD)";
+	auto const capture = CapturePerspectiveSource(
+		fixture.file, *fixture.line, fixture.context, FixedTextExtents);
+	ASSERT_TRUE(capture);
+	auto target = CurrentQuad(capture);
+	Vec2 center;
+	for (auto const& point : target)
+		center = center + point / 4.0;
+	for (auto& point : target)
+		point = center + (point - center) * 1.2 + Vec2{.x = 30.0, .y = -12.0};
+	SolverInput input;
+	input.target = target;
+	input.output_mapping = fixture.context.output_mapping;
+	input.scale_policy = PerspectiveScalePolicy::Preserve;
+	input.maximum_decimals = 4;
+	auto prepared = input;
+	PreparePerspectiveSolverInput(*capture.source, prepared);
+	bool accepted_fit_scale_change = false;
+	bool accepted_preserve = false;
+	prepared.measure_tag_cost = [measure = prepared.measure_tag_cost,
+								 &accepted_fit_scale_change, &accepted_preserve](auto const& state,
+																				 auto const& serialized, PerspectiveScalePolicy policy) {
+		auto const cost = measure(state, serialized, policy);
+		if (cost && policy == PerspectiveScalePolicy::Fit && (state.scale_x != 100.0 || state.scale_y != 100.0))
+			accepted_fit_scale_change = true;
+		if (cost && policy == PerspectiveScalePolicy::Preserve)
+			accepted_preserve = true;
+		return cost;
+	};
+	auto const preview = SolvePerspectiveTags(prepared);
+	ASSERT_TRUE(preview) << DescribeSolverError(preview.error);
+	// A cost callback frozen to the outer Preserve policy rejects the scale
+	// changes of the recursive Fit solve and loses its continuity candidate.
+	EXPECT_TRUE(accepted_fit_scale_change);
+	EXPECT_TRUE(accepted_preserve);
+	EXPECT_DOUBLE_EQ(100.0, preview.candidate->state.scale_x);
+	EXPECT_DOUBLE_EQ(100.0, preview.candidate->state.scale_y);
+	auto const planned = BuildPerspectiveMutationPlan(fixture.file, fixture.context,
+													  *capture.source, target, input.max_error, FixedTextExtents,
+													  input.scale_policy, input.representation_policy, input.maximum_decimals,
+													  input.edge_anchor, input.shape_tolerance);
+	ASSERT_TRUE(planned) << DescribePerspectivePlanError(planned.error);
+	EXPECT_EQ("{\\an7\\pos(130,88)\\fscx100.00000}AB{\\r\\fscx100.00000}CD",
+			  planned.plan->ReplacementText());
+	EXPECT_EQ(4u, preview.candidate->score.emitted_tag_count);
+	EXPECT_EQ(planned.plan->ReplacementText().size(), preview.candidate->score.token_count);
+}
+
+TEST(perspective_apply_plan, costed_preview_stays_inside_mouse_move_budget) {
+	ApplyFixture fixture;
+	fixture.line->Text = R"({\an7\pos(100,100)}Perspective{\r} preview)";
+	auto const capture = CapturePerspectiveSource(
+		fixture.file, *fixture.line, fixture.context, FixedTextExtents);
+	ASSERT_TRUE(capture);
+	auto desired = capture.source->forward_input.state;
+	desired.position = {.x = 520.0, .y = 360.0};
+	desired.scale_x = 118.0;
+	desired.scale_y = 92.0;
+	desired.shear_x = 0.16;
+	desired.rotation_x = 21.0;
+	desired.rotation_y = -17.0;
+	desired.rotation_z = 13.0;
+	auto const target = ForwardQuad(capture.source->forward_input, desired);
+	ASSERT_TRUE(target);
+	SolverInput input;
+	input.target = target.quad;
+	input.output_mapping = fixture.context.output_mapping;
+	input.maximum_decimals = 4;
+	auto warmup = input;
+	PreparePerspectiveSolverInput(*capture.source, warmup);
+	ASSERT_TRUE(SolvePerspectiveTags(warmup));
+
+	constexpr int iterations = 100;
+	auto const start = std::chrono::steady_clock::now();
+	for (int iteration = 0; iteration < iterations; ++iteration) {
+		auto nudged = input;
+		nudged.target[2].x += 0.01 * iteration;
+		// Include parsing and style/reset-aware cost measurement in every
+		// iteration, exactly as the interactive preview prepares its solve.
+		PreparePerspectiveSolverInput(*capture.source, nudged);
+		auto const result = SolvePerspectiveTags(nudged);
+		ASSERT_TRUE(result) << DescribeSolverError(result.error);
+		EXPECT_NE(CandidateFamily::NoOp, result.candidate->family);
+		EXPECT_LE(result.candidate->quantization_error, input.max_error);
+		ExpectSerializedAtMost(result.candidate->serialized, input.maximum_decimals);
+	}
+	double const per_solve_ms = std::chrono::duration<double, std::milli>(
+									std::chrono::steady_clock::now() - start)
+									.count() /
+								iterations;
+	RecordProperty("costed_preview_ms", std::to_string(per_solve_ms));
+	EXPECT_LT(per_solve_ms, 8.0) << per_solve_ms << " ms per costed preview";
 }
 
 TEST(perspective_apply_plan, fax_frz_only_writes_and_verifies_affine_geometry) {

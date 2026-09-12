@@ -98,6 +98,10 @@ struct ForwardInput {
 	EvaluatedTransformState state;
 };
 
+// Resolve the script-to-layout X/Y ratio using the same LayoutRes/video
+// fallback as ForwardQuad. Bounds and transform state need not be populated.
+[[nodiscard]] std::optional<double> ResolvePerspectiveLayoutAspect(ForwardInput const& input);
+
 enum class ForwardError {
 	None,
 	UnsupportedMixedBounds,

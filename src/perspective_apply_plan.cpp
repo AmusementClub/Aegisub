@@ -413,7 +413,15 @@ PerspectiveCaptureResult CapturePerspectiveSource(
 		result.apply_blocker = state.apply_blocker;
 		return result;
 	}
-	auto bounds = EvaluateAssBaseBounds({.line = &line, .state = &state.value, .text_extents = text_extents});
+	ForwardInput input;
+	input.play_resolution = context.play_resolution;
+	input.layout_resolution = context.layout_resolution;
+	input.video_storage_resolution = context.video_storage_resolution;
+	input.state = state.value.transform;
+	auto const layout_aspect = ResolvePerspectiveLayoutAspect(input);
+	if (!layout_aspect)
+		return CaptureFailure(PerspectivePlanError::InvalidContext);
+	auto bounds = EvaluateAssBaseBounds({.line = &line, .state = &state.value, .text_extents = text_extents, .layout_aspect = *layout_aspect});
 	if (!bounds) {
 		PerspectiveCaptureResult result;
 		result.error = PerspectivePlanError::BoundsEvaluationFailed;
@@ -423,12 +431,7 @@ PerspectiveCaptureResult CapturePerspectiveSource(
 		return result;
 	}
 
-	ForwardInput input;
-	input.play_resolution = context.play_resolution;
-	input.layout_resolution = context.layout_resolution;
-	input.video_storage_resolution = context.video_storage_resolution;
 	input.bounds = std::move(bounds.value);
-	input.state = state.value.transform;
 	auto const forward = ForwardQuad(input);
 
 	PerspectiveCaptureResult result;
@@ -455,6 +458,24 @@ bool MatchesPerspectiveSource(
 		&& FingerprintMatchesInPlace(file, *line, context, expected);
 }
 
+void PreparePerspectiveSolverInput(
+	PerspectiveSourceSnapshot const& source, SolverInput& input) {
+	input.source = source.forward_input;
+	input.locked_rotation_z = PerspectiveRotationLock(source.state);
+	input.event_style = source.state.event_style_transform;
+	PerspectiveTagRewriter rewriter(source.fingerprint.line.text,
+									source.state.transform, source.state.event_style_transform);
+	input.measure_tag_cost = [rewriter = std::move(rewriter),
+							  policy = input.representation_policy](EvaluatedTransformState const& state,
+																	SerializedTransformState const& serialized, PerspectiveScalePolicy scale_policy)
+		-> std::optional<PerspectiveTagCost> {
+		auto const result = rewriter.Rewrite(state, serialized, scale_policy, policy);
+		if (!result)
+			return std::nullopt;
+		return result.cost;
+	};
+}
+
 PerspectivePlanResult BuildPerspectiveMutationPlan(
 	AssFile const& file,
 	PerspectiveApplyContext const& current_context,
@@ -465,10 +486,11 @@ PerspectivePlanResult BuildPerspectiveMutationPlan(
 	PerspectiveScalePolicy scale_policy,
 	PerspectiveRepresentationPolicy representation_policy,
 	int maximum_decimals,
-	PerspectiveEdgeAnchor edge_anchor) {
+	PerspectiveEdgeAnchor edge_anchor,
+	double shape_tolerance) {
 	if (!ValidContext(current_context))
 		return PlanFailure(PerspectivePlanError::InvalidContext);
-	if (!std::isfinite(max_error) || max_error <= 0.0)
+	if (!std::isfinite(max_error) || max_error <= 0.0 || !std::isfinite(shape_tolerance) || shape_tolerance <= 0.0)
 		return PlanFailure(PerspectivePlanError::InvalidErrorBudget);
 
 	PerspectivePlanError resolve_error = PerspectivePlanError::None;
@@ -504,15 +526,15 @@ PerspectivePlanResult BuildPerspectiveMutationPlan(
 	}
 
 	SolverInput solver_input;
-	solver_input.source = captured.source->forward_input;
 	solver_input.target = target;
 	solver_input.output_mapping = current_context.output_mapping;
 	solver_input.max_error = max_error;
-	solver_input.locked_rotation_z = PerspectiveRotationLock(captured.source->state);
+	solver_input.shape_tolerance = shape_tolerance;
 	solver_input.scale_policy = scale_policy;
 	solver_input.representation_policy = representation_policy;
 	solver_input.edge_anchor = edge_anchor;
 	solver_input.maximum_decimals = ClampPerspectiveDecimalPlaces(maximum_decimals);
+	PreparePerspectiveSolverInput(*captured.source, solver_input);
 	auto solver = SolvePerspectiveTags(solver_input);
 	if (!solver) {
 		auto result = PlanFailure(PerspectivePlanError::SolverFailed);
@@ -573,8 +595,13 @@ PerspectivePlanResult BuildPerspectiveMutationPlan(
 		captured.source->state.transform, staged_state.value.transform,
 		representation_policy))
 		return PlanFailure(PerspectivePlanError::StagedRepresentationMismatch);
-	auto const staged_bounds = EvaluateAssBaseBounds(
-		{&staged, &staged_state.value, text_extents});
+	auto const layout_aspect = ResolvePerspectiveLayoutAspect(captured.source->forward_input);
+	if (!layout_aspect)
+		return PlanFailure(PerspectivePlanError::InvalidContext);
+	auto const staged_bounds = EvaluateAssBaseBounds({.line = &staged,
+													  .state = &staged_state.value,
+													  .text_extents = text_extents,
+													  .layout_aspect = *layout_aspect});
 	if (!staged_bounds) {
 		auto result = PlanFailure(PerspectivePlanError::StagedBoundsEvaluationFailed);
 		result.geometry_error = staged_bounds.geometry_error;
@@ -612,6 +639,15 @@ PerspectivePlanResult BuildPerspectiveMutationPlan(
 		result.residual_error = residual.error;
 		return result;
 	}
+	// A similar distance to the target is insufficient: the writer must land
+	// on the candidate that the preview showed, including off-target fits.
+	auto const predicted = ForwardQuad(captured.source->forward_input, solver.candidate->state);
+	if (!predicted)
+		return PlanFailure(PerspectivePlanError::StagedForwardEvaluationFailed);
+	auto const rewrite_residual = MeasurePerspectiveResidual(
+		staged_input, predicted.quad, current_context.output_mapping);
+	if (!rewrite_residual || rewrite_residual.max_error > max_error)
+		return PlanFailure(PerspectivePlanError::ResidualExceeded);
 	// The staged re-derivation must agree with what the solver predicted for
 	// the candidate it chose -- a snapped model is expected to miss the drawn
 	// quad by its own snap_error, and that shortfall is reported and drawn by

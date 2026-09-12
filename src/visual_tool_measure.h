@@ -63,6 +63,7 @@ class VisualToolMeasure final : public VisualToolBase {
 	bool fit_text_to_target;
 	bool fax_frz_only;
 	int perspective_decimal_places;
+	double perspective_shape_tolerance;
 	// Which drawn edge the user has marked as trustworthy, if any. Alt+click on
 	// an edge midpoint toggles it. Per-binding rather than persistent: it
 	// describes this particular quad against this particular frame.

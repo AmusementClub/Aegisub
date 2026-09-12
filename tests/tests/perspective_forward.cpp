@@ -3,6 +3,7 @@
 #include "../../src/perspective_forward.h"
 
 #include <cmath>
+#include <numbers>
 #include <utility>
 
 namespace {
@@ -114,6 +115,80 @@ TEST(perspective_forward, rotations_follow_renderer_zxy_sign_convention) {
 		/ (y_result.camera_distance + 100.0 * std::sin(3.14159265358979323846 / 4.0));
 	EXPECT_NEAR(expected_x, y_result.quad[1].x, 1.0e-9);
 	EXPECT_NEAR(0.0, y_result.quad[1].y, 1.0e-9);
+}
+
+TEST(perspective_forward, drawing_layout_aspect_is_applied_before_rotation) {
+	auto input = IdentityInput();
+	input.play_resolution = {.width = 640.0, .height = 480.0};
+	input.layout_resolution = Resolution{.width = 1280.0, .height = 480.0};
+	input.bounds = {.rectangle = {.left = 0.0, .top = 0.0, .right = 100.0, .bottom = 50.0}, .kind = BoundsKind::Drawing};
+	input.state.position = {.x = 200.0, .y = 150.0};
+	input.state.origin.reset();
+	input.state.rotation_z = 90.0;
+	auto const result = ForwardQuad(input);
+	ASSERT_TRUE(result);
+	// xy-VSFilter scales polygon X to 200 layout pixels before rotating it;
+	// its 50-pixel Y edge then occupies only 25 script X units.
+	ExpectVecNear({.x = 200.0, .y = 150.0}, result.quad[0]);
+	ExpectVecNear({.x = 200.0, .y = -50.0}, result.quad[1]);
+	ExpectVecNear({.x = 225.0, .y = -50.0}, result.quad[2]);
+	ExpectVecNear({.x = 225.0, .y = 150.0}, result.quad[3]);
+}
+
+TEST(perspective_forward, layout_aspect_resolver_requires_only_resolution_fields) {
+	ForwardInput input;
+	input.play_resolution = {.width = 320.0, .height = 360.0};
+	input.video_storage_resolution = Resolution{.width = 640.0, .height = 360.0};
+	EXPECT_EQ(std::optional<double>{2.0}, ResolvePerspectiveLayoutAspect(input));
+	input.layout_resolution = Resolution{.width = 320.0, .height = 360.0};
+	EXPECT_EQ(std::optional<double>{1.0}, ResolvePerspectiveLayoutAspect(input));
+	input.layout_resolution = Resolution{};
+	EXPECT_EQ(std::optional<double>{2.0}, ResolvePerspectiveLayoutAspect(input));
+	input.video_storage_resolution.reset();
+	EXPECT_EQ(std::optional<double>{1.0}, ResolvePerspectiveLayoutAspect(input));
+	input.play_resolution.width = 0.0;
+	EXPECT_FALSE(ResolvePerspectiveLayoutAspect(input));
+}
+
+TEST(perspective_forward, drawing_layout_aspect_controls_shear_and_explicit_origin_offsets) {
+	auto input = IdentityInput();
+	input.play_resolution = {.width = 640.0, .height = 480.0};
+	input.layout_resolution = Resolution{.width = 1280.0, .height = 480.0};
+	input.bounds = {.rectangle = {.left = 0.0, .top = 0.0, .right = 100.0, .bottom = 40.0}, .kind = BoundsKind::Drawing};
+	input.state.position = {.x = 200.0, .y = 150.0};
+	input.state.origin.reset();
+	input.state.shear_x = 0.25;
+	auto const sheared = ForwardQuad(input);
+	ASSERT_TRUE(sheared);
+	ExpectVecNear({.x = 205.0, .y = 190.0}, sheared.quad[3]);
+	input.bounds.alignment_offset = {.x = 0.0, .y = 7.0};
+	auto const shifted = ForwardQuad(input);
+	ASSERT_TRUE(shifted);
+	ExpectVecNear({.x = 200.0, .y = 157.0}, shifted.quad[0]);
+	input.bounds.alignment_offset = {};
+	input.state.shear_x = 0.0;
+	input.state.position = {.x = 210.0, .y = 160.0};
+	input.state.origin = Vec2{.x = 200.0, .y = 150.0};
+	input.state.rotation_z = 90.0;
+	auto const rotated = ForwardQuad(input);
+	ASSERT_TRUE(rotated);
+	ExpectVecNear({.x = 205.0, .y = 130.0}, rotated.quad[0]);
+}
+
+TEST(perspective_forward, drawing_layout_aspect_changes_perspective_depth_before_projection) {
+	auto input = IdentityInput();
+	input.play_resolution = {.width = 640.0, .height = 480.0};
+	input.video_storage_resolution = Resolution{.width = 1280.0, .height = 480.0};
+	input.bounds = {.rectangle = {.left = 0.0, .top = 0.0, .right = 100.0, .bottom = 40.0}, .kind = BoundsKind::Drawing};
+	input.state.position = {.x = 200.0, .y = 150.0};
+	input.state.origin.reset();
+	input.state.rotation_y = 45.0;
+	auto const result = ForwardQuad(input);
+	ASSERT_TRUE(result);
+	double const projection = 312.5 / (312.5 + 200.0 / std::numbers::sqrt2);
+	ExpectVecNear({.x = 200.0 + 100.0 / std::numbers::sqrt2 * projection,
+				   .y = 150.0 + 40.0 * projection},
+				  result.quad[2]);
 }
 
 TEST(perspective_forward, combined_transform_matches_hardcoded_renderer_golden) {

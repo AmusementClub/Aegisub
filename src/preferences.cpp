@@ -58,6 +58,7 @@
 
 #include <wx/checkbox.h>
 #include <wx/combobox.h>
+#include <wx/dc.h>
 #include <wx/event.h>
 #include <wx/filename.h>
 #include <wx/listctrl.h>
@@ -748,6 +749,12 @@ void BuildVisualToolsPage(OptionPage *p) {
 		"Maximum digits after the decimal point in generated Perspective tags. "
 		"The default is 4. Use 0 for integers. Tags still use the shortest "
 		"digits that fit, so lowering this only trades precision."));
+	auto *perspective_shape_tolerance = binder->AddDouble(
+		_("Shape tolerance (pixels)"),
+		"Tool/Visual/Perspective/Shape Tolerance", 0.001, 100, 0.1, 3);
+	perspective_shape_tolerance->SetHelpString(_(
+		"Allow simpler tags when the shape differs by at most this many output pixels. "
+		"Fit Text still controls scaling; anchored edges and decimal precision keep their own limits."));
 	binder->AddCategory(_("Nudge"));
 	binder->AddDouble(_("Rotate step (degrees)"), "Tool/Visual/Nudge/Rotate Step", 0.01, 180, 0.1, 2);
 	binder->AddDouble(_("Rotate large step (degrees)"), "Tool/Visual/Nudge/Rotate Step Large", 0.01, 180, 0.1, 2);

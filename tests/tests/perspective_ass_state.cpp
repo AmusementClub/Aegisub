@@ -330,6 +330,61 @@ TEST(perspective_ass_state, rewrite_elides_event_style_geometry_only_after_a_cha
 	EXPECT_EQ(RewriteError::UnsupportedNamedReset, named_reset.error);
 }
 
+TEST(perspective_ass_state, prepared_rewrite_counts_style_elision_resets_and_retained_tags) {
+	EvaluatedTransformState style;
+	style.alignment = 7;
+	style.position = {.x = 100.0, .y = 200.0};
+	style.scale_x = 120.0;
+	style.rotation_z = 15.0;
+	auto source = style;
+	source.scale_x = 100.0;
+	std::string const text =
+		"{\\an7\\pos(100,200)\\fscx100.00000\\frz15\\c&H112233&}A"
+		"{\\r\\fscx100.00000}B{\\r}";
+	PerspectiveTagRewriter rewriter(text, source, style);
+	auto target = style;
+	target.position = {.x = 110.0, .y = 215.0};
+	target.scale_x = 130.0;
+	auto candidate = Candidate(target);
+	auto changed = rewriter.Rewrite(candidate.state, candidate.serialized,
+									PerspectiveScalePolicy::Fit, PerspectiveRepresentationPolicy::Automatic);
+	ASSERT_TRUE(changed);
+	std::string const expected =
+		R"({\pos(110,215)\fscx130\c&H112233&}A{\r\fscx130}B{\r})";
+	EXPECT_EQ(expected, changed.text);
+	EXPECT_EQ(3u, changed.cost.tag_count);
+	EXPECT_EQ(expected.size(), changed.cost.byte_count);
+
+	target.scale_x = style.scale_x;
+	candidate = Candidate(target);
+	auto inherited = rewriter.Rewrite(candidate.state, candidate.serialized,
+									  PerspectiveScalePolicy::Fit, PerspectiveRepresentationPolicy::Automatic);
+	ASSERT_TRUE(inherited);
+	EXPECT_EQ("{\\pos(110,215)\\c&H112233&}A{\\r}B{\\r}", inherited.text);
+	EXPECT_EQ(1u, inherited.cost.tag_count);
+	EXPECT_LT(inherited.cost.byte_count, changed.cost.byte_count);
+
+	target.scale_x = source.scale_x;
+	candidate = Candidate(target);
+	auto kept = rewriter.Rewrite(candidate.state, candidate.serialized,
+								 PerspectiveScalePolicy::Preserve, PerspectiveRepresentationPolicy::Automatic);
+	ASSERT_TRUE(kept);
+	EXPECT_EQ("{\\pos(110,215)\\fscx100.00000\\c&H112233&}A"
+			  "{\\r\\fscx100.00000}B{\\r}",
+			  kept.text);
+	EXPECT_EQ(3u, kept.cost.tag_count);
+	EXPECT_EQ(kept.text.size(), kept.cost.byte_count);
+
+	candidate = Candidate(source);
+	auto unchanged = rewriter.Rewrite(candidate.state, candidate.serialized,
+									  PerspectiveScalePolicy::Fit, PerspectiveRepresentationPolicy::Automatic);
+	ASSERT_TRUE(unchanged);
+	EXPECT_FALSE(unchanged.changed);
+	EXPECT_EQ(text, unchanged.text);
+	EXPECT_EQ(5u, unchanged.cost.tag_count);
+	EXPECT_EQ(text.size(), unchanged.cost.byte_count);
+}
+
 TEST(perspective_ass_state, rewrite_removes_origin_and_rejects_dynamic_geometry) {
 	EvaluatedTransformState source;
 	source.event_time_ms = 2000;
@@ -633,4 +688,90 @@ TEST(perspective_ass_state, rewrite_keeps_unchanged_source_shear_spelling) {
 	EXPECT_EQ(
 		R"({\pos(120,200)\fax0.25\fay0.234567\c&H112233&}text)",
 		changed.text);
+}
+
+TEST(perspective_ass_state, rewrite_inherits_equivalent_style_rotations_after_each_reset) {
+	EvaluatedTransformState style;
+	style.alignment = 7;
+	style.position = {.x = 100.0, .y = 200.0};
+	style.rotation_z = 350.0;
+	auto source = style;
+	source.rotation_x = 20.0;
+	source.rotation_y = 15.0;
+	source.rotation_z = 0.0;
+	std::string const text = R"({\frx20\fry15\frz0}A{\r\frx20\fry15\frz0}B)";
+	auto target = source;
+	target.position.x = 120.0;
+	target.rotation_x = 360.0;
+	target.rotation_y = -360.0;
+	target.rotation_z = -10.0;
+	auto const inherited = RewritePerspectiveTags(text, source, style, Candidate(target));
+	ASSERT_TRUE(inherited);
+	EXPECT_EQ(R"({\pos(120,200)}A{\r}B)", inherited.text);
+	EXPECT_EQ(1U, inherited.cost.tag_count);
+	EXPECT_EQ(inherited.text.size(), inherited.cost.byte_count);
+
+	target.rotation_z = -10.001;
+	auto const different = RewritePerspectiveTags(text, source, style, Candidate(target));
+	ASSERT_TRUE(different);
+	EXPECT_EQ(R"({\pos(120,200)\frz-10.001}A{\r\frz-10.001}B)", different.text);
+	EXPECT_EQ(3U, different.cost.tag_count);
+
+	auto const unchanged = RewritePerspectiveTags(text, source, style, Candidate(source));
+	ASSERT_TRUE(unchanged);
+	EXPECT_FALSE(unchanged.changed);
+	EXPECT_EQ(text, unchanged.text);
+}
+
+TEST(perspective_ass_state, rewrite_preserves_each_nondefault_shear_axis_independently) {
+	EvaluatedTransformState style;
+	style.position = {.x = 100.0, .y = 200.0};
+	auto source = style;
+	source.shear_x = 0.1234567;
+	auto target = source;
+	target.position.x = 120.0;
+	auto const keep_x = RewritePerspectiveTags(
+		R"({\fax0.1234567\fay0}A{\r\fax0.1234567\fay0}B)",
+		source, style, Candidate(target));
+	ASSERT_TRUE(keep_x);
+	EXPECT_EQ(R"({\pos(120,200)\fax0.1234567}A{\r\fax0.1234567}B)", keep_x.text);
+	EXPECT_EQ(3U, keep_x.cost.tag_count);
+
+	source.shear_x = 0.0;
+	source.shear_y = 0.2345678;
+	target = source;
+	target.position.x = 120.0;
+	auto const keep_y = RewritePerspectiveTags(
+		R"({\fax0\fay0.2345678}A{\r\fax0\fay0.2345678}B)",
+		source, style, Candidate(target));
+	ASSERT_TRUE(keep_y);
+	EXPECT_EQ(R"({\pos(120,200)\fay0.2345678}A{\r\fay0.2345678}B)", keep_y.text);
+	EXPECT_EQ(3U, keep_y.cost.tag_count);
+
+	source.shear_x = 0.1234567;
+	target = source;
+	target.position.x = 120.0;
+	target.shear_y = 0.25;
+	auto const change_y = RewritePerspectiveTags(
+		R"({\fax0.1234567\fay0.2345678}Text)", source, style, Candidate(target));
+	ASSERT_TRUE(change_y);
+	EXPECT_EQ(R"({\pos(120,200)\fay0.25\fax0.1234567}Text)", change_y.text);
+	EXPECT_EQ(3U, change_y.cost.tag_count);
+}
+
+TEST(perspective_ass_state, rewrite_keeps_restricted_zero_shear_spelling) {
+	EvaluatedTransformState style;
+	style.position = {.x = 100.0, .y = 200.0};
+	auto source = style;
+	source.origin = Vec2{.x = 130.0, .y = 230.0};
+	source.shear_x = 0.1234567;
+	auto target = source;
+	target.position.x = 120.0;
+	auto const kept = RewritePerspectiveTags(
+		R"({\org(130,230)\fax0.1234567\fay0.0000000}Text)",
+		source, style, Candidate(target), PerspectiveScalePolicy::Fit,
+		PerspectiveRepresentationPolicy::FaxFrzOnly);
+	ASSERT_TRUE(kept);
+	EXPECT_EQ(R"({\pos(120,200)\org(130,230)\fax0.1234567\fay0.0000000}Text)", kept.text);
+	EXPECT_EQ(4U, kept.cost.tag_count);
 }

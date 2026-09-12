@@ -246,6 +246,7 @@ if(GTEST_FOUND)
         tests/tests/perspective_ass_bounds.cpp
         tests/tests/perspective_apply_plan.cpp
         tests/tests/perspective_libass_render.cpp
+        tests/tests/perspective_vsfilter_render.cpp
         tests/tests/perspective_ass_state.cpp
         tests/tests/perspective_forward.cpp
         tests/tests/perspective_quad_geometry.cpp

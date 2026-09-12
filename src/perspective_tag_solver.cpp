@@ -69,6 +69,8 @@ struct AffineMap {
 // through the fit.
 struct ImplicitModel {
 	bool preserve_scale = false;
+	bool preserve_scale_x = false;
+	bool preserve_scale_y = false;
 	// Freezes frx/fry at the seed's values, reducing the fit to the in-plane
 	// parameters. With a zeroed seed this is an affine fit driven by the same
 	// optimizer as the projective families, which is how a scale-pinned affine
@@ -229,12 +231,19 @@ class ResidualReference {
 		if (matrix && matrix->Values() == target.Matrix().Values())
 			return true;
 		matrix.reset();
+		double minimum = std::numeric_limits<double>::infinity();
+		double maximum = -std::numeric_limits<double>::infinity();
 		for (std::size_t index = 0; index < samples.size(); ++index) {
+			double const denominator = target.Denominator(samples[index]);
+			minimum = std::min(minimum, denominator);
+			maximum = std::max(maximum, denominator);
 			auto const point = target.Map(samples[index]);
 			if (!point)
 				return false;
 			projected[index] = *point;
 		}
+		if (!ValidDenominators(minimum, maximum))
+			return false;
 		matrix = target.Matrix();
 		return true;
 	}
@@ -247,9 +256,14 @@ class ResidualReference {
 		double maximum_squared = 0.0;
 		double subnormal_maximum = 0.0;
 		bool exceeds_budget = false;
+		double minimum = std::numeric_limits<double>::infinity();
+		double maximum = -std::numeric_limits<double>::infinity();
 		Vec2 worst;
 		double const stop_squared = stop_after * stop_after;
 		for (std::size_t index = 0; index < samples.size(); ++index) {
+			double const denominator = candidate.transform.Denominator(samples[index]);
+			minimum = std::min(minimum, denominator);
+			maximum = std::max(maximum, denominator);
 			auto const actual = candidate.transform.Map(samples[index]);
 			if (!actual)
 				return std::nullopt;
@@ -269,7 +283,37 @@ class ResidualReference {
 			exceeds_budget = maximum_squared > stop_squared
 				&& std::hypot(worst.x, worst.y) > stop_after;
 		}
+		if (!ValidDenominators(minimum, maximum))
+			return std::nullopt;
 		return std::max(subnormal_maximum, std::hypot(worst.x, worst.y));
+	}
+
+	// Centre the error range over the same domain used for final acceptance.
+	// This is a minimax step for each coordinate; callers retain it only when
+	// it also reduces the full Euclidean maximum.
+	[[nodiscard]] std::optional<Vec2> CenteringOffset(ForwardResult const& candidate) const {
+		Vec2 minimum{.x = std::numeric_limits<double>::infinity(), .y = std::numeric_limits<double>::infinity()};
+		Vec2 maximum{.x = -std::numeric_limits<double>::infinity(), .y = -std::numeric_limits<double>::infinity()};
+		for (std::size_t index = 0; index < samples.size(); ++index) {
+			auto const actual = candidate.transform.Map(samples[index]);
+			if (!actual)
+				return std::nullopt;
+			Vec2 const error = *actual - projected[index];
+			minimum.x = std::min(minimum.x, error.x);
+			minimum.y = std::min(minimum.y, error.y);
+			maximum.x = std::max(maximum.x, error.x);
+			maximum.y = std::max(maximum.y, error.y);
+		}
+		return (minimum + maximum) * -0.5;
+	}
+
+	private:
+	static bool ValidDenominators(double minimum, double maximum) {
+		// The denominator is linear. A consistent sign at every sample proves
+		// that their convex hull (including border/shadow/control geometry)
+		// cannot cross the projection horizon between finite sample points.
+		double const epsilon = 128.0 * std::numeric_limits<double>::epsilon() * std::max(std::abs(minimum), std::abs(maximum));
+		return std::isfinite(minimum) && std::isfinite(maximum) && (minimum > epsilon || maximum < -epsilon);
 	}
 };
 
@@ -396,6 +440,7 @@ CandidateScore ScoreCandidate(
 		+ std::abs(candidate.shear_x) + std::abs(candidate.shear_y)
 		+ (std::abs(candidate.rotation_x) + std::abs(candidate.rotation_y)
 			+ std::abs(candidate.rotation_z)) / 180.0;
+	score.emitted_tag_count = score.changed_tag_count;
 	return score;
 }
 
@@ -409,71 +454,265 @@ bool BetterScore(CandidateScore const& left, CandidateScore const& right) {
 	// that, a drag the restricted subset cannot express would let the unchanged
 	// source win on tag economy and the tool would look broken.
 	return std::tie(
-		left.fit_consistency_penalty,
-		left.snapped,
-		left.snap_bucket,
-		left_no_op_penalty,
-		left.explicit_origin_penalty,
-		left.perspective_penalty,
-		left.non_fax_shear_penalty,
-		left.changed_tag_count,
-		left.token_count,
-		left.condition_penalty,
-		left.family_rank,
-		left.residual)
-		< std::tie(
-			right.fit_consistency_penalty,
-			right.snapped,
-			right.snap_bucket,
-			right_no_op_penalty,
-			right.explicit_origin_penalty,
-			right.perspective_penalty,
-			right.non_fax_shear_penalty,
-			right.changed_tag_count,
-			right.token_count,
-			right.condition_penalty,
-			right.family_rank,
-			right.residual);
+			   left.fit_consistency_penalty,
+			   left.snapped,
+			   left.snap_bucket,
+			   left_no_op_penalty,
+			   left.explicit_origin_penalty,
+			   left.perspective_penalty,
+			   left.non_fax_shear_penalty,
+			   left.emitted_tag_count,
+			   left.token_count,
+			   left.condition_penalty,
+			   left.family_rank,
+			   left.residual) < std::tie(right.fit_consistency_penalty,
+										 right.snapped,
+										 right.snap_bucket,
+										 right_no_op_penalty,
+										 right.explicit_origin_penalty,
+										 right.perspective_penalty,
+										 right.non_fax_shear_penalty,
+										 right.emitted_tag_count,
+										 right.token_count,
+										 right.condition_penalty,
+										 right.family_rank,
+										 right.residual);
 }
 
-template <typename Apply>
-void CompactField(
-	EvaluatedTransformState& state,
-	EvaluatedTransformState const& raw,
-	int maximum_decimals,
-	Apply&& apply,
-	SolverInput const& input,
-	ResidualReference const& reference) {
-	for (int decimals = 0; decimals <= maximum_decimals; ++decimals) {
-		auto trial = state;
-		apply(trial, raw, decimals);
-		auto const residual = StateResidual(input, reference, trial, input.max_error);
-		if (residual && *residual <= input.max_error) {
-			state = trial;
+std::pair<std::size_t, std::size_t> EdgeAnchorEndpoints(PerspectiveEdgeAnchor anchor);
+double HeldEdgeError(Quad const& landed, Quad const& drawn,
+					 std::pair<std::size_t, std::size_t> held, OutputCoordinateMapping mapping);
+
+bool HonorsEdgeAnchor(SolverInput const& input, ForwardResult const& landed) {
+	return input.edge_anchor == PerspectiveEdgeAnchor::None || HeldEdgeError(landed.quad, input.target,
+																			 EdgeAnchorEndpoints(input.edge_anchor), input.output_mapping) <= input.max_error;
+}
+
+struct QuantizationField {
+	double EvaluatedTransformState::*scalar = nullptr;
+	int component = 0;
+	int decimals = 0;
+
+	double& Value(EvaluatedTransformState& state) const {
+		if (scalar)
+			return state.*scalar;
+		switch (component) {
+			case 0: return state.position.x;
+			case 1: return state.position.y;
+			case 2: return state.origin->x;
+			default: return state.origin->y;
+		}
+	}
+	[[nodiscard]] double Value(EvaluatedTransformState const& state) const {
+		if (scalar)
+			return state.*scalar;
+		switch (component) {
+			case 0: return state.position.x;
+			case 1: return state.position.y;
+			case 2: return state.origin->x;
+			default: return state.origin->y;
+		}
+	}
+};
+
+std::vector<QuantizationField> QuantizationFields(
+	SolverInput const& input, EvaluatedTransformState const& raw) {
+	int const decimals = ClampPerspectiveDecimalPlaces(input.maximum_decimals);
+	int const position = FieldDecimals(decimals, kPositionDecimals);
+	bool const restricted = input.representation_policy == PerspectiveRepresentationPolicy::FaxFrzOnly;
+	bool const multiline = input.source.bounds.multiline_text;
+	std::vector<QuantizationField> fields;
+	fields.reserve(11);
+	fields.push_back({.scalar = nullptr, .component = 0, .decimals = position});
+	fields.push_back({.scalar = nullptr, .component = 1, .decimals = position});
+	if (raw.origin && !restricted) {
+		fields.push_back({.scalar = nullptr, .component = 2, .decimals = position});
+		fields.push_back({.scalar = nullptr, .component = 3, .decimals = position});
+	}
+	auto const add = [&](double EvaluatedTransformState::*field, int cap) {
+		// Inherited style values need no digits in the output. Rounding them
+		// would add a tag and discard the constrained refit's intended saving.
+		if (input.measure_tag_cost && input.event_style && NearlyEqual(raw.*field, input.event_style.value().*field))
 			return;
+		fields.push_back({.scalar = field, .component = 0, .decimals = FieldDecimals(decimals, cap)});
+	};
+	if (input.scale_policy == PerspectiveScalePolicy::Fit) {
+		add(&EvaluatedTransformState::scale_x, kScaleDecimals);
+		add(&EvaluatedTransformState::scale_y, kScaleDecimals);
+	}
+	if (!multiline)
+		add(&EvaluatedTransformState::shear_x, kShearDecimals);
+	if (!restricted && !multiline)
+		add(&EvaluatedTransformState::shear_y, kShearDecimals);
+	if (!restricted) {
+		add(&EvaluatedTransformState::rotation_x, kRotationDecimals);
+		add(&EvaluatedTransformState::rotation_y, kRotationDecimals);
+	}
+	if (!input.locked_rotation_z)
+		add(&EvaluatedTransformState::rotation_z, kRotationDecimals);
+	return fields;
+}
+
+// Search one-step single and paired moves around maximum-precision rounding.
+// Position and angle/scale errors can cancel at an adjacent decimal grid point.
+void RepairQuantization(
+	SolverInput const& input, ResidualReference const& reference,
+	std::span<QuantizationField const> fields, EvaluatedTransformState const& raw,
+	EvaluatedTransformState& state,
+	std::optional<double>& residual) {
+	auto const initial = state;
+	std::optional<PerspectiveTagCost> best_cost;
+	auto const consider = [&](EvaluatedTransformState const& trial) {
+		auto const landed = ForwardQuad(input.source, trial);
+		if (!landed)
+			return false;
+		auto const error = reference.Measure(landed);
+		bool const feasible = error && *error <= input.max_error && HonorsEdgeAnchor(input, landed);
+		if (feasible && !input.measure_tag_cost) {
+			// The initial rounding may have less model error but miss the held
+			// edge. Any fully feasible neighbor must be allowed to replace it.
+			state = trial;
+			residual = error;
+			return true;
+		}
+		if (feasible && input.measure_tag_cost) {
+			auto const cost = input.measure_tag_cost(trial,
+													 Serialize(trial, input.maximum_decimals), input.scale_policy);
+			if (cost && (!best_cost || std::tie(cost->tag_count, cost->byte_count) < std::tie(best_cost->tag_count, best_cost->byte_count) || (std::tie(cost->tag_count, cost->byte_count) == std::tie(best_cost->tag_count, best_cost->byte_count) && *error < *residual))) {
+				state = trial;
+				residual = error;
+				best_cost = cost;
+			}
+			return false;
+		}
+		if (best_cost)
+			return false;
+		if (error && (!residual || *error < *residual)) {
+			state = trial;
+			residual = error;
+		}
+		return false;
+	};
+	for (std::size_t first = 0; first < fields.size(); ++first) {
+		if (fields[first].Value(initial) == fields[first].Value(raw))
+			continue;
+		double const step = std::pow(10.0, -fields[first].decimals);
+		for (int direction : {-1, 1}) {
+			auto trial = initial;
+			fields[first].Value(trial) += direction * step;
+			if (consider(trial))
+				return;
+			for (std::size_t second = first + 1; second < fields.size(); ++second) {
+				if (fields[second].Value(initial) == fields[second].Value(raw))
+					continue;
+				double const other_step = std::pow(10.0, -fields[second].decimals);
+				for (int other_direction : {-1, 1}) {
+					auto pair = trial;
+					fields[second].Value(pair) += other_direction * other_step;
+					if (consider(pair))
+						return;
+				}
+			}
 		}
 	}
 }
 
-void CompactScalar(
-	EvaluatedTransformState& state,
-	EvaluatedTransformState const& raw,
-	double EvaluatedTransformState::*field,
-	int maximum_decimals,
-	SolverInput const& input,
-	ResidualReference const& reference) {
-	for (int decimals = 0; decimals <= maximum_decimals; ++decimals) {
-		double const value = Quantize(raw.*field, decimals);
-		// The current state already passed the budget; unchanged fields need
-		// no additional projection or residual scan.
-		if (value == state.*field)
+void CompactQuantization(
+	SolverInput const& input, ResidualReference const& reference,
+	ResidualReference const& target, std::span<QuantizationField const> fields,
+	EvaluatedTransformState const& raw, EvaluatedTransformState& state) {
+	struct Proposal {
+		std::size_t field;
+		double value;
+		std::size_t saved;
+		double error;
+	};
+	std::vector<Proposal> proposals;
+	proposals.reserve(fields.size() * kMaxPerspectiveDecimalPlaces);
+	for (std::size_t index = 0; index < fields.size(); ++index) {
+		auto const& field = fields[index];
+		auto const original_size = FormatAssNumber(field.Value(state), field.decimals).size();
+		std::optional<double> previous_value;
+		for (int decimals = 0; decimals < field.decimals; ++decimals) {
+			double const value = Quantize(field.Value(raw), decimals);
+			// Successive decimal caps can produce the same value and spelling.
+			// Retain one trial so duplicates do not consume the pair shortlist.
+			if (previous_value && *previous_value == value)
+				continue;
+			previous_value = value;
+			auto const size = FormatAssNumber(value, decimals).size();
+			if (size >= original_size)
+				continue;
+			auto trial = state;
+			field.Value(trial) = value;
+			auto const error = StateResidual(input, reference, trial);
+			if (error)
+				proposals.push_back({.field = index, .value = value, .saved = original_size - size, .error = *error});
+		}
+	}
+	if (proposals.empty())
+		return;
+	std::optional<PerspectiveTagCost> current_cost;
+	if (input.measure_tag_cost) {
+		current_cost = input.measure_tag_cost(state,
+											  Serialize(state, input.maximum_decimals), input.scale_policy);
+		if (!current_cost)
 			return;
+	}
+	std::ranges::stable_sort(proposals, [](auto const& left, auto const& right) {
+		return left.saved != right.saved ? left.saved > right.saved : left.error < right.error;
+	});
+	auto const initial_total = StateResidual(input, target, state);
+	bool const in_band = initial_total && *initial_total <= input.shape_tolerance;
+	auto const acceptable = [&](EvaluatedTransformState const& trial) {
+		auto const landed = ForwardQuad(input.source, trial);
+		if (!landed || !HonorsEdgeAnchor(input, landed))
+			return false;
+		auto const error = reference.Measure(landed, input.max_error);
+		if (!error || *error > input.max_error)
+			return false;
+		if (in_band) {
+			auto const total = target.Measure(landed, input.shape_tolerance);
+			if (!total || *total > input.shape_tolerance)
+				return false;
+		}
+		if (current_cost) {
+			auto const cost = input.measure_tag_cost(trial,
+													 Serialize(trial, input.maximum_decimals), input.scale_policy);
+			if (!cost || std::tie(cost->tag_count, cost->byte_count) > std::tie(current_cost->tag_count, current_cost->byte_count))
+				return false;
+			current_cost = cost;
+		}
+		return true;
+	};
+	auto const shorter = [&](Proposal const& proposal) {
+		auto const& field = fields[proposal.field];
+		return FormatAssNumber(proposal.value, field.decimals).size() < FormatAssNumber(field.Value(state), field.decimals).size();
+	};
+	std::vector<Proposal> rejected;
+	for (auto const& proposal : proposals) {
+		if (!shorter(proposal))
+			continue;
 		auto trial = state;
-		trial.*field = value;
-		auto const residual = StateResidual(input, reference, trial, input.max_error);
-		if (residual && *residual <= input.max_error) {
+		fields[proposal.field].Value(trial) = proposal.value;
+		if (acceptable(trial))
 			state = trial;
-			return;
+		else if (rejected.size() < 12)
+			rejected.push_back(proposal);
+	}
+	// A bounded shortlist allows two fields to become shorter together even
+	// when neither independent rounding meets the geometric budget.
+	for (std::size_t first = 0; first < rejected.size(); ++first) {
+		for (std::size_t second = first + 1; second < rejected.size(); ++second) {
+			auto const& left = rejected[first];
+			auto const& right = rejected[second];
+			if (left.field == right.field || !shorter(left) || !shorter(right))
+				continue;
+			auto trial = state;
+			fields[left.field].Value(trial) = left.value;
+			fields[right.field].Value(trial) = right.value;
+			if (acceptable(trial))
+				state = trial;
 		}
 	}
 }
@@ -577,103 +816,81 @@ QuantizeOutcome QuantizeCandidate(
 	auto const snap_error = target.Measure(forward);
 	if (!snap_error)
 		return StageRejection(QuantizeStage::ModelRejected);
-	bool const snapped = *snap_error > input.max_error;
 	// Doing nothing is only an answer when nothing was needed. NoOp skips
 	// digit rounding entirely, so without this gate it outlives every real
 	// family whenever coarse decimals kill them, and "wins" with the line
 	// left exactly where it was, however far that is from the target.
-	if (family == CandidateFamily::NoOp && snapped)
+	if (family == CandidateFamily::NoOp && *snap_error > input.max_error)
 		return StageRejection(QuantizeStage::ModelRejected);
-	// A snapped model's digits are measured against its own geometry.
-	if (snapped && !model_reference.Reset(forward.transform))
+	// Numeric precision always measures against the unrounded model. Model
+	// fitting and serialization must not silently change reference frames.
+	if (!model_reference.Reset(forward.transform))
 		return StageRejection(QuantizeStage::ModelRejected);
-	auto const& reference = snapped ? model_reference : target;
+	auto const& reference = model_reference;
 	auto state = raw;
 	int const maximum_decimals = ClampPerspectiveDecimalPlaces(input.maximum_decimals);
-	int const position_decimals = FieldDecimals(maximum_decimals, kPositionDecimals);
-	int const scale_decimals = FieldDecimals(maximum_decimals, kScaleDecimals);
-	int const shear_decimals = FieldDecimals(maximum_decimals, kShearDecimals);
-	int const rotation_decimals = FieldDecimals(maximum_decimals, kRotationDecimals);
-	// Restricted fields and multiline shear keep their source spelling.
-	// All other fields must match the decimals Serialize will emit.
-	bool const restricted = input.representation_policy
-		== PerspectiveRepresentationPolicy::FaxFrzOnly;
-	bool const multiline = input.source.bounds.multiline_text;
+	auto const fields = QuantizationFields(input, raw);
 	if (family != CandidateFamily::NoOp) {
-		state.position = {
-			Quantize(raw.position.x, position_decimals),
-			Quantize(raw.position.y, position_decimals)};
-		if (raw.origin && !restricted)
-			state.origin = Vec2 {
-				Quantize(raw.origin->x, position_decimals),
-				Quantize(raw.origin->y, position_decimals)};
-		if (input.scale_policy == PerspectiveScalePolicy::Fit) {
-			state.scale_x = Quantize(raw.scale_x, scale_decimals);
-			state.scale_y = Quantize(raw.scale_y, scale_decimals);
-		}
-		else {
+		for (auto const& field : fields)
+			field.Value(state) = Quantize(field.Value(raw), field.decimals);
+		if (input.scale_policy == PerspectiveScalePolicy::Preserve) {
 			state.scale_x = input.source.state.scale_x;
 			state.scale_y = input.source.state.scale_y;
 		}
-		if (!multiline)
-			state.shear_x = Quantize(raw.shear_x, shear_decimals);
-		if (!restricted && !multiline)
-			state.shear_y = Quantize(raw.shear_y, shear_decimals);
-		if (!restricted) {
-			state.rotation_x = Quantize(raw.rotation_x, rotation_decimals);
-			state.rotation_y = Quantize(raw.rotation_y, rotation_decimals);
-		}
-		state.rotation_z = Quantize(raw.rotation_z, rotation_decimals);
 	}
-	auto residual = StateResidual(input, reference, state);
+	auto const rounded = ForwardQuad(input.source, state);
+	auto residual = rounded ? reference.Measure(rounded) : std::nullopt;
+	if (family != CandidateFamily::NoOp && (!residual || *residual > input.max_error || !HonorsEdgeAnchor(input, rounded)))
+		RepairQuantization(input, reference, fields, raw, state, residual);
 	if (!residual)
 		return StageRejection(QuantizeStage::QuantizationRejected);
 	if (*residual > input.max_error)
 		return RejectedQuantization(*residual, input.max_error);
 
 	if (family != CandidateFamily::NoOp && family != CandidateFamily::PreserveShapeAffine) {
-		CompactField(state, raw, position_decimals, [](auto& value, auto const& original, int decimals) { value.position = {Quantize(original.position.x, decimals), Quantize(original.position.y, decimals)}; }, input, reference);
-		if (raw.origin && !restricted) {
-			CompactField(state, raw, position_decimals, [](auto& value, auto const& original, int decimals) { value.origin = Vec2{Quantize(original.origin->x, decimals), Quantize(original.origin->y, decimals)}; }, input, reference);
-		}
-		if (input.scale_policy == PerspectiveScalePolicy::Fit) {
-			CompactScalar(state, raw, &EvaluatedTransformState::scale_x, scale_decimals, input, reference);
-			CompactScalar(state, raw, &EvaluatedTransformState::scale_y, scale_decimals, input, reference);
-		}
-		if (!multiline)
-			CompactScalar(state, raw, &EvaluatedTransformState::shear_x, shear_decimals, input, reference);
-		if (!restricted && !multiline)
-			CompactScalar(state, raw, &EvaluatedTransformState::shear_y, shear_decimals, input, reference);
-		if (!restricted) {
-			CompactScalar(state, raw, &EvaluatedTransformState::rotation_x, rotation_decimals, input, reference);
-			CompactScalar(state, raw, &EvaluatedTransformState::rotation_y, rotation_decimals, input, reference);
-		}
-		CompactScalar(state, raw, &EvaluatedTransformState::rotation_z, rotation_decimals, input, reference);
+		CompactQuantization(input, reference, target, fields, raw, state);
+	}
+	if (family != CandidateFamily::NoOp) {
+		// Adjacent-grid additions may carry binary rounding beyond the final
+		// decimal spelling. Measure the exact values Serialize will write.
+		for (auto const& field : fields)
+			field.Value(state) = Quantize(field.Value(state), field.decimals);
 	}
 
-	auto const quantization_error = StateResidual(input, reference, state);
+	auto const final_forward = ForwardQuad(input.source, state);
+	if (!final_forward)
+		return StageRejection(QuantizeStage::QuantizationRejected);
+	auto const quantization_error = reference.Measure(final_forward);
 	if (!quantization_error)
 		return StageRejection(QuantizeStage::QuantizationRejected);
 	if (*quantization_error > input.max_error)
 		return RejectedQuantization(*quantization_error, input.max_error);
 	// Total is measured against the drawn quad, so it stays comparable with the
 	// value the staged verification recomputes after the tags are written.
-	auto const total_error = snapped ? StateResidual(input, target, state) : quantization_error;
+	auto const total_error = target.Measure(final_forward);
 	if (!total_error)
 		return StageRejection(QuantizeStage::QuantizationRejected);
 	auto serialized = Serialize(state, maximum_decimals);
 	auto score = ScoreCandidate(
 		input.source.state, state, serialized, family, *total_error);
+	if (input.measure_tag_cost) {
+		auto const cost = input.measure_tag_cost(state, serialized, input.scale_policy);
+		if (!cost)
+			return StageRejection(QuantizeStage::ModelRejected);
+		score.emitted_tag_count = cost->tag_count;
+		score.token_count = cost->byte_count;
+	}
+	bool const snapped = *total_error > input.shape_tolerance;
 	score.snapped = snapped ? 1 : 0;
 	score.snap_bucket = snapped
-							? SnapBucket(*snap_error, input.max_error)
+							? SnapBucket(*snap_error, input.shape_tolerance)
 							: 0;
 	if (family == CandidateFamily::PreserveFitState) {
 		double const shape_error = HomotheticShapeError(
 			input.target, forward.quad, input.output_mapping);
-		score.fit_consistency_penalty = shape_error <= input.max_error
-			? -1
-			: SnapBucket(shape_error, input.max_error);
+		score.fit_consistency_penalty = shape_error <= input.shape_tolerance
+											? -1
+											: SnapBucket(shape_error, input.shape_tolerance);
 	}
 	SolverCandidate candidate{
 		.family = family,
@@ -826,10 +1043,58 @@ std::optional<AffineMap> FitAffine(
 	return result;
 }
 
+// Closed-form decompositions use Euclidean lengths and angles. A script X
+// coordinate is not that metric when LayoutRes and PlayRes have
+// different aspect ratios: solve D*A*D^-1 in layout units, then restore only
+// position/origin to script units. Scale, shear and rotation remain ASS tags.
+ForwardInput InLayoutMetric(ForwardInput source, double aspect) {
+	source.play_resolution.width *= aspect;
+	source.bounds.rectangle.left *= aspect;
+	source.bounds.rectangle.right *= aspect;
+	if (source.bounds.alignment_extent)
+		source.bounds.alignment_extent->width *= aspect;
+	source.bounds.alignment_offset.x *= aspect;
+	for (auto& point : source.bounds.residual_samples)
+		point.x *= aspect;
+	source.state.position.x *= aspect;
+	if (source.state.origin)
+		source.state.origin->x *= aspect;
+	return source;
+}
+
+Quad ScaleQuadX(Quad quad, double factor) {
+	for (auto& point : quad)
+		point.x *= factor;
+	return quad;
+}
+
+AffineMap InLayoutMetric(AffineMap map, double aspect) {
+	map.a01 *= aspect;
+	map.a10 /= aspect;
+	map.b0 *= aspect;
+	return map;
+}
+
+std::optional<EvaluatedTransformState> FromLayoutMetric(
+	std::optional<EvaluatedTransformState> state, double aspect) {
+	if (state) {
+		state->position.x /= aspect;
+		if (state->origin)
+			state->origin->x /= aspect;
+	}
+	return state;
+}
+
 std::optional<EvaluatedTransformState> DecomposeAffine(
 	AffineMap const& map,
 	ForwardInput const& source,
-	bool use_fay) {
+	bool use_fay,
+	double layout_aspect = 1.0) {
+	if (layout_aspect != 1.0)
+		return FromLayoutMetric(DecomposeAffine(
+									InLayoutMetric(map, layout_aspect),
+									InLayoutMetric(source, layout_aspect), use_fay),
+								layout_aspect);
 	auto state = source.state;
 	state.origin.reset();
 	state.rotation_x = 0.0;
@@ -880,7 +1145,13 @@ std::optional<EvaluatedTransformState> DecomposeAffine(
 std::optional<EvaluatedTransformState> DecomposeLockedAffine(
 	AffineMap const& map,
 	ForwardInput const& source,
-	double locked_rotation_z) {
+	double locked_rotation_z,
+	double layout_aspect = 1.0) {
+	if (layout_aspect != 1.0)
+		return FromLayoutMetric(DecomposeLockedAffine(
+									InLayoutMetric(map, layout_aspect),
+									InLayoutMetric(source, layout_aspect), locked_rotation_z),
+								layout_aspect);
 	// Repository-local fixed-angle decomposition. Holding frz constant frees
 	// its optimizer slot for the second shear without over-parameterizing the
 	// eight degrees of freedom of a quad homography.
@@ -920,7 +1191,13 @@ std::optional<EvaluatedTransformState> DecomposeLockedAffine(
 
 std::optional<EvaluatedTransformState> TranslationCandidate(
 	AffineMap const& map,
-	ForwardInput const& source) {
+	ForwardInput const& source,
+	double layout_aspect = 1.0) {
+	if (layout_aspect != 1.0)
+		return FromLayoutMetric(TranslationCandidate(
+									InLayoutMetric(map, layout_aspect),
+									InLayoutMetric(source, layout_aspect)),
+								layout_aspect);
 	double const tolerance = 1.0e-10;
 	if (std::abs(map.a00 - 1.0) > tolerance || std::abs(map.a11 - 1.0) > tolerance
 		|| std::abs(map.a01) > tolerance || std::abs(map.a10) > tolerance)
@@ -941,7 +1218,13 @@ std::optional<EvaluatedTransformState> TranslationCandidate(
 
 std::optional<EvaluatedTransformState> SimilarityCandidate(
 	AffineMap const& map,
-	ForwardInput const& source) {
+	ForwardInput const& source,
+	double layout_aspect = 1.0) {
+	if (layout_aspect != 1.0)
+		return FromLayoutMetric(SimilarityCandidate(
+									InLayoutMetric(map, layout_aspect),
+									InLayoutMetric(source, layout_aspect)),
+								layout_aspect);
 	auto candidate = DecomposeAffine(map, source, false);
 	if (!candidate)
 		return std::nullopt;
@@ -998,7 +1281,20 @@ struct PreserveShapeAffineResult {
 std::optional<PreserveShapeAffineResult> PreserveShapeAffineCandidate(
 	SolverInput const& input,
 	Quad const& target,
-	std::optional<double> locked_rotation_z) {
+	std::optional<double> locked_rotation_z,
+	double layout_aspect = 1.0) {
+	if (layout_aspect != 1.0) {
+		auto normalized = input;
+		normalized.source = InLayoutMetric(input.source, layout_aspect);
+		normalized.output_mapping.scale_x /= layout_aspect;
+		auto result = PreserveShapeAffineCandidate(normalized,
+												   ScaleQuadX(target, layout_aspect), locked_rotation_z);
+		if (result) {
+			result->state = *FromLayoutMetric(result->state, layout_aspect);
+			result->effective_target = ScaleQuadX(result->effective_target, 1.0 / layout_aspect);
+		}
+		return result;
+	}
 	if (!IsParallelogram(target))
 		return std::nullopt;
 	double const width = input.source.bounds.rectangle.Width();
@@ -1081,7 +1377,20 @@ std::optional<PreserveShapeAffineResult> PreserveShapeAffineCandidate(
 std::optional<PreserveShapeAffineResult> PreserveRectangleFallback(
 	SolverInput const& input,
 	Quad const& target,
-	std::optional<double> locked_rotation_z) {
+	std::optional<double> locked_rotation_z,
+	double layout_aspect = 1.0) {
+	if (layout_aspect != 1.0) {
+		auto normalized = input;
+		normalized.source = InLayoutMetric(input.source, layout_aspect);
+		normalized.output_mapping.scale_x /= layout_aspect;
+		auto result = PreserveRectangleFallback(normalized,
+												ScaleQuadX(target, layout_aspect), locked_rotation_z);
+		if (result) {
+			result->state = *FromLayoutMetric(result->state, layout_aspect);
+			result->effective_target = ScaleQuadX(result->effective_target, 1.0 / layout_aspect);
+		}
+		return result;
+	}
 	if (!IsRectangle(target))
 		return std::nullopt;
 	double const width = input.source.bounds.rectangle.Width();
@@ -1181,7 +1490,15 @@ std::optional<PreserveShapeAffineResult> PreserveRectangleFallback(
 std::optional<EvaluatedTransformState> ExplicitOriginCandidate(
 	SolverInput const& input,
 	Quad const& target,
-	ForwardResult const& projection_context) {
+	ForwardResult const& projection_context,
+	double layout_aspect = 1.0) {
+	if (layout_aspect != 1.0) {
+		auto normalized = input;
+		normalized.source = InLayoutMetric(input.source, layout_aspect);
+		return FromLayoutMetric(ExplicitOriginCandidate(normalized,
+														ScaleQuadX(target, layout_aspect), projection_context),
+								layout_aspect);
+	}
 	auto const center = QuadCenter(target);
 	if (!center)
 		return std::nullopt;
@@ -1355,6 +1672,8 @@ std::optional<EvaluatedTransformState> StateFromParameters(
 bool IsFixedImplicitParameter(std::size_t index, ImplicitModel model) {
 	if (model.preserve_scale && (index == 2 || index == 3))
 		return true;
+	if ((model.preserve_scale_x && index == 2) || (model.preserve_scale_y && index == 3))
+		return true;
 	if (model.preserve_shear_x && index == 4)
 		return true;
 	if (model.preserve_shear_y && index == 5)
@@ -1433,7 +1752,8 @@ std::optional<EvaluatedTransformState> OptimizeImplicitOrigin(
 	SolverInput const& input,
 	Quad const& target,
 	EvaluatedTransformState const& initial,
-	ImplicitModel model) {
+	ImplicitModel model,
+	int maximum_iterations = 80) {
 	Parameters parameters = ParametersFromState(initial);
 	// Multiline shear belongs to the layout, regardless of the family's seed.
 	if (input.source.bounds.multiline_text) {
@@ -1447,7 +1767,7 @@ std::optional<EvaluatedTransformState> OptimizeImplicitOrigin(
 	if (!EvaluateParameters(input, target, parameters, model, residual, cost))
 		return std::nullopt;
 	double damping = 1.0e-3;
-	for (int iteration = 0; iteration < 80; ++iteration) {
+	for (int iteration = 0; iteration < maximum_iterations; ++iteration) {
 		std::array<ResidualVector, ParameterCount> derivatives {};
 		for (std::size_t column = 0; column < ParameterCount; ++column) {
 			if (IsFixedImplicitParameter(column, model))
@@ -1990,12 +2310,13 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 			return {SolverError::InvalidSource, GeometryError::None,
 				projection_context.error};
 	}
+	double const layout_aspect = *ResolvePerspectiveLayoutAspect(request.source);
 	auto const target_validation = ValidateQuad(request.target);
 	if (!target_validation)
 		return {SolverError::InvalidTarget, target_validation.error};
 	if (!IsValidOutputMapping(request.output_mapping))
 		return {SolverError::InvalidOutputMapping};
-	if (!std::isfinite(request.max_error) || request.max_error <= 0.0)
+	if (!std::isfinite(request.max_error) || request.max_error <= 0.0 || !std::isfinite(request.shape_tolerance) || request.shape_tolerance <= 0.0)
 		return {.error = SolverError::InvalidErrorBudget};
 	// Residual samples are immutable for one solve. Build them once instead of
 	// reallocating custom drawing samples for every candidate trial.
@@ -2087,10 +2408,10 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 	std::optional<PreserveShapeAffineResult> preserve_shape;
 	if (preserve_parallelogram && request.representation_policy == PerspectiveRepresentationPolicy::Automatic && !multiline) {
 		preserve_shape = PreserveShapeAffineCandidate(
-			request, affine_target, request.locked_rotation_z);
-		if (!preserve_shape && IsRectangle(affine_target))
+			request, affine_target, request.locked_rotation_z, layout_aspect);
+		if (!preserve_shape && IsRectangle(ScaleQuadX(affine_target, layout_aspect)))
 			preserve_shape = PreserveRectangleFallback(
-				request, affine_target, request.locked_rotation_z);
+				request, affine_target, request.locked_rotation_z, layout_aspect);
 		if (preserve_shape)
 			raw_candidates.push_back({.family = CandidateFamily::PreserveShapeAffine,
 									  .state = preserve_shape->state,
@@ -2102,7 +2423,7 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 	// candidate to compete would trade a modest size shortfall for a visibly
 	// skewed inner frame.
 	bool const preserve_shape_available =
-		preserve_shape && (preserve_shape->exact || IsRectangle(affine_target));
+		preserve_shape && (preserve_shape->exact || IsRectangle(ScaleQuadX(affine_target, layout_aspect)));
 	// The Fit decomposition is the useful continuity anchor only for an
 	// unrestricted projective solve. Restricted Fax + Frz solves and the
 	// dedicated affine shape candidates have stronger representation contracts
@@ -2134,30 +2455,30 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 		if (preserve_scale || multiline) {
 			// Refit the free parameters at the pinned scale/shear. Similarity
 			// already covers translation without resetting those fields.
-			if (auto const seed = SimilarityCandidate(*affine, request.source))
+			if (auto const seed = SimilarityCandidate(*affine, request.source, layout_aspect))
 				add_refit(CandidateFamily::Similarity, *seed,
 						  {.preserve_scale = preserve_scale, .preserve_plane = true, .preserve_shear_x = true, .preserve_shear_y = true}, affine_target);
-			if (auto const seed = DecomposeAffine(*affine, request.source, false))
+			if (auto const seed = DecomposeAffine(*affine, request.source, false, layout_aspect))
 				add_refit(CandidateFamily::AffineFax, *seed,
 						  {.preserve_scale = preserve_scale, .preserve_plane = true, .preserve_shear_y = true}, affine_target);
 			if (request.representation_policy == PerspectiveRepresentationPolicy::Automatic) {
-				if (auto const seed = DecomposeAffine(*affine, request.source, true))
+				if (auto const seed = DecomposeAffine(*affine, request.source, true, layout_aspect))
 					add_refit(CandidateFamily::AffineFay, *seed,
 							  {.preserve_scale = preserve_scale, .preserve_plane = true, .preserve_shear_x = true}, affine_target);
 			}
 		}
 		else {
-			if (auto const candidate = TranslationCandidate(*affine, request.source))
+			if (auto const candidate = TranslationCandidate(*affine, request.source, layout_aspect))
 				raw_candidates.push_back({CandidateFamily::Translation, *candidate,
 										  affine_target});
-			if (auto const candidate = SimilarityCandidate(*affine, request.source))
+			if (auto const candidate = SimilarityCandidate(*affine, request.source, layout_aspect))
 				raw_candidates.push_back({CandidateFamily::Similarity, *candidate,
 										  affine_target});
-			if (auto const candidate = DecomposeAffine(*affine, request.source, false))
+			if (auto const candidate = DecomposeAffine(*affine, request.source, false, layout_aspect))
 				raw_candidates.push_back({CandidateFamily::AffineFax, *candidate,
 										  affine_target});
 			if (request.representation_policy == PerspectiveRepresentationPolicy::Automatic) {
-				if (auto const candidate = DecomposeAffine(*affine, request.source, true))
+				if (auto const candidate = DecomposeAffine(*affine, request.source, true, layout_aspect))
 					raw_candidates.push_back({CandidateFamily::AffineFay, *candidate,
 											  affine_target});
 			}
@@ -2245,7 +2566,7 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 			if (auto const local_affine = LocalAffine(target_transform, source_center)) {
 				if (request.locked_rotation_z) {
 					if (auto const initial = DecomposeLockedAffine(
-							*local_affine, request.source, *request.locked_rotation_z)) {
+							*local_affine, request.source, *request.locked_rotation_z, layout_aspect)) {
 						ImplicitModel const model{
 							.preserve_scale = preserve_scale,
 							.preserve_rotation_z = true,
@@ -2260,7 +2581,7 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 				else {
 					for (bool const use_fay : {false, true}) {
 						if (auto const initial = DecomposeAffine(
-								*local_affine, request.source, use_fay)) {
+								*local_affine, request.source, use_fay, layout_aspect)) {
 							ImplicitModel model;
 							model.preserve_scale = preserve_scale;
 							// One shear axis per family, frozen at the decomposed
@@ -2291,7 +2612,7 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 						run_family(CandidateFamily::ProjectiveExplicitOrigin,
 								   [&](Quad const& aim) {
 									   auto const initial = ExplicitOriginCandidate(
-										   request, aim, projection_context);
+										   request, aim, projection_context, layout_aspect);
 									   if (!initial)
 										   return std::optional<EvaluatedTransformState>{};
 									   return OptimizeFixedScaleExplicitOrigin(
@@ -2303,7 +2624,7 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 					run_family(CandidateFamily::ProjectiveExplicitOrigin,
 							   [&](Quad const& aim) {
 								   return ExplicitOriginCandidate(
-									   request, aim, projection_context);
+									   request, aim, projection_context, layout_aspect);
 							   });
 				}
 			}
@@ -2315,6 +2636,99 @@ SolverResult SolvePerspectiveTags(SolverInput const& request) {
 				affine_target, affine_target_transform.value());
 		else
 			generate_projective(drawn_target, drawn_target_transform.value);
+	}
+
+	// Refit a small set of useful style constraints around the best ordinary
+	// implicit representation. Each frozen style value can remove a tag; the
+	// remaining parameters must earn that saving by fitting the target again.
+	if (request.event_style && !preserve_scale && !preserve_shape_available) {
+		std::optional<std::size_t> seed_index;
+		std::optional<CandidateScore> seed_score;
+		for (std::size_t index = 0; index < raw_candidates.size(); ++index) {
+			auto const& raw = raw_candidates[index];
+			if (raw.state.origin || raw.family == CandidateFamily::NoOp)
+				continue;
+			auto const transform = MakeHomography(request.source.bounds.rectangle, raw.effective_target);
+			if (!transform || !target_reference.Reset(transform.value))
+				continue;
+			auto const error = StateResidual(request, target_reference, raw.state);
+			if (!error || *error > request.shape_tolerance)
+				continue;
+			auto const score = ScoreCandidate(request.source.state, raw.state,
+											  Serialize(raw.state, request.maximum_decimals), raw.family, *error);
+			if (!seed_score || BetterScore(score, *seed_score)) {
+				seed_score = score;
+				seed_index = index;
+			}
+		}
+		if (seed_index) {
+			auto const base = raw_candidates[*seed_index];
+			for (int constraint = 0; constraint < 3; ++constraint) {
+				auto seed = base.state;
+				ImplicitModel model;
+				model.preserve_plane = std::abs(seed.rotation_x) <= 1.0e-9 && std::abs(seed.rotation_y) <= 1.0e-9;
+				model.preserve_shear_y = true;
+				model.preserve_rotation_z = request.locked_rotation_z.has_value();
+				model.locked_rotation_z = request.locked_rotation_z;
+				if (constraint == 0) {
+					if (NearlyEqual(seed.scale_x, request.event_style->scale_x))
+						continue;
+					seed.scale_x = request.event_style->scale_x;
+					model.preserve_scale_x = true;
+				}
+				else if (constraint == 1) {
+					if (NearlyEqual(seed.scale_y, request.event_style->scale_y))
+						continue;
+					seed.scale_y = request.event_style->scale_y;
+					model.preserve_scale_y = true;
+				}
+				else {
+					if (request.locked_rotation_z || EquivalentRotation(seed.rotation_z, request.event_style->rotation_z))
+						continue;
+					seed.rotation_z = request.event_style->rotation_z;
+					model.preserve_rotation_z = true;
+				}
+				if (auto state = OptimizeImplicitOrigin(request, base.effective_target, seed, model, 24)) {
+					if (constraint == 0)
+						state->scale_x = request.event_style->scale_x;
+					else if (constraint == 1)
+						state->scale_y = request.event_style->scale_y;
+					else
+						state->rotation_z = request.event_style->rotation_z;
+					raw_candidates.push_back({.family = CandidateFamily::StyleConstrainedRefit, .state = *state, .effective_target = base.effective_target});
+				}
+			}
+		}
+	}
+
+	// Corner least squares is only an initial fit. Rebalance the position of
+	// approximate implicit candidates over borders, shadows and drawing
+	// controls too, retaining the original whenever Euclidean error worsens.
+	// Preserve and anchored edges have stronger location contracts.
+	if (!preserve_scale && request.edge_anchor == PerspectiveEdgeAnchor::None) {
+		std::size_t const count = raw_candidates.size();
+		for (std::size_t index = 0; index < count; ++index) {
+			auto const raw = raw_candidates[index];
+			if (raw.state.origin || raw.family == CandidateFamily::NoOp)
+				continue;
+			auto const target = MakeHomography(request.source.bounds.rectangle, raw.effective_target);
+			if (!target || !target_reference.Reset(target.value))
+				continue;
+			auto const landed = ForwardQuad(request.source, raw.state);
+			if (!landed)
+				continue;
+			auto const original_error = target_reference.Measure(landed);
+			if (!original_error || *original_error <= request.shape_tolerance)
+				continue;
+			auto const offset = target_reference.CenteringOffset(landed);
+			if (!offset)
+				continue;
+			auto state = raw.state;
+			state.position = state.position + *offset;
+			auto const error = StateResidual(request, target_reference, state);
+			if (error && *error < *original_error)
+				raw_candidates.push_back({.family = raw.family, .state = state, .effective_target = raw.effective_target});
+		}
 	}
 
 	std::optional<SolverCandidate> best;

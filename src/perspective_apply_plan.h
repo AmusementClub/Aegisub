@@ -99,6 +99,11 @@ struct PerspectiveSourceSnapshot {
 [[nodiscard]] std::optional<Vec2> PerspectiveFirstEdgeDirection(
 	PerspectiveSourceSnapshot const& source);
 
+// Preview and Apply share source semantics and exact rewrite costs. The
+// caller supplies the target, output mapping and selected solve policies.
+void PreparePerspectiveSolverInput(
+	PerspectiveSourceSnapshot const& source, SolverInput& input);
+
 enum class PerspectivePlanError {
 	None,
 	InvalidInput,
@@ -185,7 +190,8 @@ class PerspectiveMutationPlan {
 		PerspectiveScalePolicy,
 		PerspectiveRepresentationPolicy,
 		int,
-		PerspectiveEdgeAnchor);
+		PerspectiveEdgeAnchor,
+		double);
 
 	public:
 	PerspectiveMutationPlan(PerspectiveMutationPlan const&) = default;
@@ -251,7 +257,8 @@ struct PerspectiveExecutionResult : PerspectivePlanDiagnostic {
 	int maximum_decimals = kMaxPerspectiveDecimalPlaces,
 	// Which drawn edge to hold exactly when the model has to give something up.
 	// See PerspectiveEdgeAnchor.
-	PerspectiveEdgeAnchor edge_anchor = PerspectiveEdgeAnchor::None);
+	PerspectiveEdgeAnchor edge_anchor = PerspectiveEdgeAnchor::None,
+	double shape_tolerance = 0.1);
 
 // Revalidates immediately before assigning Text. Commit ownership stays with
 // the host so it can supply the exact returned line as its changed-lines span.

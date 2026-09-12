@@ -31,6 +31,8 @@ TEST(perspective_visual_tool_options, default_configs_define_persistent_solve_op
 		// nothing on lines that never needed it.
 		EXPECT_EQ(4, options.Get("Tool/Visual/Perspective/Decimal Places")->GetInt())
 			<< relative_path;
+		EXPECT_DOUBLE_EQ(0.1, options.Get("Tool/Visual/Perspective/Shape Tolerance")->GetDouble())
+			<< relative_path;
 	}
 }
 
@@ -72,4 +74,5 @@ TEST(perspective_visual_tool_options, preferences_expose_all_persistent_perspect
 	EXPECT_NE(std::string::npos, text.find("Tool/Visual/Perspective/Fit Text"));
 	EXPECT_NE(std::string::npos, text.find("Tool/Visual/Perspective/Fax Frz Only"));
 	EXPECT_NE(std::string::npos, text.find("Tool/Visual/Perspective/Decimal Places"));
+	EXPECT_NE(std::string::npos, text.find("Tool/Visual/Perspective/Shape Tolerance"));
 }

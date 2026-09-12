@@ -20,6 +20,9 @@ struct AssBoundsInput {
 	AssDialogue const* line = nullptr;
 	EffectiveAssState const* state = nullptr;
 	AssTextExtentsProvider text_extents = nullptr;
+	// Ratio of the layout's horizontal and vertical pixels per script unit.
+	// Text glyph size follows the vertical ratio; spacing follows the horizontal.
+	double layout_aspect = 1.0;
 };
 
 enum class AssBoundsError {

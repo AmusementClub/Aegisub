@@ -686,6 +686,7 @@
 			},
 			"Perspective" : {
 				"Decimal Places" : 4,
+				"Shape Tolerance" : 0.1,
 				"Fax Frz Only" : false,
 				"Fit Text" : true
 			}

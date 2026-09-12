@@ -49,17 +49,28 @@ EvaluatedLine Evaluate(
 
 AssBoundsResult Bounds(
 	EvaluatedLine const& evaluated,
-	AssTextExtentsProvider text_extents = nullptr) {
+	AssTextExtentsProvider text_extents = nullptr,
+	double layout_aspect = 1.0) {
 	if (!evaluated.state)
 		return {AssBoundsError::InvalidInput};
 	return EvaluateAssBaseBounds(
-		{&evaluated.line, &evaluated.state.value, text_extents});
+		{.line = &evaluated.line, .state = &evaluated.state.value, .text_extents = text_extents, .layout_aspect = layout_aspect});
 }
 
 bool FixedTextExtents(
 	AssStyle*, std::string const& text,
 	double& width, double& height, double& descent, double& extlead) {
 	width = static_cast<double>(text.size()) * 10.0;
+	height = 20.0;
+	descent = 4.0;
+	extlead = 2.0;
+	return true;
+}
+
+bool SpacedTextExtents(
+	AssStyle *style, std::string const& text,
+	double& width, double& height, double& descent, double& extlead) {
+	width = static_cast<double>(text.size()) * (10.0 + style->spacing);
 	height = 20.0;
 	descent = 4.0;
 	extlead = 2.0;
@@ -181,6 +192,33 @@ TEST(perspective_ass_bounds, evaluates_drawing_origin_scale_and_baseline_offset)
 	ExpectRect(above_height_bounds.value.rectangle, 5.0, 10.0, 55.0, 35.0);
 	ExpectExtent(above_height_bounds.value, 50.0, 50.0);
 	ExpectAlignmentOffset(above_height_bounds.value, 0.0, 25.0);
+}
+
+TEST(perspective_ass_bounds, drawing_metrics_truncate_fractional_coordinates_like_xy_vsfilter) {
+	AssFile file;
+	AddDefaultStyle(file);
+	auto const evaluated = Evaluate(file,
+									"{\\p2}m -0.01 0.01 l 2.01 0.01 2.01 2.01 -0.01 2.01");
+	auto const bounds = Bounds(evaluated);
+	ASSERT_TRUE(bounds) << DescribeAssBoundsError(bounds.error);
+	ExpectRect(bounds.value.rectangle, 0.0, 0.0, 1.0, 1.0);
+	ExpectExtent(bounds.value, 1.0, 1.0);
+	EXPECT_TRUE(std::ranges::all_of(bounds.value.residual_samples, [](Vec2 point) {
+		return (point.x == 0.0 || point.x == 1.0) && (point.y == 0.0 || point.y == 1.0);
+	}));
+	EXPECT_EQ(4u, bounds.value.residual_samples.size());
+}
+
+TEST(perspective_ass_bounds, nonclosing_move_contributes_to_xy_drawing_bounds) {
+	AssFile file;
+	AddDefaultStyle(file);
+	auto const evaluated = Evaluate(file,
+									"{\\p1}m 20 0 l 80 0 80 40 n -20 80 l 80 80 80 120");
+	auto const bounds = Bounds(evaluated);
+	ASSERT_TRUE(bounds) << DescribeAssBoundsError(bounds.error);
+	ExpectRect(bounds.value.rectangle, -20.0, 0.0, 80.0, 120.0);
+	ExpectExtent(bounds.value, 100.0, 120.0);
+	ExpectResidualSample(bounds.value, -20.0, 80.0);
 }
 
 TEST(perspective_ass_bounds, baseline_offset_follows_clamped_renderer_line_metrics) {
@@ -344,6 +382,56 @@ TEST(perspective_ass_bounds, soft_line_break_follows_wrap_style) {
 	auto forced_bounds = Bounds(forced, FixedTextExtents);
 	ASSERT_TRUE(forced_bounds) << DescribeAssBoundsError(forced_bounds.error);
 	ExpectRect(forced_bounds.value.rectangle, 0.0, 0.0, 10.0, 40.0);
+}
+
+TEST(perspective_ass_bounds, text_layout_aspect_preserves_glyph_size_and_horizontal_spacing) {
+	AssFile file;
+	AddDefaultStyle(file);
+	auto const text = Evaluate(file, R"({\fsp2}ABCD)");
+	ASSERT_TRUE(text.state);
+	for (double const aspect : {0.5, 1.0, 2.0}) {
+		SCOPED_TRACE(aspect);
+		auto const bounds = Bounds(text, SpacedTextExtents, aspect);
+		ASSERT_TRUE(bounds) << DescribeAssBoundsError(bounds.error);
+		// Four 10-unit glyph advances follow Y; the four 2-unit spaces follow X.
+		ExpectRect(bounds.value.rectangle, 0.0, 0.0, 40.0 / aspect + 8.0, 20.0);
+	}
+	auto const fallback = Bounds(text, nullptr, 2.0);
+	ASSERT_TRUE(fallback);
+	ExpectRect(fallback.value.rectangle, 0.0, 0.0, 104.0, 48.0);
+	auto const drawing = Evaluate(file, R"({\p1}m 10 20 l 110 20 110 70 10 70)");
+	auto const drawing_bounds = Bounds(drawing, nullptr, 2.0);
+	ASSERT_TRUE(drawing_bounds);
+	ExpectRect(drawing_bounds.value.rectangle, 10.0, 20.0, 110.0, 70.0);
+}
+
+TEST(perspective_ass_bounds, text_layout_aspect_is_applied_before_automatic_wrap_validation) {
+	AssFile file;
+	AddDefaultStyle(file);
+	// The 10/20 margins leave 30 units; the calibrated text width is 28.
+	auto const fits = Evaluate(file, R"({\fsp2}ABCD)", 2000,
+							   {.width = 60.0, .height = 100.0});
+	ASSERT_TRUE(fits.state);
+	auto const bounds = Bounds(fits, SpacedTextExtents, 2.0);
+	ASSERT_TRUE(bounds) << DescribeAssBoundsError(bounds.error);
+	ExpectRect(bounds.value.rectangle, 0.0, 0.0, 28.0, 20.0);
+	auto const wraps = Evaluate(file, R"({\fsp2}ABCD)", 2000,
+								{.width = 58.0, .height = 100.0});
+	ASSERT_TRUE(wraps.state);
+	EXPECT_EQ(AssBoundsError::UnsupportedAutomaticWrap,
+			  Bounds(wraps, SpacedTextExtents, 2.0).error);
+}
+
+TEST(perspective_ass_bounds, rejects_nonpositive_or_nonfinite_layout_aspect) {
+	AssFile file;
+	AddDefaultStyle(file);
+	auto const text = Evaluate(file, "ABCD");
+	ASSERT_TRUE(text.state);
+	for (double const aspect : {0.0, -1.0, std::numeric_limits<double>::infinity(),
+								std::numeric_limits<double>::quiet_NaN()}) {
+		SCOPED_TRACE(aspect);
+		EXPECT_EQ(AssBoundsError::InvalidInput, Bounds(text, SpacedTextExtents, aspect).error);
+	}
 }
 
 TEST(perspective_ass_bounds, rejects_layouts_which_require_automatic_wrapping) {

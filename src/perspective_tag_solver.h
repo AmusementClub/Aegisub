@@ -22,6 +22,7 @@
 #include "perspective_forward.h"
 
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -53,6 +54,7 @@ enum class CandidateFamily {
 	// Preserve-scale candidate seeded from the corresponding Fit result so
 	// toggling Fit Text changes the scale tags before changing other geometry.
 	PreserveFitState,
+	StyleConstrainedRefit,
 };
 
 struct SerializedTransformState {
@@ -68,9 +70,8 @@ struct SerializedTransformState {
 };
 
 struct CandidateScore {
-	// Ranks ahead of every preference below: a model that reaches the drawn
-	// quad always beats one that only comes close, and among those that only
-	// come close, distance decides before tag economy does.
+	// Candidates within the shape tolerance share an economy band. Outside
+	// that band, distance remains ahead of representation preferences.
 	int snapped = 0;
 	int snap_bucket = 0;
 	// Shape-only continuity preference for PreserveFitState. A negative value
@@ -78,6 +79,7 @@ struct CandidateScore {
 	// values are shape-error buckets, so visibly different planes still lose.
 	int fit_consistency_penalty = 0;
 	int changed_tag_count = 0;
+	std::size_t emitted_tag_count = 0;
 	int explicit_origin_penalty = 0;
 	int perspective_penalty = 0;
 	int non_fax_shear_penalty = 0;
@@ -92,15 +94,15 @@ struct SolverCandidate {
 	EvaluatedTransformState state;
 	SerializedTransformState serialized;
 	CandidateScore score;
-	// Total deviation of the emitted tags from the drawn quad, in output
-	// pixels. Equals snap_error plus the rounding the digits add.
+	// Total deviation of the emitted tags from effective_target, in output
+	// pixels, measured directly rather than adding the two error maxima.
 	double max_error = 0.0;
-	// How far the unrounded model itself falls short of the drawn quad. Zero
+	// How far the unrounded model itself falls short of effective_target. Zero
 	// unless the quad lies outside what this tag subset can express, which is
 	// the normal case for a hand-dragged corner under a restricted policy.
 	double snap_error = 0.0;
 	// Rounding error the tag digits add on top of the model, measured against
-	// the model's own quad rather than the drawn one.
+	// the model's own transform rather than the target.
 	double quantization_error = 0.0;
 
 	[[nodiscard]] bool Snapped() const { return score.snapped != 0; }
@@ -109,6 +111,11 @@ struct SolverCandidate {
 enum class PerspectiveScalePolicy {
 	Preserve,
 	Fit,
+};
+
+struct PerspectiveTagCost {
+	std::size_t tag_count = 0;
+	std::size_t byte_count = 0;
 };
 
 enum class PerspectiveRepresentationPolicy {
@@ -161,6 +168,18 @@ struct SolverInput {
 	// Upper bound on digits after the decimal point in generated tags.
 	// Per-field caps still apply (position/scale 4, rotation 5, shear 6).
 	int maximum_decimals = kMaxPerspectiveDecimalPlaces;
+	// Permitted model simplification, independently of numeric precision.
+	// This selects the economy band; a larger unavoidable error is still
+	// returned for the existing preview to display.
+	double shape_tolerance = 0.1;
+	// The ASS layer measures actual rewritten output after style inheritance
+	// and resets. Absence uses changed-field cost for standalone geometry use;
+	// a null result rejects a candidate that the writer cannot represent.
+	std::function<std::optional<PerspectiveTagCost>(
+		EvaluatedTransformState const&, SerializedTransformState const&,
+		PerspectiveScalePolicy)>
+		measure_tag_cost;
+	std::optional<EvaluatedTransformState> event_style;
 };
 
 enum class ResidualError {

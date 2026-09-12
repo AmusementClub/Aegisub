@@ -17,6 +17,38 @@
 Generated runtime data belongs under `build-dir/tests-runtime`; the source
 tree should contain only test sources and reusable fixtures.
 
+Perspective's Windows renderer checks use xy-VSFilter through its CSRI DLL.
+Place the matching architecture's DLL at `artifacts/xy-vsfilter/VSFilter.dll`
+and run the following from the repository root after configuring `build-dir`:
+
+```powershell
+$env:AEGISUB_XY_VSF_DLL = (Resolve-Path artifacts/xy-vsfilter/VSFilter.dll).Path
+$env:AEGISUB_XY_VSF_REQUIRED = '1'
+$env:AEGISUB_XY_VSF_VERSION = '3.2.0.810'
+cmake --build build-dir --config RelWithDebInfo --target test-aegisub --parallel
+```
+
+The version pin identifies the DLL used to establish the current renderer
+regressions; set it to the exact file version under evaluation. The checks
+also verify the CSRI renderer identity and report its version, without falling
+back to another renderer. An absent DLL skips these checks in ordinary unit
+runs; `AEGISUB_XY_VSF_REQUIRED=1` makes absence a failure. A configured but
+unloadable DLL, wrong renderer identity, or version mismatch always fails.
+Without an explicit DLL, discovery checks the executable's `csri` directory.
+Each renderer test runs in its own child process with a 30-second deadline;
+a timeout fails the test and terminates the child with a bounded cleanup wait.
+The drawing matrix covers `\p2`, positive and negative `\pbo`, alignment,
+and unequal script/output resolutions. The text matrix covers Latin, CJK,
+vertical CJK, explicit line breaks, and spacing; each case verifies its requested
+GDI face and reports an explicit font skip if that face is unavailable.
+The text cases also cover unequal X/Y output scales with unrotated and rotated
+glyphs, keeping glyph size and character spacing under their distinct renderer
+scaling rules. Use
+`--gtest_filter=*perspective_vsfilter*` when running only these checks, since
+the parameterized suites include an `xy/` prefix.
+The existing `perspective_libass_render` cases provide secondary compatibility
+coverage. Neither renderer's pixel checks claim subpixel text layout accuracy.
+
 Run the Windows UIA correctness driver directly after building Aegisub:
 
 ```powershell

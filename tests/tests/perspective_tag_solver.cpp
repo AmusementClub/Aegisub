@@ -775,7 +775,7 @@ TEST(perspective_tag_solver, approximate_affine_is_used_before_projective_tags) 
 		PerspectiveRepresentationPolicy::FaxFrzOnly));
 
 	SolverInput strict {source, target};
-	strict.max_error = 0.01;
+	strict.shape_tolerance = 0.01;
 	auto const projective = SolvePerspectiveTags(strict);
 	ASSERT_TRUE(projective) << DescribeSolverError(projective.error);
 	ASSERT_TRUE(projective.candidate);
@@ -783,7 +783,7 @@ TEST(perspective_tag_solver, approximate_affine_is_used_before_projective_tags) 
 		projective.candidate->family == CandidateFamily::ProjectiveImplicitFax
 		|| projective.candidate->family == CandidateFamily::ProjectiveImplicitFay
 		|| projective.candidate->family == CandidateFamily::ProjectiveExplicitOrigin);
-	EXPECT_LE(projective.candidate->max_error, strict.max_error);
+	EXPECT_LE(projective.candidate->max_error, strict.shape_tolerance);
 
 	strict.representation_policy = PerspectiveRepresentationPolicy::FaxFrzOnly;
 	auto const constrained_projective = SolvePerspectiveTags(strict);
@@ -814,6 +814,397 @@ TEST(perspective_tag_solver, projective_candidate_uses_implicit_origin_when_feas
 	EXPECT_FALSE(result.candidate->state.origin);
 	EXPECT_LE(result.candidate->max_error, 0.1);
 	EXPECT_EQ(0, result.candidate->score.explicit_origin_penalty);
+}
+
+TEST(perspective_tag_solver, shape_tolerance_and_digit_error_have_independent_references) {
+	auto const source = BaseInput();
+	auto desired = source.state;
+	desired.position = {.x = 525.0, .y = 405.0};
+	desired.scale_x = 125.0;
+	desired.scale_y = 82.0;
+	desired.shear_x = 0.24;
+	desired.rotation_z = -13.0;
+	auto target = TargetFrom(source, desired);
+	target[0].x += 0.2;
+	SolverInput input{.source = source, .target = target};
+	input.max_error = 0.001;
+	input.shape_tolerance = 0.1;
+	auto const result = SolvePerspectiveTags(input);
+	ASSERT_TRUE(result) << DescribeSolverError(result.error);
+	EXPECT_EQ(CandidateFamily::AffineFax, result.candidate->family);
+	EXPECT_GT(result.candidate->snap_error, 0.04);
+	EXPECT_GT(result.candidate->max_error, 0.04);
+	EXPECT_LE(result.candidate->max_error, input.shape_tolerance);
+	EXPECT_LE(result.candidate->quantization_error, input.max_error);
+	EXPECT_FALSE(result.candidate->Snapped());
+	auto actual = source;
+	actual.state = result.candidate->state;
+	auto const measured = MeasurePerspectiveResidual(actual, target, input.output_mapping);
+	ASSERT_TRUE(measured);
+	EXPECT_DOUBLE_EQ(measured.max_error, result.candidate->max_error);
+}
+
+TEST(perspective_tag_solver, loose_shape_tolerance_does_not_swallow_a_position_nudge) {
+	auto const source = BaseInput();
+	auto desired = source.state;
+	desired.position.x += 0.5;
+	SolverInput input{.source = source, .target = TargetFrom(source, desired)};
+	input.shape_tolerance = 10.0;
+	auto const result = SolvePerspectiveTags(input);
+	ASSERT_TRUE(result) << DescribeSolverError(result.error);
+	EXPECT_NE(CandidateFamily::NoOp, result.candidate->family);
+	EXPECT_NEAR(desired.position.x, result.candidate->state.position.x, input.max_error);
+	EXPECT_GT(result.candidate->score.changed_tag_count, 0);
+}
+
+TEST(perspective_tag_solver, shape_band_is_checked_after_numeric_rounding) {
+	auto const source = BaseInput();
+	auto desired = source.state;
+	desired.position = {.x = 525.044, .y = 405.044};
+	SolverInput input{.source = source, .target = TargetFrom(source, desired)};
+	input.maximum_decimals = 2;
+	input.max_error = 0.01;
+	input.shape_tolerance = 0.001;
+	auto const result = SolvePerspectiveTags(input);
+	ASSERT_TRUE(result) << DescribeSolverError(result.error);
+	EXPECT_LT(result.candidate->snap_error, 1.0e-6);
+	EXPECT_GT(result.candidate->max_error, input.shape_tolerance);
+	EXPECT_LE(result.candidate->quantization_error, input.max_error);
+	EXPECT_TRUE(result.candidate->Snapped());
+}
+
+TEST(perspective_tag_solver, loose_shape_tolerance_keeps_the_anchored_edge_strict) {
+	auto const source = BaseInput();
+	auto desired = source.state;
+	desired.position = {.x = 525.0, .y = 405.0};
+	desired.scale_x = 125.0;
+	desired.shear_x = 0.24;
+	auto target = TargetFrom(source, desired);
+	target[2].x += 2.0;
+	SolverInput input{.source = source, .target = target};
+	input.edge_anchor = PerspectiveEdgeAnchor::Top;
+	input.representation_policy = PerspectiveRepresentationPolicy::FaxFrzOnly;
+	input.shape_tolerance = 10.0;
+	input.max_error = 0.001;
+	auto const result = SolvePerspectiveTags(input);
+	ASSERT_TRUE(result) << DescribeSolverError(result.error);
+	auto const landed = ForwardQuad(source, result.candidate->state);
+	ASSERT_TRUE(landed);
+	for (int corner : {0, 1}) {
+		EXPECT_NEAR(target[corner].x, landed.quad[corner].x, input.max_error);
+		EXPECT_NEAR(target[corner].y, landed.quad[corner].y, input.max_error);
+	}
+	EXPECT_GT(result.candidate->snap_error, input.max_error);
+}
+
+TEST(perspective_tag_solver, compaction_retains_digits_needed_by_a_preserved_scale_anchor) {
+	auto const source = BaseInput();
+	Quad const target{{{.x = 519.96, .y = 360.0}, {.x = 720.12, .y = 360.0}, {.x = 720.12, .y = 440.0}, {.x = 519.96, .y = 440.0}}};
+	for (bool const measure_output_cost : {false, true}) {
+		SolverInput input{.source = source, .target = target};
+		input.scale_policy = PerspectiveScalePolicy::Preserve;
+		input.representation_policy = PerspectiveRepresentationPolicy::FaxFrzOnly;
+		input.edge_anchor = PerspectiveEdgeAnchor::Top;
+		if (measure_output_cost)
+			input.measure_tag_cost = [](auto const&, auto const&, auto) {
+				return std::optional<PerspectiveTagCost>{{.tag_count = 1, .byte_count = 24}};
+			};
+		auto const result = SolvePerspectiveTags(input);
+		ASSERT_TRUE(result) << DescribeSolverError(result.error);
+		EXPECT_EQ("(520.04,360)", result.candidate->serialized.position);
+		EXPECT_EQ(1, result.candidate->score.changed_tag_count);
+		EXPECT_DOUBLE_EQ(source.state.scale_x, result.candidate->state.scale_x);
+		EXPECT_DOUBLE_EQ(source.state.scale_y, result.candidate->state.scale_y);
+		auto const landed = ForwardQuad(source, result.candidate->state);
+		ASSERT_TRUE(landed);
+		for (int corner : {0, 1}) {
+			EXPECT_NEAR(target[corner].x, landed.quad[corner].x, input.max_error);
+			EXPECT_NEAR(target[corner].y, landed.quad[corner].y, input.max_error);
+		}
+		// The shorter spelling used to pass the model/shape budgets, then
+		// fail the anchor and discard this otherwise usable candidate.
+		EXPECT_GT(std::abs(720.0 - target[1].x), input.max_error);
+	}
+}
+
+TEST(perspective_tag_solver, nearby_rounding_repairs_an_anchor_even_when_model_error_already_passes) {
+	auto const source = BaseInput();
+	Quad const target{{{.x = 520.12, .y = 360.0}, {.x = 720.12, .y = 360.0}, {.x = 719.972, .y = 440.0}, {.x = 519.972, .y = 440.0}}};
+	auto model = source;
+	model.state.position = {.x = 520.046, .y = 360.0};
+	auto const model_forward = ForwardQuad(model);
+	ASSERT_TRUE(model_forward);
+	auto nearest = model;
+	nearest.state.position.x = 520.0;
+	auto const nearest_rounding = MeasurePerspectiveResidual(nearest, model_forward.quad, {});
+	ASSERT_TRUE(nearest_rounding);
+	EXPECT_NEAR(0.046, nearest_rounding.max_error, 1.0e-9);
+	EXPECT_GT(std::abs(nearest.state.position.x - target[0].x), 0.1);
+	for (bool const measure_output_cost : {false, true}) {
+		SolverInput input{.source = source, .target = target};
+		input.scale_policy = PerspectiveScalePolicy::Preserve;
+		input.representation_policy = PerspectiveRepresentationPolicy::FaxFrzOnly;
+		input.edge_anchor = PerspectiveEdgeAnchor::Top;
+		input.maximum_decimals = 1;
+		if (measure_output_cost)
+			input.measure_tag_cost = [](auto const&, auto const&, auto) {
+				return std::optional<PerspectiveTagCost>{{.tag_count = 1, .byte_count = 24}};
+			};
+		auto const result = SolvePerspectiveTags(input);
+		ASSERT_TRUE(result) << DescribeSolverError(result.error);
+		EXPECT_EQ("(520.1,360)", result.candidate->serialized.position);
+		EXPECT_NEAR(0.054, result.candidate->quantization_error, 1.0e-9);
+		EXPECT_LE(result.candidate->quantization_error, input.max_error);
+		EXPECT_DOUBLE_EQ(source.state.scale_x, result.candidate->state.scale_x);
+		EXPECT_DOUBLE_EQ(source.state.scale_y, result.candidate->state.scale_y);
+		auto const landed = ForwardQuad(source, result.candidate->state);
+		ASSERT_TRUE(landed);
+		for (int corner : {0, 1}) {
+			EXPECT_NEAR(target[corner].x, landed.quad[corner].x, input.max_error);
+			EXPECT_NEAR(target[corner].y, landed.quad[corner].y, input.max_error);
+		}
+		EXPECT_NEAR(0.128, result.candidate->max_error, 1.0e-9);
+		EXPECT_TRUE(result.candidate->Snapped());
+	}
+}
+
+TEST(perspective_tag_solver, emitted_cost_can_prefer_more_changed_parameters) {
+	auto const source = BaseInput();
+	auto desired = source.state;
+	desired.position = {.x = 525.0, .y = 405.0};
+	desired.scale_x = 100.04;
+	SolverInput input{.source = source, .target = TargetFrom(source, desired)};
+	input.max_error = 0.001;
+	input.measure_tag_cost = [](auto const& state, auto const&, auto policy) {
+		EXPECT_EQ(PerspectiveScalePolicy::Fit, policy);
+		return std::optional<PerspectiveTagCost>{state.scale_x > 100.001
+													 ? PerspectiveTagCost{.tag_count = 1, .byte_count = 17}
+													 : PerspectiveTagCost{.tag_count = 8, .byte_count = 100}};
+	};
+	auto const result = SolvePerspectiveTags(input);
+	ASSERT_TRUE(result) << DescribeSolverError(result.error);
+	EXPECT_GT(result.candidate->state.scale_x, 100.001);
+	EXPECT_GT(result.candidate->score.changed_tag_count, 1);
+	EXPECT_EQ(1u, result.candidate->score.emitted_tag_count);
+	EXPECT_EQ(17u, result.candidate->score.token_count);
+	EXPECT_LE(result.candidate->max_error, input.shape_tolerance);
+}
+
+TEST(perspective_tag_solver, style_scale_is_refitted_to_remove_an_emitted_tag) {
+	auto const source = BaseInput();
+	auto desired = source.state;
+	desired.position = {.x = 525.0, .y = 405.0};
+	desired.scale_x = 125.04;
+	desired.scale_y = 82.0;
+	desired.shear_x = 0.24;
+	SolverInput input{.source = source, .target = TargetFrom(source, desired)};
+	input.max_error = 0.001;
+	input.event_style = desired;
+	input.event_style->scale_x = 125.0;
+	input.measure_tag_cost = [](auto const& state, auto const&, auto) {
+		return std::optional<PerspectiveTagCost>{state.scale_x == 125.0
+													 ? PerspectiveTagCost{.tag_count = 1, .byte_count = 17}
+													 : PerspectiveTagCost{.tag_count = 2, .byte_count = 28}};
+	};
+	auto const result = SolvePerspectiveTags(input);
+	ASSERT_TRUE(result) << DescribeSolverError(result.error);
+	EXPECT_EQ(CandidateFamily::StyleConstrainedRefit, result.candidate->family);
+	EXPECT_DOUBLE_EQ(125.0, result.candidate->state.scale_x);
+	EXPECT_GT(result.candidate->snap_error, input.max_error);
+	EXPECT_LE(result.candidate->max_error, input.shape_tolerance);
+	EXPECT_EQ(1u, result.candidate->score.emitted_tag_count);
+}
+
+TEST(perspective_tag_solver, constrained_style_value_keeps_its_inherited_precision) {
+	auto const source = BaseInput();
+	auto desired = source.state;
+	desired.position = {.x = 525.0, .y = 405.0};
+	desired.scale_x = 125.04037;
+	desired.scale_y = 82.0;
+	SolverInput input{.source = source, .target = TargetFrom(source, desired)};
+	input.maximum_decimals = 4;
+	input.max_error = 0.001;
+	input.event_style = desired;
+	input.event_style->scale_x = 125.00037;
+	input.measure_tag_cost = [](auto const& state, auto const&, auto) {
+		return std::optional<PerspectiveTagCost>{state.scale_x == 125.00037
+													 ? PerspectiveTagCost{.tag_count = 1, .byte_count = 17}
+													 : PerspectiveTagCost{.tag_count = 2, .byte_count = 28}};
+	};
+	auto const result = SolvePerspectiveTags(input);
+	ASSERT_TRUE(result) << DescribeSolverError(result.error);
+	EXPECT_EQ(CandidateFamily::StyleConstrainedRefit, result.candidate->family);
+	EXPECT_DOUBLE_EQ(125.00037, result.candidate->state.scale_x);
+	EXPECT_EQ("125.0004", result.candidate->serialized.scale_x);
+	EXPECT_EQ(1u, result.candidate->score.emitted_tag_count);
+	EXPECT_LE(result.candidate->max_error, input.shape_tolerance);
+}
+
+TEST(perspective_tag_solver, shorter_digits_cannot_increase_the_actual_output_cost) {
+	auto const source = BaseInput();
+	auto desired = source.state;
+	desired.position = {.x = 525.0, .y = 405.0};
+	desired.scale_x = 125.04037;
+	desired.scale_y = 82.0;
+	SolverInput input{.source = source, .target = TargetFrom(source, desired)};
+	input.measure_tag_cost = [](auto const& state, auto const&, auto) {
+		return std::optional<PerspectiveTagCost>{state.scale_x == 125.0404
+													 ? PerspectiveTagCost{.tag_count = 1, .byte_count = 17}
+													 : PerspectiveTagCost{.tag_count = 2, .byte_count = 28}};
+	};
+	auto const result = SolvePerspectiveTags(input);
+	ASSERT_TRUE(result) << DescribeSolverError(result.error);
+	EXPECT_DOUBLE_EQ(125.0404, result.candidate->state.scale_x);
+	EXPECT_EQ("125.0404", result.candidate->serialized.scale_x);
+	EXPECT_EQ(1u, result.candidate->score.emitted_tag_count);
+	EXPECT_LE(result.candidate->max_error, input.shape_tolerance);
+}
+
+TEST(perspective_tag_solver, actual_output_cost_keeps_the_explicit_origin_penalty) {
+	auto source = BaseInput();
+	source.state.origin = Vec2{.x = 420.0, .y = 310.0};
+	source.state.scale_x = 120.0;
+	source.state.scale_y = 85.0;
+	source.state.shear_x = 0.18;
+	source.state.rotation_x = 18.0;
+	source.state.rotation_y = -12.0;
+	source.state.rotation_z = 9.0;
+	auto desired = source.state;
+	desired.position = desired.position + Vec2{.x = 35.0, .y = -22.0};
+	desired.origin = *desired.origin + Vec2{.x = 35.0, .y = -22.0};
+	SolverInput input{.source = source, .target = TargetFrom(source, desired)};
+	input.measure_tag_cost = [](auto const& state, auto const&, auto) {
+		return std::optional<PerspectiveTagCost>{state.origin
+													 ? PerspectiveTagCost{.tag_count = 1, .byte_count = 10}
+													 : PerspectiveTagCost{.tag_count = 9, .byte_count = 100}};
+	};
+	auto const result = SolvePerspectiveTags(input);
+	ASSERT_TRUE(result) << DescribeSolverError(result.error);
+	EXPECT_FALSE(result.candidate->state.origin);
+	EXPECT_EQ(0, result.candidate->score.explicit_origin_penalty);
+	EXPECT_EQ(9u, result.candidate->score.emitted_tag_count);
+	EXPECT_LE(result.candidate->max_error, input.shape_tolerance);
+}
+
+TEST(perspective_tag_solver, nonuniform_drawing_rotation_keeps_a_simple_affine_representation) {
+	auto source = BaseInput();
+	source.play_resolution = {.width = 640.0, .height = 480.0};
+	source.layout_resolution = Resolution{.width = 1280.0, .height = 480.0};
+	source.bounds = {.rectangle = {.left = 0.0, .top = 0.0, .right = 100.0, .bottom = 50.0}, .kind = BoundsKind::Drawing};
+	source.state.position = {.x = 200.0, .y = 150.0};
+	Quad const target{{{.x = 200.0, .y = 150.0}, {.x = 200.0, .y = -50.0}, {.x = 225.0, .y = -50.0}, {.x = 225.0, .y = 150.0}}};
+	for (auto policy : {PerspectiveScalePolicy::Fit, PerspectiveScalePolicy::Preserve}) {
+		SolverInput input{.source = source, .target = target};
+		input.scale_policy = policy;
+		auto const result = SolvePerspectiveTags(input);
+		ASSERT_TRUE(result) << DescribeSolverError(result.error);
+		EXPECT_FALSE(result.candidate->state.origin);
+		EXPECT_DOUBLE_EQ(100.0, result.candidate->state.scale_x);
+		EXPECT_DOUBLE_EQ(100.0, result.candidate->state.scale_y);
+		EXPECT_NEAR(0.0, result.candidate->state.shear_x, 1.0e-9);
+		EXPECT_NEAR(0.0, result.candidate->state.shear_y, 1.0e-9);
+		EXPECT_NEAR(0.0, result.candidate->state.rotation_x, 1.0e-9);
+		EXPECT_NEAR(0.0, result.candidate->state.rotation_y, 1.0e-9);
+		EXPECT_NEAR(90.0, result.candidate->state.rotation_z, 1.0e-9);
+		EXPECT_LE(result.candidate->max_error, input.shape_tolerance);
+	}
+}
+
+TEST(perspective_tag_solver, nonuniform_drawing_shear_keeps_the_requested_axis_and_anchor) {
+	auto source = BaseInput();
+	source.play_resolution = {.width = 640.0, .height = 480.0};
+	source.layout_resolution = Resolution{.width = 1280.0, .height = 480.0};
+	source.bounds = {.rectangle = {.left = 0.0, .top = 0.0, .right = 100.0, .bottom = 50.0}, .kind = BoundsKind::Drawing};
+	source.state.position = {.x = 200.0, .y = 150.0};
+	Quad const target{{{.x = 200.0, .y = 150.0}, {.x = 300.0, .y = 150.0}, {.x = 306.25, .y = 200.0}, {.x = 206.25, .y = 200.0}}};
+	SolverInput input{.source = source, .target = target};
+	input.edge_anchor = PerspectiveEdgeAnchor::Top;
+	input.representation_policy = PerspectiveRepresentationPolicy::FaxFrzOnly;
+	auto const result = SolvePerspectiveTags(input);
+	ASSERT_TRUE(result) << DescribeSolverError(result.error);
+	EXPECT_DOUBLE_EQ(100.0, result.candidate->state.scale_x);
+	EXPECT_DOUBLE_EQ(100.0, result.candidate->state.scale_y);
+	EXPECT_DOUBLE_EQ(0.25, result.candidate->state.shear_x);
+	EXPECT_DOUBLE_EQ(0.0, result.candidate->state.shear_y);
+	EXPECT_DOUBLE_EQ(0.0, result.candidate->state.rotation_z);
+	EXPECT_LE(result.candidate->max_error, input.shape_tolerance);
+	input.target[2].x += 2.0;
+	input.output_mapping = {.scale_x = 2.0, .scale_y = 1.0};
+	auto const approximate = SolvePerspectiveTags(input);
+	ASSERT_TRUE(approximate);
+	auto const landed = ForwardQuad(source, approximate.candidate->state);
+	ASSERT_TRUE(landed);
+	for (int corner : {0, 1}) {
+		EXPECT_NEAR(target[corner].x, landed.quad[corner].x, input.max_error / 2.0);
+		EXPECT_NEAR(target[corner].y, landed.quad[corner].y, input.max_error);
+	}
+	EXPECT_GT(approximate.candidate->max_error, input.max_error);
+}
+
+TEST(perspective_tag_solver, nonuniform_layout_explicit_origin_decomposition_reaches_a_literal_quad) {
+	auto source = BaseInput();
+	source.play_resolution = {.width = 320.0, .height = 360.0};
+	source.layout_resolution = Resolution{.width = 640.0, .height = 360.0};
+	source.bounds = {.rectangle = {.left = 0.0, .top = 0.0, .right = 400.0, .bottom = 60.0}, .kind = BoundsKind::Drawing};
+	Quad const target{{{.x = 70.0, .y = 110.0}, {.x = 250.0, .y = 90.0}, {.x = 235.0, .y = 250.0}, {.x = 60.0, .y = 235.0}}};
+	SolverInput input{.source = source, .target = target};
+	input.output_mapping = {.scale_x = 2.0, .scale_y = 1.0};
+	input.measure_tag_cost = [](auto const& state, auto const&, auto) -> std::optional<PerspectiveTagCost> {
+		if (!state.origin)
+			return std::nullopt;
+		return PerspectiveTagCost{.tag_count = 8, .byte_count = 100};
+	};
+	auto const result = SolvePerspectiveTags(input);
+	ASSERT_TRUE(result) << DescribeSolverError(result.error);
+	EXPECT_EQ(CandidateFamily::ProjectiveExplicitOrigin, result.candidate->family);
+	EXPECT_TRUE(result.candidate->state.origin);
+	EXPECT_LE(result.candidate->max_error, input.shape_tolerance);
+}
+
+TEST(perspective_tag_solver, invalid_shape_tolerance_is_rejected) {
+	auto const source = BaseInput();
+	SolverInput input{.source = source, .target = TargetFrom(source, source.state)};
+	for (double tolerance : {0.0, -1.0, std::numeric_limits<double>::infinity(),
+							 std::numeric_limits<double>::quiet_NaN()}) {
+		input.shape_tolerance = tolerance;
+		EXPECT_EQ(SolverError::InvalidErrorBudget, SolvePerspectiveTags(input).error);
+	}
+}
+
+TEST(perspective_tag_solver, nearby_joint_rounding_recovers_a_feasible_decimal_grid_point) {
+	auto source = BaseInput();
+	source.bounds.rectangle = {.left = 0.0, .top = 0.0, .right = 200.0, .bottom = 200.0};
+	auto desired = source.state;
+	desired.position = {.x = 525.044, .y = 405.044};
+	desired.scale_x = 100.024;
+	desired.scale_y = 100.024;
+	SolverInput input{.source = source, .target = TargetFrom(source, desired)};
+	input.maximum_decimals = 2;
+	input.max_error = 0.009;
+	input.shape_tolerance = 0.009;
+	auto nearest = source;
+	nearest.state = desired;
+	nearest.state.position = {.x = 525.04, .y = 405.04};
+	nearest.state.scale_x = 100.02;
+	nearest.state.scale_y = 100.02;
+	auto const nearest_error = MeasurePerspectiveResidual(nearest, input.target, input.output_mapping);
+	ASSERT_TRUE(nearest_error);
+	EXPECT_GT(nearest_error.max_error, input.max_error);
+	// Moving either position coordinate alone still fails. The pair of
+	// adjacent coordinates cancels enough of the scale rounding error.
+	for (bool x : {false, true}) {
+		auto single = nearest;
+		(x ? single.state.position.x : single.state.position.y) += 0.01;
+		auto const error = MeasurePerspectiveResidual(single, input.target, input.output_mapping);
+		ASSERT_TRUE(error);
+		EXPECT_GT(error.max_error, input.max_error);
+	}
+	auto const result = SolvePerspectiveTags(input);
+	ASSERT_TRUE(result) << DescribeSolverError(result.error);
+	EXPECT_LE(result.candidate->quantization_error, input.max_error);
+	EXPECT_LE(result.candidate->max_error, input.shape_tolerance);
+	EXPECT_EQ("(525.05,405.05)", result.candidate->serialized.position);
+	ExpectSerializedAtMost(result.candidate->serialized, 2);
 }
 
 TEST(perspective_tag_solver, solves_a_hand_drawn_non_parallel_target_quad) {
@@ -1140,13 +1531,10 @@ TEST(perspective_tag_solver, strict_budget_rejects_all_quantized_candidates_with
 	EXPECT_STRNE("unknown Perspective solver error", DescribeSolverError(result.error));
 }
 
-// Rounding, not reachability: the projective families model this quad almost
-// exactly, but at two decimal places the shear digits alone move the box by
-// several pixels, so every quantized candidate dies after the model stage.
-// The same model written with four decimals fits easily: this is the one
-// refusal reason left that names an option, and the old flag-based UI guess
-// could never tell it apart and never blamed rounding at all.
-TEST(perspective_tag_solver, coarse_rounding_settles_far_away_until_decimals_allow_the_fit) {
+// The independent two-decimal rounding used to reject every projective
+// model here and settle over 100 px away. Joint rounding now recovers a
+// useful coarse representation without spending more decimal digits.
+TEST(perspective_tag_solver, joint_rounding_avoids_the_old_far_away_coarse_fallback) {
 	auto source = BaseInput();
 	auto target_state = source.state;
 	target_state.position = {512.34567, 401.23456};
@@ -1166,15 +1554,13 @@ TEST(perspective_tag_solver, coarse_rounding_settles_far_away_until_decimals_all
 	auto const coarse = SolvePerspectiveTags(input);
 	ASSERT_TRUE(coarse) << DescribeSolverError(coarse.error);
 	ASSERT_TRUE(coarse.candidate);
-	// With every real family's digits over the rounding budget at two
-	// decimals, only the weak translation-level fits survive: the solve still
-	// returns the best representable candidate, but it lands far from the
-	// target and says so in snap_error -- the preview draws the gap.
-	EXPECT_TRUE(coarse.candidate->Snapped());
-	EXPECT_GT(coarse.candidate->snap_error, 100.0);
+	EXPECT_FALSE(coarse.candidate->Snapped());
+	EXPECT_LE(coarse.candidate->max_error, input.shape_tolerance);
+	EXPECT_LE(coarse.candidate->quantization_error, input.max_error);
+	EXPECT_LT(coarse.candidate->snap_error, 1.0e-6);
+	ExpectSerializedAtMost(coarse.candidate->serialized, 2);
 
-	// The degradation is about the digits, not the shape: the same target
-	// solves exactly once the tags are allowed four decimals.
+	// Fine precision retains the same geometric contract.
 	input.maximum_decimals = 4;
 	auto const fine = SolvePerspectiveTags(input);
 	ASSERT_TRUE(fine) << DescribeSolverError(fine.error);
@@ -1310,6 +1696,48 @@ TEST(perspective_tag_solver, drawing_control_samples_extend_residual_domain) {
 		candidate, target.quad, {1.0, 1.0});
 	ASSERT_TRUE(with_controls) << DescribeResidualError(with_controls.error);
 	EXPECT_GT(with_controls.max_error, rectangle_only.max_error);
+}
+
+TEST(perspective_tag_solver, finite_control_samples_cannot_straddle_a_projection_horizon) {
+	auto tilted = BaseInput();
+	tilted.state.rotation_y = -30.0;
+	auto const forward = ForwardQuad(tilted);
+	ASSERT_TRUE(forward);
+	auto const& matrix = forward.transform.Matrix();
+	ASSERT_NE(0.0, matrix(2, 0));
+	double const horizon = -matrix(2, 2) / matrix(2, 0);
+	Vec2 const beyond{.x = horizon - std::copysign(100.0, matrix(2, 2) * matrix(2, 0)), .y = 0.0};
+	ASSERT_TRUE(forward.transform.Map(beyond));
+	tilted.bounds.residual_samples.push_back(beyond);
+	ASSERT_TRUE(ForwardQuad(tilted));
+	auto const invalid_candidate = MeasurePerspectiveResidual(tilted, forward.quad, {.scale_x = 1.0, .scale_y = 1.0});
+	EXPECT_EQ(ResidualError::ProjectionDomain, invalid_candidate.error);
+	auto flat = tilted;
+	flat.state.rotation_y = 0.0;
+	auto const invalid_target = MeasurePerspectiveResidual(flat, forward.quad, {.scale_x = 1.0, .scale_y = 1.0});
+	EXPECT_EQ(ResidualError::ProjectionDomain, invalid_target.error);
+}
+
+TEST(perspective_tag_solver, approximate_refit_balances_the_full_drawing_residual_domain) {
+	auto source = BaseInput();
+	auto desired = source.state;
+	desired.position = {.x = 525.0, .y = 405.0};
+	desired.rotation_y = -15.0;
+	SolverInput input{.source = source, .target = TargetFrom(source, desired)};
+	input.representation_policy = PerspectiveRepresentationPolicy::FaxFrzOnly;
+	input.max_error = 0.001;
+	auto const corners = SolvePerspectiveTags(input);
+	ASSERT_TRUE(corners);
+	input.source.bounds.residual_samples = {{.x = 800.0, .y = 40.0}};
+	auto corner_candidate = input.source;
+	corner_candidate.state = corners.candidate->state;
+	auto const corner_error = MeasurePerspectiveResidual(corner_candidate, input.target, input.output_mapping);
+	ASSERT_TRUE(corner_error);
+	auto const full_domain = SolvePerspectiveTags(input);
+	ASSERT_TRUE(full_domain) << DescribeSolverError(full_domain.error);
+	EXPECT_LT(full_domain.candidate->max_error, corner_error.max_error - 1.0);
+	EXPECT_LE(full_domain.candidate->quantization_error, input.max_error);
+	EXPECT_TRUE(MatchesPerspectiveRepresentationPolicy(full_domain.candidate->state, input.representation_policy));
 }
 
 TEST(perspective_tag_solver, residual_scan_keeps_the_last_sample_and_tiny_output_scales) {

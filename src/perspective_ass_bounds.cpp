@@ -157,9 +157,11 @@ bool ValidMetric(double value) {
 AssBoundsResult EvaluateTextBounds(
 	std::string const& text,
 	EffectiveAssState const& state,
-	AssTextExtentsProvider provider) {
+	AssTextExtentsProvider provider,
+	double layout_aspect) {
 	auto const& text_style = state.text_style;
 	auto style = MakeTextMeasurementStyle(text_style);
+	style.spacing *= layout_aspect;
 	if (!std::isfinite(style.fontsize) || style.fontsize <= 0.0
 		|| style.fontsize > MaxAbsCoordinate
 		|| !std::isfinite(style.spacing)
@@ -189,6 +191,7 @@ AssBoundsResult EvaluateTextBounds(
 		}
 		if (line.empty())
 			line_width = 0.0;
+		line_width /= layout_aspect;
 		if (!ValidMetric(line_width) || !ValidMetric(line_height)
 			|| !ValidMetric(descent) || !ValidMetric(external_leading))
 			return UnsupportedFont(style.font);
@@ -245,7 +248,7 @@ char const* DescribeAssBoundsError(AssBoundsError error) {
 }
 
 AssBoundsResult EvaluateAssBaseBounds(AssBoundsInput const& input) {
-	if (!input.line || !input.state)
+	if (!input.line || !input.state || !std::isfinite(input.layout_aspect) || input.layout_aspect <= 0.0)
 		return {AssBoundsError::InvalidInput};
 
 	auto const& state = *input.state;
@@ -292,7 +295,7 @@ AssBoundsResult EvaluateAssBaseBounds(AssBoundsInput const& input) {
 	if (has_text) {
 		if (state.drawing_mode || visible_runs != state.geometry_run_count)
 			return {AssBoundsError::DrawingStateMismatch};
-		return EvaluateTextBounds(plain_text, state, input.text_extents);
+		return EvaluateTextBounds(plain_text, state, input.text_extents, input.layout_aspect);
 	}
 	if (!has_drawing)
 		return {AssBoundsError::EmptyGeometry};
@@ -310,7 +313,7 @@ AssBoundsResult EvaluateAssBaseBounds(AssBoundsInput const& input) {
 		return {AssBoundsError::UnsupportedDrawingCommand};
 
 	auto const path = agi::ass::drawing::ParseAss(
-		drawing, AssDrawingCompatMode::Libass);
+		drawing, AssDrawingCompatMode::VsFilter);
 	agi::ass::drawing::Rect raw_bounds;
 	if (!agi::ass::drawing::TryGetBounds(path, raw_bounds))
 		return {AssBoundsError::InvalidDrawingGeometry};

@@ -81,6 +81,7 @@ struct ResolvedLayout {
 	ForwardError error = ForwardError::None;
 	Resolution value;
 	double camera_distance = 0.0;
+	double aspect = 1.0;
 };
 
 ResolvedLayout ResolveLayoutResolution(ForwardInput const& input) {
@@ -112,9 +113,10 @@ ResolvedLayout ResolveLayoutResolution(ForwardInput const& input) {
 
 	double const camera_distance =
 		CameraDistanceBase * input.play_resolution.height / layout.height;
-	if (!std::isfinite(camera_distance) || camera_distance <= 0.0)
+	double const aspect = (layout.width / input.play_resolution.width) / (layout.height / input.play_resolution.height);
+	if (!std::isfinite(camera_distance) || camera_distance <= 0.0 || !std::isfinite(aspect) || aspect <= 0.0)
 		return {ForwardError::InvalidResolution};
-	return {ForwardError::None, layout, camera_distance};
+	return {.error = ForwardError::None, .value = layout, .camera_distance = camera_distance, .aspect = aspect};
 }
 
 ForwardError ValidateState(EvaluatedTransformState const& state) {
@@ -152,6 +154,13 @@ ForwardError ValidateState(EvaluatedTransformState const& state) {
 	return ForwardError::None;
 }
 
+}
+
+std::optional<double> ResolvePerspectiveLayoutAspect(ForwardInput const& input) {
+	auto const resolved = ResolveLayoutResolution(input);
+	if (resolved.error != ForwardError::None)
+		return std::nullopt;
+	return resolved.aspect;
 }
 
 Vec2 ResolveBoundsAlignmentShift(BaseBounds const& bounds, int alignment) {
@@ -207,14 +216,15 @@ std::optional<Vec2> TransformPoint(
 	EvaluatedTransformState const& state,
 	Vec2 origin,
 	double camera_distance,
+	double layout_aspect,
 	double& denominator) {
 	Vec2 const shift = ResolveBoundsAlignmentShift(bounds, state.alignment);
-	Vec3 value {
-		point.x + point.y * state.shear_x + shift.x,
-		point.x * state.shear_y + point.y + shift.y,
-		0.0,
+	Vec3 value{
+		.x = point.x * layout_aspect + point.y * state.shear_x + shift.x * layout_aspect,
+		.y = point.x * layout_aspect * state.shear_y + point.y + shift.y,
+		.z = 0.0,
 	};
-	value.x = value.x * state.scale_x / 100.0 + state.position.x - origin.x;
+	value.x = value.x * state.scale_x / 100.0 + (state.position.x - origin.x) * layout_aspect;
 	value.y = value.y * state.scale_y / 100.0 + state.position.y - origin.y;
 	value = RotateZ(value, -state.rotation_z);
 	value = RotateX(value, -state.rotation_x);
@@ -225,9 +235,9 @@ std::optional<Vec2> TransformPoint(
 		|| !std::isfinite(value.y))
 		return std::nullopt;
 	double const projection = camera_distance / denominator;
-	Vec2 result {
-		origin.x + value.x * projection,
-		origin.y + value.y * projection,
+	Vec2 result{
+		.x = origin.x + value.x * projection / layout_aspect,
+		.y = origin.y + value.y * projection,
 	};
 	if (!IsFiniteAndSafe(result))
 		return std::nullopt;
@@ -278,6 +288,11 @@ ForwardResult ForwardQuad(
 	auto const resolution = ResolveLayoutResolution(input);
 	if (resolution.error != ForwardError::None)
 		return {resolution.error};
+	// xy-VSFilter and libass transform geometry in the layout's metric before
+	// shear/rotation. Text bounds already account for glyph width and spacing
+	// having different script scaling. Normalize the metric by its Y scale so
+	// camera_distance retains its existing script-Y units, then undo the X
+	// aspect after projection to return script coordinates to the caller.
 
 	Vec2 const origin = state.origin.value_or(state.position);
 	Quad const source_quad = MakeQuad(input.bounds.rectangle);
@@ -286,7 +301,7 @@ ForwardResult ForwardQuad(
 	for (std::size_t index = 0; index < source_quad.size(); ++index) {
 		auto const transformed = TransformPoint(
 			source_quad[index], input.bounds, state, origin,
-			resolution.camera_distance, denominators[index]);
+			resolution.camera_distance, resolution.aspect, denominators[index]);
 		if (!transformed)
 			return {ForwardError::ProjectionDomain};
 		projected[index] = *transformed;

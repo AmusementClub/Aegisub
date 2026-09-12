@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -104,8 +105,26 @@ struct RewriteResult {
 	RewriteError error = RewriteError::None;
 	std::string text;
 	bool changed = false;
+	PerspectiveTagCost cost;
 
 	explicit operator bool() const { return error == RewriteError::None; }
+};
+
+// Parse once per solve; candidate scoring and the final rewrite share the
+// same style-elision and reset rules. Copies retain the immutable source.
+class PerspectiveTagRewriter {
+	struct Data;
+	std::shared_ptr<Data const> data;
+
+	public:
+	PerspectiveTagRewriter(std::string_view source_text,
+						   EvaluatedTransformState const& source_state,
+						   EvaluatedTransformState const& event_style_state);
+	[[nodiscard]] RewriteResult Rewrite(
+		EvaluatedTransformState const& target,
+		SerializedTransformState const& serialized,
+		PerspectiveScalePolicy scale_policy,
+		PerspectiveRepresentationPolicy representation_policy) const;
 };
 
 [[nodiscard]] char const* DescribeRewriteError(RewriteError error);

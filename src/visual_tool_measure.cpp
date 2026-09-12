@@ -40,6 +40,7 @@ constexpr float kHitTolerance = 5.0f;
 constexpr auto kPerspectiveFitTextOption = "Tool/Visual/Perspective/Fit Text";
 constexpr auto kPerspectiveFaxFrzOnlyOption = "Tool/Visual/Perspective/Fax Frz Only";
 constexpr auto kPerspectiveDecimalPlacesOption = "Tool/Visual/Perspective/Decimal Places";
+constexpr auto kPerspectiveShapeToleranceOption = "Tool/Visual/Perspective/Shape Tolerance";
 // Tag-rounding budget in output pixels: it bounds the serialization error the
 // written digits may add. How far the reachable shape sits from the drawn one
 // is not budgeted at all -- the nearest shape is always returned and its
@@ -446,6 +447,7 @@ wxString FormatPx(double value) {
 VisualToolMeasure::VisualToolMeasure(VideoDisplay *parent, agi::Context *context)
 	: VisualToolBase(parent, context), controller(context->GetUI().visualGuideController), text(agi::make_unique<OpenGLText>()), fit_text_to_target(OPT_GET(kPerspectiveFitTextOption)->GetBool()), fax_frz_only(OPT_GET(kPerspectiveFaxFrzOnlyOption)->GetBool()), perspective_decimal_places(perspective::ClampPerspectiveDecimalPlaces(
 																																																																		OPT_GET(kPerspectiveDecimalPlacesOption)->GetInt())),
+	  perspective_shape_tolerance(OPT_GET(kPerspectiveShapeToleranceOption)->GetDouble()),
 	  invalid_line_color_opt(OPT_GET("Colour/Visual Tools/Perspective Invalid Line")), invalid_handle_color_opt(OPT_GET("Colour/Visual Tools/Perspective Invalid Handle")) {
 	auto core = c->GetCore();
 	connections.push_back(core.project->AddVideoProviderListener([this](AsyncVideoProvider*) {
@@ -476,6 +478,14 @@ VisualToolMeasure::VisualToolMeasure(VideoDisplay *parent, agi::Context *context
 	};
 	subscribe_solver_option(kPerspectiveFitTextOption, fit_text_to_target);
 	subscribe_solver_option(kPerspectiveFaxFrzOnlyOption, fax_frz_only);
+	connections.emplace_back(OPT_SUB(kPerspectiveShapeToleranceOption,
+									 [this](agi::OptionValue const& value) {
+										 double const next = value.GetDouble();
+										 if (perspective_shape_tolerance == next)
+											 return;
+										 perspective_shape_tolerance = next;
+										 RefreshAfterSolverOptionChange();
+									 }));
 	connections.push_back(OPT_SUB(kPerspectiveDecimalPlacesOption,
 								  [this](agi::OptionValue const& value) {
 									  int const next = perspective::ClampPerspectiveDecimalPlaces(
@@ -762,12 +772,10 @@ void VisualToolMeasure::UpdatePerspectivePreview() {
 		return;
 
 	perspective::SolverInput input;
-	input.source = perspective_source->forward_input;
 	input.target = *target;
 	input.output_mapping = context->output_mapping;
 	input.max_error = kPerspectiveMaxError;
-	input.locked_rotation_z = perspective::PerspectiveRotationLock(
-		perspective_source->state);
+	input.shape_tolerance = perspective_shape_tolerance;
 	input.scale_policy = fit_text_to_target
 		? perspective::PerspectiveScalePolicy::Fit
 		: perspective::PerspectiveScalePolicy::Preserve;
@@ -777,6 +785,7 @@ void VisualToolMeasure::UpdatePerspectivePreview() {
 	input.edge_anchor = perspective_edge_anchor;
 	input.maximum_decimals = perspective_decimal_places;
 
+	perspective::PreparePerspectiveSolverInput(*perspective_source, input);
 	auto const solved = perspective::SolvePerspectiveTags(input);
 	if (!solved) {
 		// Mirror the verdict even when the diagnostic slot is owned elsewhere:
@@ -1113,7 +1122,8 @@ void VisualToolMeasure::ApplyPerspective() {
 			? perspective::PerspectiveRepresentationPolicy::FaxFrzOnly
 			: perspective::PerspectiveRepresentationPolicy::Automatic,
 		perspective_decimal_places,
-		perspective_edge_anchor);
+		perspective_edge_anchor,
+		perspective_shape_tolerance);
 	if (!planned) {
 		if (planned.error == perspective::PerspectivePlanError::SolverFailed
 			&& planned.solver_error
@@ -1193,7 +1203,7 @@ void VisualToolMeasure::ApplyPerspective() {
 		c->ShowStatus(from_wx(fmt_tl(
 			"Perspective target applied, snapped %.2f px to the nearest shape "
 			"the tags can represent.",
-			planned.plan->SnapError())));
+			planned.plan->MaxError())));
 		return;
 	}
 	// A plan the solver called exact can still land visibly off the drawn quad:

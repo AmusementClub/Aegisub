@@ -89,6 +89,10 @@ bool NearlyEqual(double left, double right) {
 	return std::abs(left - right) <= 1.0e-9 * scale;
 }
 
+bool EquivalentRotation(double left, double right) {
+	return std::abs(std::remainder(left - right, 360.0)) <= 1.0e-9;
+}
+
 bool SamePoint(Vec2 left, Vec2 right) {
 	return NearlyEqual(left.x, right.x) && NearlyEqual(left.y, right.y);
 }
@@ -1035,11 +1039,11 @@ struct RewriteDelta {
 	// what rounds a high-precision source value away from the state the
 	// staged re-verification must match.
 	bool keep_restricted_tags = false;
-	// True when the candidate carries the source's own shear values (always
-	// the case for multi-line bounds, where the frozen shear is the layout).
-	// The original \fax/\fay spelling is then the only text that reproduces
-	// the values bit for bit, so the tags stay where the author wrote them.
-	bool keep_shear_tags = false;
+	// Keep each unchanged, nondefault shear axis in its original spelling.
+	// This preserves frozen precision even when the other axis changes or
+	// inherits the style's default.
+	bool keep_shear_x_tags = false;
+	bool keep_shear_y_tags = false;
 };
 
 bool HasChanges(RewriteDelta const& delta) {
@@ -1050,22 +1054,15 @@ bool RemoveTag(
 	std::string const& name,
 	PerspectiveScalePolicy scale_policy,
 	bool keep_restricted_tags,
-	bool keep_shear_tags) {
-	if (scale_policy == PerspectiveScalePolicy::Preserve
-		&& (name == "\\fsc" || name == "\\fscx" || name == "\\fscy"))
+	bool keep_shear_x_tags,
+	bool keep_shear_y_tags) {
+	if (scale_policy == PerspectiveScalePolicy::Preserve && (name == "\\fsc" || name == "\\fscx" || name == "\\fscy"))
 		return false;
-	if (keep_restricted_tags
-		&& (name == "\\org" || name == "\\fay" || name == "\\frx"
-			|| name == "\\fry"))
+	if (keep_restricted_tags && (name == "\\org" || name == "\\fay" || name == "\\frx" || name == "\\fry"))
 		return false;
-	if (keep_shear_tags && (name == "\\fax" || name == "\\fay"))
+	if ((keep_shear_x_tags && name == "\\fax") || (keep_shear_y_tags && name == "\\fay"))
 		return false;
-	return name == "\\an" || name == "\\a"
-		|| name == "\\pos" || name == "\\move" || name == "\\org"
-		|| name == "\\fsc" || name == "\\fscx" || name == "\\fscy"
-		|| name == "\\fax" || name == "\\fay"
-		|| name == "\\fr" || name == "\\frz"
-		|| name == "\\frx" || name == "\\fry";
+	return name == "\\an" || name == "\\a" || name == "\\pos" || name == "\\move" || name == "\\org" || name == "\\fsc" || name == "\\fscx" || name == "\\fscy" || name == "\\fax" || name == "\\fay" || name == "\\fr" || name == "\\frz" || name == "\\frx" || name == "\\fry";
 }
 
 bool AppendTag(std::string& bundle, std::string_view name, std::string const& value) {
@@ -1079,10 +1076,10 @@ bool AppendTag(std::string& bundle, std::string_view name, std::string const& va
 std::optional<RewriteDelta> MakeRewriteDelta(
 	EvaluatedTransformState const& source,
 	EvaluatedTransformState const& event_style,
-	SolverCandidate const& candidate,
+	EvaluatedTransformState const& target,
+	SerializedTransformState const& serialized,
 	PerspectiveScalePolicy scale_policy,
 	PerspectiveRepresentationPolicy representation_policy) {
-	auto const& target = candidate.state;
 	if (!FiniteTransform(source) || !FiniteTransform(event_style)
 		|| !FiniteTransform(target))
 		return std::nullopt;
@@ -1100,19 +1097,11 @@ std::optional<RewriteDelta> MakeRewriteDelta(
 	// reproduces the value bit for bit, so the rewrite must keep those tags
 	// and never re-emit them from rounded digits.
 	delta.keep_restricted_tags =
-		representation_policy == PerspectiveRepresentationPolicy::FaxFrzOnly
-		&& !MatchesPerspectiveRepresentationPolicy(
-			target, representation_policy);
-	// Keep the source's shear spelling when the candidate retains its values
-	// and at least one axis is not redundant against the style baseline; a
-	// fully style-equal pair stays on the ordinary elision path. The original
-	// bytes are the only text that reproduces a high-precision value bit for
-	// bit, which the multi-line shear lock depends on.
-	bool const shear_redundant = NearlyEqual(target.shear_x, event_style.shear_x)
-		&& NearlyEqual(target.shear_y, event_style.shear_y);
-	delta.keep_shear_tags = NearlyEqual(source.shear_x, target.shear_x)
-		&& NearlyEqual(source.shear_y, target.shear_y)
-		&& !shear_redundant;
+		representation_policy == PerspectiveRepresentationPolicy::FaxFrzOnly && !MatchesPerspectiveRepresentationPolicy(
+																					target, representation_policy);
+	delta.keep_shear_x_tags = NearlyEqual(source.shear_x, target.shear_x) && !NearlyEqual(target.shear_x, event_style.shear_x);
+	delta.keep_shear_y_tags = NearlyEqual(source.shear_y, target.shear_y)
+		&& !NearlyEqual(target.shear_y, event_style.shear_y);
 	delta.changed = source.alignment != target.alignment
 		|| !SamePoint(source.position, target.position)
 		|| !SameOptionalPoint(source.origin, target.origin)
@@ -1134,40 +1123,40 @@ std::optional<RewriteDelta> MakeRewriteDelta(
 	bool const inherit_position = inherit_alignment
 		&& SamePoint(target.position, event_style.position);
 	if (!inherit_position && !AppendTag(delta.line_bundle, "\\pos",
-		candidate.serialized.position)) return std::nullopt;
+										serialized.position))
+		return std::nullopt;
 	if (target.origin && !delta.keep_restricted_tags) {
-		if (!candidate.serialized.origin
-			|| !AppendTag(delta.line_bundle, "\\org", *candidate.serialized.origin))
+		if (!serialized.origin || !AppendTag(delta.line_bundle, "\\org", *serialized.origin))
 			return std::nullopt;
 	}
 
 	if (scale_policy == PerspectiveScalePolicy::Fit
 		&& !NearlyEqual(target.scale_x, event_style.scale_x)) {
 		if (!AppendTag(delta.run_bundle, "\\fscx",
-			candidate.serialized.scale_x)) return std::nullopt;
+					   serialized.scale_x))
+			return std::nullopt;
 	}
 	if (scale_policy == PerspectiveScalePolicy::Fit
 		&& !NearlyEqual(target.scale_y, event_style.scale_y)) {
 		if (!AppendTag(delta.run_bundle, "\\fscy",
-			candidate.serialized.scale_y)) return std::nullopt;
+					   serialized.scale_y))
+			return std::nullopt;
 	}
-	if (!delta.keep_shear_tags
-		&& !NearlyEqual(target.shear_x, event_style.shear_x)
-		&& !AppendTag(delta.run_bundle, "\\fax",
-		candidate.serialized.shear_x)) return std::nullopt;
-	if (!delta.keep_shear_tags && !delta.keep_restricted_tags && !NearlyEqual(target.shear_y, event_style.shear_y) && !AppendTag(delta.run_bundle, "\\fay", candidate.serialized.shear_y))
+	if (!delta.keep_shear_x_tags && !NearlyEqual(target.shear_x, event_style.shear_x) && !AppendTag(delta.run_bundle, "\\fax", serialized.shear_x))
+		return std::nullopt;
+	if (!delta.keep_shear_y_tags && !delta.keep_restricted_tags && !NearlyEqual(target.shear_y, event_style.shear_y) && !AppendTag(delta.run_bundle, "\\fay", serialized.shear_y))
 		return std::nullopt;
 	if (!delta.keep_restricted_tags) {
-		if (!NearlyEqual(target.rotation_x, event_style.rotation_x)
-			&& !AppendTag(delta.run_bundle, "\\frx",
-			candidate.serialized.rotation_x)) return std::nullopt;
-		if (!NearlyEqual(target.rotation_y, event_style.rotation_y)
-			&& !AppendTag(delta.run_bundle, "\\fry",
-			candidate.serialized.rotation_y)) return std::nullopt;
+		if (!EquivalentRotation(target.rotation_x, event_style.rotation_x) && !AppendTag(delta.run_bundle, "\\frx",
+																						 serialized.rotation_x))
+			return std::nullopt;
+		if (!EquivalentRotation(target.rotation_y, event_style.rotation_y) && !AppendTag(delta.run_bundle, "\\fry",
+																						 serialized.rotation_y))
+			return std::nullopt;
 	}
-	if (!NearlyEqual(target.rotation_z, event_style.rotation_z)
-		&& !AppendTag(delta.run_bundle, "\\frz",
-		candidate.serialized.rotation_z)) return std::nullopt;
+	if (!EquivalentRotation(target.rotation_z, event_style.rotation_z) && !AppendTag(delta.run_bundle, "\\frz",
+																					 serialized.rotation_z))
+		return std::nullopt;
 
 	return delta;
 }
@@ -1206,10 +1195,15 @@ std::string RewriteOverrideContent(
 	RewriteDelta const& delta,
 	PerspectiveScalePolicy scale_policy,
 	bool insert_line_initial,
-	bool insert_run_initial) {
+	bool insert_run_initial,
+	std::size_t& tag_count) {
 	std::string output;
 	output.reserve(content.size() + delta.line_bundle.size()
 		+ delta.run_bundle.size());
+	auto const append_bundle = [&](std::string const& bundle) {
+		output.append(bundle);
+		tag_count += static_cast<std::size_t>(std::ranges::count(bundle, '\\'));
+	};
 	std::size_t cursor = 0;
 	bool line_inserted = !insert_line_initial || delta.line_bundle.empty();
 	bool const initial_run_superseded = insert_run_initial && std::any_of(
@@ -1221,30 +1215,32 @@ std::string RewriteOverrideContent(
 		auto const& tag = tags[index];
 		output.append(content.substr(cursor, tag.begin - cursor));
 		if (!line_inserted) {
-			output.append(delta.line_bundle);
+			append_bundle(delta.line_bundle);
 			line_inserted = true;
 		}
 		if (!run_inserted && tag.name != "\\r") {
-			output.append(delta.run_bundle);
+			append_bundle(delta.run_bundle);
 			run_inserted = true;
 		}
 		if (!RemoveTag(tag.name, scale_policy, delta.keep_restricted_tags,
-				delta.keep_shear_tags))
+					   delta.keep_shear_x_tags, delta.keep_shear_y_tags)) {
 			output.append(tag.raw);
+			if (RemoveTag(tag.name, PerspectiveScalePolicy::Fit, false, false, false))
+				++tag_count;
+		}
 		if (tag.name == "\\r" && reset_needs[index]) {
-			output.append(delta.run_bundle);
+			append_bundle(delta.run_bundle);
 			run_inserted = true;
 		}
 		cursor = tag.end;
 	}
 	output.append(content.substr(cursor));
 	if (!line_inserted)
-		output.append(delta.line_bundle);
+		append_bundle(delta.line_bundle);
 	if (!run_inserted)
-		output.append(delta.run_bundle);
+		append_bundle(delta.run_bundle);
 	return output;
 }
-
 }
 
 char const* DescribeAssStateError(AssStateError error) {
@@ -1379,39 +1375,62 @@ char const* DescribeRewriteError(RewriteError error) {
 	return "unknown Perspective ASS rewrite error";
 }
 
-RewriteResult RewritePerspectiveTags(
+struct PerspectiveTagRewriter::Data {
+	std::string source_text;
+	EvaluatedTransformState source_state;
+	EvaluatedTransformState event_style_state;
+	std::vector<ParsedOverrideSpan> parsed_spans;
+	std::vector<std::vector<bool>> reset_needs;
+	RewriteError error = RewriteError::None;
+	std::size_t source_tag_count = 0;
+};
+
+PerspectiveTagRewriter::PerspectiveTagRewriter(
 	std::string_view source_text,
 	EvaluatedTransformState const& source_state,
-	EvaluatedTransformState const& event_style_state,
-	SolverCandidate const& candidate,
-	PerspectiveScalePolicy scale_policy,
-	PerspectiveRepresentationPolicy representation_policy) {
-	RewriteResult result;
+	EvaluatedTransformState const& event_style_state) {
+	auto prepared = std::make_shared<Data>();
+	data = prepared;
 	if (source_text.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-		result.error = RewriteError::InvalidInput;
-		return result;
+		prepared->error = RewriteError::InvalidInput;
+		return;
 	}
-	std::vector<ParsedOverrideSpan> parsed_spans;
+	prepared->source_text.assign(source_text);
+	prepared->source_state = source_state;
+	prepared->event_style_state = event_style_state;
 	for (auto const& span : FindOverrideSpans(source_text)) {
 		auto const content = source_text.substr(span.begin + 1, span.end - span.begin - 2);
-		parsed_spans.push_back({span, ParseRawTags(content)});
+		prepared->parsed_spans.push_back({.span = span, .tags = ParseRawTags(content)});
 	}
-	auto const reset_needs = BuildResetInsertionMap(source_text, parsed_spans);
-	for (auto const& parsed : parsed_spans) {
+	prepared->reset_needs = BuildResetInsertionMap(source_text, prepared->parsed_spans);
+	for (auto const& parsed : prepared->parsed_spans) {
 		auto const validation = ValidateRawTags(parsed.tags);
 		if (validation == RewriteError::UnsupportedMove)
-			result.error = validation;
-		else if (validation == RewriteError::UnsupportedGeometryAnimation
-			&& result.error != RewriteError::UnsupportedMove)
-			result.error = validation;
-		else if (validation == RewriteError::UnsupportedNamedReset
-			&& result.error == RewriteError::None)
-			result.error = validation;
+			prepared->error = validation;
+		else if (validation == RewriteError::UnsupportedGeometryAnimation && prepared->error != RewriteError::UnsupportedMove)
+			prepared->error = validation;
+		else if (validation == RewriteError::UnsupportedNamedReset && prepared->error == RewriteError::None)
+			prepared->error = validation;
+		for (auto const& tag : parsed.tags) {
+			if (RemoveTag(tag.name, PerspectiveScalePolicy::Fit, false, false, false))
+				++prepared->source_tag_count;
+		}
 	}
+}
+
+RewriteResult PerspectiveTagRewriter::Rewrite(
+	EvaluatedTransformState const& target,
+	SerializedTransformState const& serialized,
+	PerspectiveScalePolicy scale_policy,
+	PerspectiveRepresentationPolicy representation_policy) const {
+	RewriteResult result;
+	result.error = data->error;
 	if (result.error != RewriteError::None)
 		return result;
+	std::string_view const source_text = data->source_text;
+	auto const& parsed_spans = data->parsed_spans;
 	auto const delta = MakeRewriteDelta(
-		source_state, event_style_state, candidate, scale_policy,
+		data->source_state, data->event_style_state, target, serialized, scale_policy,
 		representation_policy);
 	if (!delta) {
 		result.error = RewriteError::InvalidTarget;
@@ -1419,6 +1438,7 @@ RewriteResult RewritePerspectiveTags(
 	}
 	if (!HasChanges(*delta)) {
 		result.text.assign(source_text);
+		result.cost = {.tag_count = data->source_tag_count, .byte_count = result.text.size()};
 		return result;
 	}
 
@@ -1430,8 +1450,10 @@ RewriteResult RewritePerspectiveTags(
 	result.text.reserve(
 		source_text.size() + delta->line_bundle.size() + delta->run_bundle.size() * 2
 		+ 2);
-	if (prepend_bundle)
+	if (prepend_bundle) {
 		result.text.append("{" + delta->line_bundle + delta->run_bundle + "}");
+		result.cost.tag_count = static_cast<std::size_t>(std::ranges::count(result.text, '\\'));
+	}
 
 	for (std::size_t span_index = 0; span_index < parsed_spans.size(); ++span_index) {
 		auto const& parsed = parsed_spans[span_index];
@@ -1440,15 +1462,26 @@ RewriteResult RewritePerspectiveTags(
 		auto const content = source_text.substr(span.begin + 1, span.end - span.begin - 2);
 		result.text.push_back('{');
 		result.text.append(RewriteOverrideContent(
-			content, parsed.tags, reset_needs[span_index],
-			*delta, scale_policy, insert_initial, insert_initial));
+			content, parsed.tags, data->reset_needs[span_index],
+			*delta, scale_policy, insert_initial, insert_initial, result.cost.tag_count));
 		result.text.push_back('}');
 		insert_initial = false;
 		cursor = span.end;
 	}
 	result.text.append(source_text.substr(cursor));
 	result.changed = result.text != source_text;
+	result.cost.byte_count = result.text.size();
 	return result;
 }
 
+RewriteResult RewritePerspectiveTags(
+	std::string_view source_text,
+	EvaluatedTransformState const& source_state,
+	EvaluatedTransformState const& event_style_state,
+	SolverCandidate const& candidate,
+	PerspectiveScalePolicy scale_policy,
+	PerspectiveRepresentationPolicy representation_policy) {
+	return PerspectiveTagRewriter(source_text, source_state, event_style_state)
+		.Rewrite(candidate.state, candidate.serialized, scale_policy, representation_policy);
+}
 }

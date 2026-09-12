@@ -5,10 +5,12 @@
 #include "include/aegisub/context.h"
 #include "project.h"
 #include "video_color_pick.h"
+#include "video_color_pick_preview.h"
 #include "video_controller.h"
 #include "video_frame.h"
 
 #include <libaegisub/color.h>
+#include <libaegisub/dispatch.h>
 #include <libaegisub/exception.h>
 
 #include <algorithm>
@@ -41,10 +43,15 @@ class VideoColorZoomPreview::ZoomWindow final : public wxFrame {
 	explicit ZoomWindow(wxWindow *parent) {
 		Create(parent, wxID_ANY, wxString(), wxDefaultPosition, wxDefaultSize,
 			   wxFRAME_TOOL_WINDOW | wxFRAME_NO_TASKBAR | wxSTAY_ON_TOP | wxBORDER_NONE);
-		SetFont(GetFont().Smaller());
-		int const extent = 2 * kRadius + 1;
-		SetClientSize(extent * kCell, extent * kCell + GetCharHeight() + 4);
+		SetBackgroundStyle(wxBG_STYLE_PAINT);
+		SetFont(wxFont(wxFontInfo(GetFont().Smaller().GetFractionalPointSize())
+						   .Family(wxFONTFAMILY_TELETYPE)));
+		UpdateMetrics();
 		Bind(wxEVT_PAINT, &ZoomWindow::OnPaint, this);
+		Bind(wxEVT_DPI_CHANGED, [this](wxDPIChangedEvent& event) {
+			UpdateMetrics();
+			event.Skip();
+		});
 	}
 
 	/// Never take the keyboard: the canvas owns it while the pick is armed
@@ -57,7 +64,15 @@ class VideoColorZoomPreview::ZoomWindow final : public wxFrame {
 		this->picked = picked;
 		this->frozen = frozen;
 		RebuildLabel();
-		Refresh();
+		Refresh(false);
+	}
+
+	void SetFrozen(bool frozen) {
+		if (this->frozen == frozen)
+			return;
+		this->frozen = frozen;
+		RebuildLabel();
+		Refresh(false);
 	}
 
 	void PlaceNear(wxPoint screen_pos) {
@@ -72,7 +87,8 @@ class VideoColorZoomPreview::ZoomWindow final : public wxFrame {
 		pos.x = std::clamp<int>(pos.x, area.GetLeft(), std::max(area.GetLeft(), area.GetRight() - size.x));
 		pos.y = std::clamp<int>(pos.y, area.GetTop(), std::max(area.GetTop(), area.GetBottom() - size.y));
 
-		Move(pos);
+		if (GetPosition() != pos)
+			Move(pos);
 	}
 
 	private:
@@ -141,16 +157,16 @@ class VideoColorZoomPreview::ZoomWindow final : public wxFrame {
 					 wxString::FromUTF8(AssCompat::FormatOverrideColor(*picked));
 		if (frozen)
 			label += wxString::FromUTF8(" (frozen)");
+	}
 
-		// The value strings are fixed-width, so the label width only changes
-		// when the frozen suffix appears; widen the window rather than clip.
-		int text_width = 0, text_height = 0;
-		GetTextExtent(label, &text_width, &text_height);
-		int const grid_px = extent * kCell;
-		int const want = std::max(grid_px, text_width + 4);
+	void UpdateMetrics() {
+		// Reserve both colours and the playback badge in a monospace font.
+		// Colour changes must not resize a moving native window.
+		int const text_width = GetTextExtent(wxString::FromUTF8("&H000000& -> &H000000& (frozen)")).x;
+		int const grid_px = (2 * kRadius + 1) * kCell;
+		int const width = std::max(grid_px, text_width + 4);
 		int const height = grid_px + GetCharHeight() + 4;
-		if (GetClientSize().x != want || GetClientSize().y != height)
-			SetClientSize(want, height);
+		SetClientSize(width, height);
 	}
 
 	std::vector<agi::Color> content;
@@ -163,6 +179,20 @@ class VideoColorZoomPreview::ZoomWindow final : public wxFrame {
 
 VideoColorZoomPreview::VideoColorZoomPreview(agi::Context *context, wxWindow *anchor)
 	: context(context), anchor(anchor) {
+	preview = std::make_unique<aegisub::color_pick::Preview>(
+		agi::dispatch::BackgroundExecutor(), agi::dispatch::MainExecutor(),
+		[this](aegisub::color_pick::Snapshot snapshot) {
+			int const presented = this->context->videoController->GetPresentedFrameN();
+			bool const frozen = this->context->videoController->IsPlaying() &&
+								presented >= 0 && presented != cache_frame;
+			window->SetContent(std::move(snapshot.grid),
+							   snapshot.pick.pixels ? std::optional<agi::Color>(snapshot.pick.color) : std::nullopt,
+							   frozen);
+			window->PlaceNear(this->anchor->ClientToScreen(last_anchor));
+			if (!window->IsShown())
+				window->ShowWithoutActivating();
+		},
+		kRadius);
 	int frame = context->videoController->GetPresentedFrameN();
 	if (frame < 0)
 		frame = context->videoController->GetFrameN();
@@ -174,6 +204,7 @@ VideoColorZoomPreview::~VideoColorZoomPreview() = default;
 void VideoColorZoomPreview::UpdateAt(std::optional<wxPoint> storage_pixel, wxPoint anchor_client_pos) {
 	pixel = storage_pixel;
 	if (!storage_pixel) {
+		preview->Clear();
 		if (window)
 			window->Hide();
 		return;
@@ -194,18 +225,19 @@ void VideoColorZoomPreview::UpdateAt(std::optional<wxPoint> storage_pixel, wxPoi
 	}
 
 	last_anchor = anchor_client_pos;
-	// Pointer motion within one source pixel (a zoomed-out view maps many
-	// screen pixels onto one storage pixel) only needs the window to follow
-	// along; the grid and the pick prediction are unchanged, and PickColor's
-	// region walk is not free.
-	if (window->IsShown() && painted_pixel == pixel && painted_frame == cache_frame) {
-		window->PlaceNear(anchor->ClientToScreen(anchor_client_pos));
-		return;
-	}
-	RepaintAt(anchor_client_pos);
+	int const presented = context->videoController->GetPresentedFrameN();
+	window->SetFrozen(context->videoController->IsPlaying() &&
+					  presented >= 0 && presented != cache_frame);
+	window->PlaceNear(anchor->ClientToScreen(anchor_client_pos));
+	// Movement never waits for the region walk. The preview publishes complete
+	// grid/colour snapshots while coalescing requests to the latest position.
+	preview->Request(cache, pixel->x, pixel->y);
 }
 
 void VideoColorZoomPreview::OnFramePresented(int frame_n) {
+	if (window)
+		window->SetFrozen(context->videoController->IsPlaying() &&
+						  frame_n >= 0 && frame_n != cache_frame);
 	if (context->videoController->IsPlaying())
 		return;
 	int const previous = cache_frame;
@@ -214,8 +246,8 @@ void VideoColorZoomPreview::OnFramePresented(int frame_n) {
 	// an armed pick) changed the frame under a still magnifier: repaint it,
 	// or the grid would keep showing the pre-step frame while a click samples
 	// the new one.
-	if (cache_frame != previous && window && window->IsShown() && pixel)
-		RepaintAt(last_anchor);
+	if (cache_frame != previous && window && pixel)
+		preview->Request(cache, pixel->x, pixel->y);
 }
 
 void VideoColorZoomPreview::RefreshCache(int frame_n) {
@@ -239,24 +271,4 @@ void VideoColorZoomPreview::RefreshCache(int frame_n) {
 
 bool VideoColorZoomPreview::CacheUsable() const {
 	return cache && !cache->data.empty();
-}
-
-void VideoColorZoomPreview::RepaintAt(wxPoint anchor_client_pos) {
-	int const presented = context->videoController->GetPresentedFrameN();
-	bool const frozen =
-		context->videoController->IsPlaying() && presented >= 0 && presented != cache_frame;
-
-	// The same PickColor call the click's Complete makes, so the label shows
-	// the colour the tag will receive (region median, edge snap and all)
-	// rather than the raw centre pixel that median then adjusts.
-	auto const pick = aegisub::color_pick::PickColor(*cache, pixel->x, pixel->y, {});
-	window->SetContent(
-		aegisub::color_pick::ExtractZoomRegion(*cache, pixel->x, pixel->y, kRadius),
-		pick.pixels ? std::optional<agi::Color>(pick.color) : std::nullopt,
-		frozen);
-	window->PlaceNear(anchor->ClientToScreen(anchor_client_pos));
-	if (!window->IsShown())
-		window->Show();
-	painted_pixel = pixel;
-	painted_frame = cache_frame;
 }

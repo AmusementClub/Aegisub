@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdlib>
+#include <limits>
 
 namespace {
 
@@ -264,6 +265,69 @@ TEST(video_color_pick, stops_growth_at_the_pixel_and_extent_caps) {
 	EXPECT_TRUE(by_extent.capped);
 	EXPECT_LE(by_extent.bbox_w, 16 + 2);
 	EXPECT_LE(by_extent.bbox_h, 16 + 2);
+
+	extent_cap.max_region_extent = std::numeric_limits<int>::max();
+	auto const unbounded_extent = aegisub::color_pick::PickColor(frame, 64, 64, extent_cap);
+	EXPECT_FALSE(unbounded_extent.capped);
+	EXPECT_EQ(128 * 128, unbounded_extent.pixels);
+	EXPECT_EQ(128, unbounded_extent.bbox_w);
+	EXPECT_EQ(128, unbounded_extent.bbox_h);
+}
+
+TEST(video_color_pick, keeps_all_seeds_when_the_patch_is_wider_than_the_growth_extent) {
+	auto frame = MakeFrame(31, 31);
+	FillSolid(frame, 100, 100, 100);
+	aegisub::color_pick::Options options;
+	options.seed_radius = 3;
+	options.max_region_extent = 1;
+
+	auto const result = aegisub::color_pick::PickColor(frame, 15, 15, options);
+	// All 49 seeds remain pending while the last seed initially grows four
+	// neighbours past the patch. The extent cap does not discard queued seeds.
+	EXPECT_FALSE(result.fallback);
+	EXPECT_TRUE(result.capped);
+	EXPECT_EQ(53, result.pixels);
+	EXPECT_EQ(8, result.bbox_w);
+	EXPECT_EQ(8, result.bbox_h);
+	EXPECT_TRUE(ChannelsNear(result.color, 100, 100, 100, 0));
+}
+
+TEST(video_color_pick, confidence_includes_ring_pixels_beyond_the_growth_extent) {
+	auto frame = MakeFrame(31, 31);
+	FillSolid(frame, 105, 105, 105);
+	FillSolid(frame, 200, 200, 200, 14, 14, 16, 16);
+	SetPixel(frame, 15, 15, 100, 100, 100);
+	aegisub::color_pick::Options options;
+	options.seed_radius = 0;
+	options.max_region_extent = 1;
+
+	auto const result = aegisub::color_pick::PickColor(frame, 15, 15, options);
+	ASSERT_FALSE(result.fallback);
+	EXPECT_FALSE(result.edge_snapped);
+	EXPECT_EQ(1, result.pixels);
+	EXPECT_TRUE(ChannelsNear(result.color, 100, 100, 100, 0));
+	// The radius-4 ring has 8 pixels with contrast 100 and 72 with contrast 5.
+	// Its mean contrast is 14.5, giving confidence 14.5 / (14.5 + 4).
+	EXPECT_NEAR(29.0 / 37.0, result.confidence, 1e-12);
+}
+
+TEST(video_color_pick, confidence_excludes_seed_pixels_still_pending_at_the_pixel_cap) {
+	auto frame = MakeFrame(31, 31);
+	FillSolid(frame, 200, 200, 200);
+	FillSolid(frame, 100, 100, 100, 14, 14, 16, 16);
+	aegisub::color_pick::Options options;
+	options.max_region_pixels = 4;
+	options.max_region_extent = 1;
+
+	auto const result = aegisub::color_pick::PickColor(frame, 15, 15, options);
+	ASSERT_FALSE(result.fallback);
+	EXPECT_TRUE(result.capped);
+	EXPECT_EQ(4, result.pixels);
+	EXPECT_EQ(3, result.bbox_w);
+	EXPECT_EQ(2, result.bbox_h);
+	// All nine queued seeds are excluded from the ring, including the five
+	// not admitted before the cap, leaving only pixels with contrast 100.
+	EXPECT_NEAR(25.0 / 26.0, result.confidence, 1e-12);
 }
 
 TEST(video_color_pick, maps_display_points_to_storage_without_crop) {

@@ -279,6 +279,7 @@ bool BoundsFitExtent(RegionGeometry const& box, int px, int py, int extent) {
 double ComputeConfidence(
 	VideoFrame const& frame,
 	std::vector<char> const& member_mask,
+	WindowBounds const& mask_bounds,
 	int width,
 	int height,
 	RegionGeometry const& box,
@@ -294,8 +295,8 @@ double ComputeConfidence(
 	int ring_count = 0;
 	for (int ry = top; ry <= bottom; ++ry) {
 		for (int rx = left; rx <= right; ++rx) {
-			auto const linear = static_cast<size_t>(ry) * width + rx;
-			if (member_mask[linear])
+			bool const inside_mask = rx >= mask_bounds.left && rx <= mask_bounds.right && ry >= mask_bounds.top && ry <= mask_bounds.bottom;
+			if (inside_mask && member_mask[static_cast<size_t>(ry - mask_bounds.top) * mask_bounds.Width() + rx - mask_bounds.left])
 				continue;
 			total_distance += Manhattan(ToYcbcr(PixelAt(frame, rx, ry)), reference);
 			++ring_count;
@@ -393,12 +394,21 @@ Result PickColor(VideoFrame const& frame, int x, int y, Options const& options) 
 	// Flood fill from every seed-patch pixel matching the reference colour.
 	auto const min_start_count = static_cast<size_t>(
 		std::max(1, ((opt.seed_radius * 2 + 1) * (opt.seed_radius * 2 + 1)) / 2));
-	std::vector<char> enqueued(static_cast<size_t>(width) * height, 0);
+	auto const seed_bounds = ClampedWindowBounds(clamped_x, clamped_y, opt.seed_radius, width, height);
+	// Every grown pixel stays within max_region_extent of the first seed
+	// popped. Include all initial seeds as well, even when their patch is
+	// wider than that extent, without clearing a full frame for each pick.
+	WindowBounds const mask_bounds{
+		.left = seed_bounds.left - std::min(seed_bounds.left, opt.max_region_extent),
+		.top = seed_bounds.top - std::min(seed_bounds.top, opt.max_region_extent),
+		.right = seed_bounds.right + std::min(width - 1 - seed_bounds.right, opt.max_region_extent),
+		.bottom = seed_bounds.bottom + std::min(height - 1 - seed_bounds.bottom, opt.max_region_extent)};
+	std::vector<char> enqueued(static_cast<size_t>(mask_bounds.Width()) * mask_bounds.Height(), 0);
 	std::vector<size_t> pending;
 	pending.reserve(min_start_count * 2);
 
 	auto try_enqueue = [&](int px, int py) {
-		auto& slot = enqueued[static_cast<size_t>(py) * width + px];
+		auto& slot = enqueued[static_cast<size_t>(py - mask_bounds.top) * mask_bounds.Width() + px - mask_bounds.left];
 		if (slot)
 			return;
 		if (!WithinTolerances(ToYcbcr(PixelAt(frame, px, py)), reference,
@@ -408,12 +418,8 @@ Result PickColor(VideoFrame const& frame, int x, int y, Options const& options) 
 		pending.push_back(static_cast<size_t>(py) * width + px);
 	};
 
-	int const left_bound = ClampInt(clamped_x - opt.seed_radius, 0, width - 1);
-	int const right_bound = ClampInt(clamped_x + opt.seed_radius, 0, width - 1);
-	int const top_bound = ClampInt(clamped_y - opt.seed_radius, 0, height - 1);
-	int const bottom_bound = ClampInt(clamped_y + opt.seed_radius, 0, height - 1);
-	for (int sy = top_bound; sy <= bottom_bound; ++sy)
-		for (int sx = left_bound; sx <= right_bound; ++sx)
+	for (int sy = seed_bounds.top; sy <= seed_bounds.bottom; ++sy)
+		for (int sx = seed_bounds.left; sx <= seed_bounds.right; ++sx)
 			try_enqueue(sx, sy);
 
 	std::vector<Rgb> region_rgbs;
@@ -471,7 +477,7 @@ Result PickColor(VideoFrame const& frame, int x, int y, Options const& options) 
 	for (auto const& rgb : region_rgbs)
 		spread_total += Manhattan(ToYcbcr(rgb), reference);
 	result.confidence = ComputeConfidence(
-		frame, enqueued, width, height, box, reference,
+		frame, enqueued, mask_bounds, width, height, box, reference,
 		spread_total / static_cast<double>(region_rgbs.size()));
 	return result;
 }

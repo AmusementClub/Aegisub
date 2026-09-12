@@ -48,6 +48,7 @@ if(GTEST_FOUND)
         tests/tests/audio_display.cpp
         tests/tests/align_video_fade.cpp
         tests/tests/video_color_pick.cpp
+        tests/tests/video_color_pick_preview.cpp
         tests/tests/async_video_provider.cpp
         tests/tests/dispatch.cpp
         tests/tests/export_framerate_transform.cpp
@@ -104,6 +105,7 @@ if(GTEST_FOUND)
         src/secondary_subtitle_reload_policy.cpp
         src/align_video_fade.cpp
         src/video_color_pick.cpp
+        src/video_color_pick_preview.cpp
         src/async_video_provider.cpp
         src/async_video_provider_host.cpp
         src/async_video_trace.cpp

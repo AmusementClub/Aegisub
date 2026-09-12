@@ -8,6 +8,9 @@
 namespace agi {
 struct Context;
 }
+namespace aegisub::color_pick {
+class Preview;
+}
 // struct, matching video_frame.h's definition: MSVC mangles the class-key, so
 // a mismatched forward declaration changes the symbol and fails to link.
 struct VideoFrame;
@@ -19,9 +22,10 @@ class wxWindow;
 /// window showing the (2*radius+1)^2 storage pixels around the pixel under
 /// the pointer, labelled with that pixel's colour and the pick pipeline's
 /// predicted result. The cache is read when the pick arms and re-read
-/// whenever a frame is presented while playback is stopped, so while paused
-/// the grid is always the frame a click would sample. During playback the
-/// grid stays on the cached frame on purpose and marks itself frozen in the
+/// whenever a frame is presented while playback is stopped. Grid and predicted
+/// colour update together from background sampling; pointer movement only
+/// repositions the window and replaces the latest sampling request. During
+/// playback the grid stays on the cached frame and marks itself frozen in the
 /// badge, rather than pay a synchronous frame readback per presented frame.
 ///
 /// The grid is drawn in storage-pixel order; videos whose display output is
@@ -51,11 +55,11 @@ class VideoColorZoomPreview final {
 	class ZoomWindow;
 	void RefreshCache(int frame_n);
 	bool CacheUsable() const;
-	void RepaintAt(wxPoint anchor_client_pos);
 
 	agi::Context *context;
 	wxWindow *anchor;
 	std::unique_ptr<ZoomWindow> window;
+	std::unique_ptr<aegisub::color_pick::Preview> preview;
 	std::shared_ptr<VideoFrame> cache;
 	int cache_frame = -1;
 	/// Frame number of the last readback attempt, successful or not: a frame
@@ -65,9 +69,4 @@ class VideoColorZoomPreview final {
 	/// Anchor client position of the last UpdateAt, for repainting on frame
 	/// changes while the pointer itself is parked.
 	wxPoint last_anchor;
-	/// Storage pixel and cache frame the on-screen content was built from:
-	/// pointer motion that maps to the same pixel on the same frame only
-	/// moves the window, skipping the pick prediction's region walk.
-	std::optional<wxPoint> painted_pixel;
-	int painted_frame = -1;
 };

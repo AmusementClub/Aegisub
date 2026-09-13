@@ -805,6 +805,7 @@ void VideoDisplay::OnRendererBackendChanged(agi::OptionValue const&) {
 }
 
 void VideoDisplay::ApplyVideoProvider(AsyncVideoProvider *provider) {
+	last_size_event_client_size = wxDefaultSize;
 	pending_packet = { };
 	has_pending_packet = false;
 	pending_packet_deferred_for_visual_interaction = false;
@@ -2567,6 +2568,13 @@ void VideoDisplay::RefreshVideoScale() {
 void VideoDisplay::OnSizeEvent(wxSizeEvent& event) {
 	auto const client_size = GetClientSize();
 	perf_trace::VideoUiDurationScope trace("video_display.resize", client_size.x, client_size.y);
+	// Hidden dialogs still receive layout events, but PositionVideo cannot
+	// calculate their viewport. Do not cache that size or publish a zero zoom;
+	// showing/restoring the window must process the next event at the same size.
+	if (con->project->VideoProvider() == nullptr || !IsShownOnScreen() || client_size.x <= 0 || client_size.y <= 0) {
+		last_size_event_client_size = wxDefaultSize;
+		return;
+	}
 	// Sizer layout can send size events for unchanged children. Avoid discarding
 	// the paused scene and scheduling another buffer swap for those events.
 	if (client_size == last_size_event_client_size && scale_factor == baseViewportScaleFactor)
@@ -2583,7 +2591,7 @@ void VideoDisplay::OnSizeEvent(wxSizeEvent& event) {
 		}
 		videoSize = newVideoSize;
 		PositionVideo();
-		if (auto provider = con->project->VideoProvider(); provider && provider->GetHeight() > 0) {
+		if (auto provider = con->project->VideoProvider(); provider && provider->GetHeight() > 0 && viewport_width > 0 && viewport_height > 0) {
 			zoomValue = double(viewport_height) / provider->GetHeight();
 			zoomBox->ChangeValue(fmt_wx("%g%%", zoomValue * 100.));
 			con->ass->Properties.video_zoom = zoomValue;

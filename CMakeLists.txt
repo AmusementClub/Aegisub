@@ -781,6 +781,7 @@ set(AEGISUB_CORE_SOURCES
     src/perspective_tag_solver.cpp
     # Motion tracking and ASS geometry output
     src/motion_track/apply_plan.cpp
+    src/motion_track/apply_source.cpp
     src/motion_track/geometry_apply.cpp
     src/motion_track/geometry_tags.cpp
     src/motion_track/planar_backend.cpp

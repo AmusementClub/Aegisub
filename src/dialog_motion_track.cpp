@@ -79,15 +79,6 @@ RawVideoBatchStatus ToBatchStatus(FrameReadResult const& read) {
 	}
 }
 
-std::unique_ptr<AssDialogue> MakePartDialogue(AssDialogue const& source,
-											  PlannedLinePart const& part) {
-	auto line = std::make_unique<AssDialogue>(source);
-	line->Start = part.start_ms;
-	line->End = part.end_ms;
-	line->Text = part.text;
-	return line;
-}
-
 /// Analyze and Apply share this set: selected non-comment lines in grid
 /// order, or the active line when the selection is empty.
 std::vector<AssDialogue *> CollectApplyTargets(agi::Context *c) {
@@ -315,7 +306,7 @@ DialogMotionTrack::DialogMotionTrack(agi::Context *c)
 
 void DialogMotionTrack::ClearSessionState() {
 	session.reset();
-	source_snapshot_ = {};
+	apply_source_.Clear();
 	roi_anchor_ = {};
 	plan_preview_.reset();
 	if (preview)
@@ -387,7 +378,7 @@ void DialogMotionTrack::OnTimecodesChanged(agi::vfr::Framerate const& fps) {
 		return;
 	// DoLoadVideo always announces timecodes after the provider. Identical
 	// mappings must not drop a still-valid trajectory.
-	if (MotionTrackTimecodesMatch(source_snapshot_, fps))
+	if (MotionTrackTimecodesMatch(apply_source_.Snapshot(), fps))
 		return;
 	RequestClearSession();
 }
@@ -438,7 +429,7 @@ std::unique_ptr<MotionTrackSession> DialogMotionTrack::ContinueOrRebuild(
 		provider ? provider->GetRawVideoIdentity() : RawVideoIdentity{};
 
 	bool const same_targets =
-		MotionTrackContinueTargetsMatch(source_snapshot_, targets);
+		apply_source_.ContinueTargetsMatch(targets);
 
 	bool const can_continue = session && identity.Matches(last_identity) && MotionTrackSettingsMatch(*session->Capture(), dir, track_model) && same_targets;
 
@@ -572,8 +563,7 @@ void DialogMotionTrack::CommitAnalyzeRequest(AnalyzeRequest const& request) {
 
 	session = ContinueOrRebuild(request.domains, request.roi, request.dir,
 								request.track_model, request.targets);
-	source_snapshot_ = CaptureMotionTrackSource(
-		*core.ass, request.targets, fps, frame_count);
+	apply_source_.Capture(*core.ass, request.targets, fps, frame_count);
 
 	// Continue keeps origin_seed_frame; a rebuild starts at -1. \move is
 	// interpolated at the origin seed time, so only a fresh origin may
@@ -711,22 +701,13 @@ bool DialogMotionTrack::BuildApplyInput(ApplyPlanInput& input,
 		return false;
 	}
 	auto& ass = *core.ass;
-	if (!MotionTrackSourceIsCurrent(ass, source_snapshot_,
+	if (!MotionTrackSourceIsCurrent(ass, apply_source_.Snapshot(),
 									core.project->Timecodes())) {
 		wxMessageBox(_("The subtitles or timecodes changed since Analyze; re-run Analyze first."),
 					 _("Motion Track"), wxOK | wxICON_ERROR, this);
 		return false;
 	}
-	std::string stale_message;
-	targets = ResolveMotionTrackSourceLines(ass, source_snapshot_,
-											stale_message);
-	if (targets.empty()) {
-		wxMessageBox(stale_message.empty()
-						 ? _("No subtitle line selected.")
-						 : to_wx(stale_message),
-					 _("Motion Track"), wxOK | wxICON_ERROR, this);
-		return false;
-	}
+	targets = apply_source_.Targets();
 
 	FillApplyInputFromSnapshot(input, *snap);
 	input.storage_width = last_identity.width;
@@ -766,6 +747,10 @@ void DialogMotionTrack::OnApply(wxCommandEvent&) {
 		return;
 	auto core = context->GetCore();
 	auto& ass = *core.ass;
+	// A confirmation pumps events and may clear the captured source when
+	// video/timecodes change. Consume its owned baseline before any modal;
+	// Apply validates the live source again before accepting this plan.
+	auto plan = BuildApplyPlan(ass, apply_targets, input);
 
 	if (session->LastStopReason() != AnalyzeStopReason::Completed) {
 		auto answer = wxMessageBox(
@@ -777,7 +762,6 @@ void DialogMotionTrack::OnApply(wxCommandEvent&) {
 			return;
 	}
 
-	auto plan = BuildApplyPlan(ass, apply_targets, input);
 	if (plan.status == ApplyPlanStatus::IncompleteCoverage) {
 		std::string msg = "Trajectory does not cover:\n";
 		for (auto const& l : plan.uncovered)
@@ -814,33 +798,19 @@ void DialogMotionTrack::OnApply(wxCommandEvent&) {
 			return;
 	}
 
-	// Defer freeing the source lines until after the selection has been moved
-	// off them: the selection set and the active line still point at the
-	// originals, and dropping them first leaves dangling pointers behind.
-	std::vector<std::unique_ptr<AssDialogue>> to_delete;
-	Selection new_sel;
-	AssDialogue *new_active = nullptr;
-	for (auto const& pl : plan.lines) {
-		// Always insert before the source line: parts accumulate in ascending
-		// time order and the source is erased afterwards. Advancing an anchor
-		// (inserting before the previous part) reverses the order.
-		for (auto const& part : pl.parts) {
-			auto newline = MakePartDialogue(*pl.source, part).release();
-			ass.Events.insert(ass.iterator_to(*pl.source), *newline);
-			new_sel.insert(newline);
-			if (!new_active)
-				new_active = newline;
-		}
-		ass.Events.erase(ass.iterator_to(*pl.source));
-		to_delete.emplace_back(pl.source);
+	auto commit = [&](std::vector<AssDialogue *> const& lines) {
+		ass.Commit(from_wx(_("Apply motion track")),
+				   AssFile::COMMIT_DIAG_TEXT | AssFile::COMMIT_DIAG_ADDREM |
+					   AssFile::COMMIT_DIAG_TIME);
+		Selection selected(lines.begin(), lines.end());
+		core.selectionController->SetSelectionAndActive(std::move(selected), lines.front());
+	};
+	std::string message;
+	bool const applied = apply_source_.Apply(ass, plan, core.project->Timecodes(), commit, message);
+	if (!applied) {
+		wxMessageBox(to_wx(message), _("Motion Track"), wxOK | wxICON_ERROR, this);
+		return;
 	}
-
-	ass.Commit(from_wx(_("Apply motion track")),
-			   AssFile::COMMIT_DIAG_TEXT | AssFile::COMMIT_DIAG_ADDREM |
-				   AssFile::COMMIT_DIAG_TIME);
-	if (new_active)
-		core.selectionController->SetSelectionAndActive(std::move(new_sel),
-														new_active);
 	plan_preview_.reset();
 	preview->SetValue(false);
 	RefreshReadonlyStats();
@@ -949,6 +919,7 @@ void DialogMotionTrack::OnTrackingSettingsChanged() {
 void DialogMotionTrack::OnApplyOptionsChanged() {
 	UpdateApplyOptionAvailability();
 	InvalidatePlanPreview();
+	RefreshButtons();
 }
 
 void DialogMotionTrack::RefreshVideoDisplay() {

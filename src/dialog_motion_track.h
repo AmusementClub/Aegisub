@@ -4,6 +4,7 @@
 // Project raw-video lease; applies trajectories through the pure planner.
 
 #include "motion_track/apply_plan.h"
+#include "motion_track/apply_source.h"
 #include "motion_track/session.h"
 #include "motion_track/similarity_backend.h"
 #include "motion_track/planar_backend.h"
@@ -33,7 +34,7 @@ class DialogMotionTrack final : public wxDialog {
 	agi::signal::Connection video_open;
 	agi::signal::Connection timecodes_loaded;
 	std::unique_ptr<aegisub::motion_track::MotionTrackSession> session;
-	aegisub::motion_track::MotionTrackSourceSnapshot source_snapshot_;
+	aegisub::motion_track::MotionTrackApplySource apply_source_;
 	aegisub::motion_track::TranslationTrackerBackend translation_backend;
 	aegisub::motion_track::SimilarityTrackerBackend similarity_backend;
 	aegisub::motion_track::PlanarTrackerBackend affine_backend{aegisub::motion_track::TrackModel::Affine};

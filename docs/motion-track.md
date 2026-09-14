@@ -45,6 +45,14 @@ endpoints. Other pose channels keep the precision needed by the geometry solver.
 Exact merges positions only when they serialize identically at the selected
 precision. Changing any apply option clears the old Plan preview immediately.
 
+Compact, Exact and the other output options reuse the same Analyze data, including
+after Apply. Switching an output option lets you preview or apply again without
+retracking. Each Apply builds from the subtitle lines captured at Analyze and
+replaces the previous output, so motion and event splitting do not accumulate.
+Manual changes to the tracked subtitle lines, their styles, script settings or
+timecodes require Analyze again; undoing an Apply also requires a fresh analysis.
+An explicit Analyze after Apply starts from the currently selected subtitle lines.
+
 Affine and Perspective compose the tracked map with the subtitle's existing
 geometry. They can write position, scale, shear and all three rotation tags. The
 existing perspective solver evaluates PlayRes, LayoutRes, alignment and the source

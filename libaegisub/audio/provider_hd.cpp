@@ -25,7 +25,9 @@
 #include <filesystem>
 #include <boost/interprocess/detail/os_thread_functions.hpp>
 #include <ctime>
+#include <mutex>
 #include <thread>
+#include <vector>
 
 namespace {
 using namespace agi;
@@ -46,20 +48,50 @@ std::string FormatWrappedProviderName(char const* wrapper_name, AudioProvider co
 }
 
 class HDAudioProvider final : public AudioProviderWrapper {
+	static constexpr int64_t block_samples = 65536;
 	mutable temp_file_mapping file;
+	std::unique_ptr<std::atomic<bool>[]> failed_blocks;
+	mutable std::mutex source_mutex;
+	mutable std::mutex mapping_mutex;
+	mutable std::vector<char> decode_buffer;
 	std::jthread decoder;
 
-	void FillBuffer(void *buf, int64_t start, int64_t count) const override {
-		auto missing = std::min(count, start + count - decoded_samples);
-		if (missing > 0) {
-			memset(static_cast<int16_t*>(buf) + count - missing, 0, missing * bytes_per_sample * channels);
-			count -= missing;
-		}
+	// The caller owns source_mutex; mapping views are only held while copying,
+	// so reads of healthy blocks do not wait for source decoding or recovery.
+	void CacheBlock(int64_t start, int64_t count) const {
+		source->GetAudioChecked(decode_buffer.data(), start, count);
+		auto const frame_bytes = static_cast<int64_t>(bytes_per_sample) * channels;
+		std::scoped_lock lock(mapping_mutex);
+		memcpy(file.write(start * frame_bytes, count * frame_bytes),
+			   decode_buffer.data(), count * frame_bytes);
+	}
 
-		if (count > 0) {
-			start *= bytes_per_sample * channels;
-			count *= bytes_per_sample * channels;
-			memcpy(buf, file.read(start, count), count);
+	void FillBuffer(void *buf, int64_t start, int64_t count) const override {
+		auto const processed = decoded_samples.load();
+		if (start >= processed || count > processed - start)
+			throw AudioDecodeError("HD audio cache has not decoded the requested samples yet");
+
+		auto *output = static_cast<char *>(buf);
+		auto const frame_bytes = static_cast<int64_t>(bytes_per_sample) * channels;
+		while (count > 0) {
+			auto const index = static_cast<size_t>(start / block_samples);
+			if (failed_blocks[index].load(std::memory_order_acquire)) {
+				std::scoped_lock lock(source_mutex);
+				if (failed_blocks[index].load(std::memory_order_relaxed)) {
+					auto const block_start = static_cast<int64_t>(index) * block_samples;
+					CacheBlock(block_start, std::min(block_samples, num_samples - block_start));
+					failed_blocks[index].store(false, std::memory_order_release);
+				}
+			}
+			auto const frames = std::min(count, block_samples - start % block_samples);
+			auto const bytes = frames * frame_bytes;
+			{
+				std::scoped_lock lock(mapping_mutex);
+				memcpy(output, file.read(start * frame_bytes, bytes), bytes);
+			}
+			output += bytes;
+			start += frames;
+			count -= frames;
 		}
 	}
 
@@ -75,20 +107,31 @@ class HDAudioProvider final : public AudioProviderWrapper {
 public:
 	HDAudioProvider(std::unique_ptr<AudioProvider> src, agi::fs::path const& dir)
 	: AudioProviderWrapper(std::move(src))
-	, file(dir / CacheFilename(dir), num_samples * bytes_per_sample* channels)
+	, file(dir / CacheFilename(dir), num_samples * bytes_per_sample * channels)
+	, failed_blocks(std::make_unique<std::atomic<bool>[]>(
+		static_cast<size_t>(num_samples / block_samples + (num_samples % block_samples != 0))))
+	, decode_buffer(static_cast<size_t>(block_samples) * bytes_per_sample * channels)
 	{
 		decoded_samples = 0;
 		decoder = std::jthread([this](std::stop_token stop_token) {
-			int64_t block = 65536;
-			for (int64_t i = 0; i < num_samples; i += block) {
+			for (int64_t i = 0; i < num_samples; i += block_samples) {
 				if (stop_token.stop_requested()) break;
-				block = std::min(block, num_samples - i);
-				source->GetAudio(file.write(i * bytes_per_sample * channels, block * bytes_per_sample * channels), i, block);
+				auto const block = std::min(block_samples, num_samples - i);
+				{
+					std::scoped_lock lock(source_mutex);
+					try {
+						CacheBlock(i, block);
+					}
+					catch (...) {
+						failed_blocks[i / block_samples].store(true, std::memory_order_release);
+					}
+				}
+				// A processed but failed block remains unavailable until a later
+				// checked read successfully replaces its complete contents.
 				decoded_samples += block;
 			}
 		});
 	}
-
 	~HDAudioProvider() = default;
 	AudioProviderMemoryStats GetMemoryStats() const override {
 		return BuildMemoryStats(

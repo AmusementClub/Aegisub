@@ -1792,3 +1792,54 @@ TEST(lagi_audio, hd_cache_spectrum_recovery_matches_uncached_source) {
 		EXPECT_EQ(FailingHDAudioProvider::BlockSamples, raw->last_count);
 	}
 }
+
+namespace {
+class MultichannelCacheAudioProvider final : public agi::AudioProvider {
+	public:
+	mutable std::atomic<int> reads{0};
+	MultichannelCacheAudioProvider(int channel_count, int sample_bytes, int64_t frames) {
+		channels = channel_count;
+		bytes_per_sample = sample_bytes;
+		sample_rate = 48000;
+		num_samples = frames;
+		decoded_samples = num_samples;
+	}
+	static unsigned char ByteAt(int64_t frame, int byte) {
+		return static_cast<unsigned char>(1 + (frame * 7 + byte) % 126);
+	}
+	void FillBuffer(void *buffer, int64_t start, int64_t count) const override {
+		++reads;
+		auto *bytes = static_cast<unsigned char *>(buffer);
+		int const frame_bytes = channels * bytes_per_sample;
+		for (int64_t frame = 0; frame < count; ++frame)
+			for (int byte = 0; byte < frame_bytes; ++byte)
+				bytes[frame * frame_bytes + byte] = ByteAt(start + frame, byte);
+	}
+};
+}
+
+TEST(lagi_audio, ram_cache_uses_whole_frames_for_multichannel_capacity) {
+	for (auto const [channels, sample_bytes] : {std::pair{6, 2}, {3, 2}, {2, 3}}) {
+		int const frame_bytes = channels * sample_bytes;
+		int64_t const frames_per_block = (1 << 22) / frame_bytes;
+		for (int64_t frames : {frames_per_block - 1, frames_per_block, frames_per_block + 1, frames_per_block * 3 + 1}) {
+			SCOPED_TRACE(channels);
+			SCOPED_TRACE(sample_bytes);
+			SCOPED_TRACE(frames);
+			auto source = std::make_unique<MultichannelCacheAudioProvider>(channels, sample_bytes, frames);
+			auto *raw = source.get();
+			auto cache = agi::CreateRAMAudioProvider(agi::CreateConvertAudioProvider(std::move(source)));
+			ASSERT_EQ(channels, cache->GetChannels());
+			ASSERT_EQ(sample_bytes, cache->GetBytesPerSample());
+			ASSERT_TRUE(WaitUntil([&] { return cache->GetDecodedSamples() == cache->GetNumSamples(); }));
+			EXPECT_EQ(frames, cache->GetDecodedSamples());
+			EXPECT_EQ(frames / frames_per_block + (frames % frames_per_block != 0), raw->reads);
+			std::vector<unsigned char> tail(frame_bytes * 4, 0xCD);
+			cache->GetAudioChecked(tail.data(), frames - 2, 4);
+			for (int frame = 0; frame < 4; ++frame)
+				for (int byte = 0; byte < frame_bytes; ++byte)
+					EXPECT_EQ(frame < 2 ? MultichannelCacheAudioProvider::ByteAt(frames - 2 + frame, byte) : 0,
+							  tail[frame * frame_bytes + byte]);
+		}
+	}
+}

@@ -45,6 +45,7 @@ std::string FormatWrappedProviderName(char const* wrapper_name, AudioProvider co
 }
 
 class RAMAudioProvider final : public AudioProviderWrapper {
+	const int64_t samples_per_block;
 #ifdef _MSC_VER
 	mutable boost::container::stable_vector<char[CacheBlockSize]> blockcache;
 #else
@@ -60,11 +61,12 @@ class RAMAudioProvider final : public AudioProviderWrapper {
 public:
 	RAMAudioProvider(std::unique_ptr<AudioProvider> src)
 	: AudioProviderWrapper(std::move(src))
+	, samples_per_block(CacheBlockSize / bytes_per_sample / channels)
 	{
 		decoded_samples = 0;
 
 		try {
-			blockcache.resize((num_samples * bytes_per_sample * channels + CacheBlockSize - 1) >> CacheBits);
+			blockcache.resize(static_cast<size_t>(num_samples / samples_per_block + (num_samples % samples_per_block != 0)));
 			failed_blocks = std::make_unique<std::atomic<bool>[]>(blockcache.size());
 		}
 		catch (std::bad_alloc const&) {
@@ -72,14 +74,14 @@ public:
 		}
 
 		decoder = std::thread([&] {
-			int64_t readsize = CacheBlockSize / bytes_per_sample / channels;
 			for (size_t i = 0; i < blockcache.size(); i++) {
 				if (cancelled) break;
-				auto actual_read = std::min<int64_t>(readsize, num_samples - i * readsize);
+				auto const start = static_cast<int64_t>(i) * samples_per_block;
+				auto const actual_read = std::min(samples_per_block, num_samples - start);
 				{
 					std::scoped_lock lock(source_mutex);
 					try {
-						source->GetAudioChecked(&blockcache[i][0], i * readsize, actual_read);
+						source->GetAudioChecked(&blockcache[i][0], start, actual_read);
 					}
 					catch (...) {
 						failed_blocks[i].store(true, std::memory_order_release);
@@ -110,8 +112,6 @@ void RAMAudioProvider::FillBuffer(void *buf, int64_t start, int64_t count) const
 	for (int64_t bytes_remaining = count * bytes_per_sample * channels; bytes_remaining; ) {
 		if (start >= decoded_samples)
 			throw AudioDecodeError("RAM audio cache has not decoded the requested samples yet");
-
-		const int64_t samples_per_block = CacheBlockSize / bytes_per_sample / channels;
 
 		const size_t i = start / samples_per_block;
 		const int start_offset = (start % samples_per_block) * bytes_per_sample * channels;

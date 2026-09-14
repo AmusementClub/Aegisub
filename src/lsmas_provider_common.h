@@ -2,6 +2,7 @@
 
 #include "lsmas_native_api.h"
 
+#include <libaegisub/audio/provider.h>
 #include <libaegisub/fs_fwd.h>
 
 #include <cstdint>
@@ -68,16 +69,17 @@ lsmas_audio_open_options_t MakeAudioOpenOptions(int stream_index, bool downmix);
 int ProgressCallback(void *userdata, const char *message_utf8, int32_t percent);
 
 // Upper bound on native read attempts used to ride out a transient short read
-// before the remainder of a request is treated as missing.
+// before an incomplete request is reported as a decoding failure.
 constexpr int kAudioShortReadMaxAttempts = 3;
 
 // Reads `count` sample frames through `read_frames(dst, start, count)`, which
 // returns the number of frames written or a negative value on error. The
 // native reader can transiently return fewer frames than requested for a
 // mid-stream range; the missing sub-range is re-read until the request
-// completes, stops making progress, or the attempt limit is reached. Returns
-// the number of frames written (possibly less than count) or the negative
-// error value unchanged.
+// completes or the attempt limit is reached. The requested range is already
+// clipped to the stream by AudioProvider, so an incomplete read throws rather
+// than supplying silence to caches. Returns count on success or the negative
+// native error value unchanged for the caller to attach its error message.
 template <typename ReadFrames>
 int64_t ReadAudioFramesWithRetry(
 	void *dst,
@@ -98,6 +100,8 @@ int64_t ReadAudioFramesWithRetry(
 		if (frames < count && attempts + 1 < kAudioShortReadMaxAttempts)
 			std::this_thread::yield();
 	}
+	if (frames < count)
+		throw agi::AudioDecodeError("LsmasNative audio returned " + std::to_string(frames) + " of " + std::to_string(count) + " frames at frame " + std::to_string(start));
 	return frames;
 }
 }

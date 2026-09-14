@@ -128,6 +128,8 @@ class AudioRenderer {
 	bool needs_prefetch = false;
 	std::uint64_t bitmap_cache_hits = 0;
 	std::uint64_t bitmap_cache_misses = 0;
+	/// Report a failed source once without interrupting subsequent paints.
+	bool decode_error_reported = false;
 
 	/// Actual renderer for bitmaps
 	AudioRendererBitmapProvider *renderer = nullptr;

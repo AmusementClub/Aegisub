@@ -119,7 +119,8 @@ void AudioProvider::FillBufferInt16Mono(int16_t* buf, int64_t start, int64_t cou
 		FillBuffer(buf, start, count);
 		return;
 	}
-	void* buff = malloc(bytes_per_sample * count * channels);
+	auto storage = std::make_unique_for_overwrite<char[]>(bytes_per_sample * count * channels);
+	void *buff = storage.get();
 	FillBuffer(buff, start, count);
 	if (channels == 1) {
 		if (float_samples) {
@@ -157,7 +158,6 @@ void AudioProvider::FillBufferInt16Mono(int16_t* buf, int64_t start, int64_t cou
 					buf[i] = DownmixToMono<ConvertIntToInt16>(ConvertIntToInt16(buff, bytes_per_sample), channels)[i];
 		}
 	}
-	free(buff);
 }
 
 void AudioProvider::GetInt16MonoAudioWithVolume(int16_t *buf, int64_t start, int64_t count, double volume) const {
@@ -178,23 +178,10 @@ void AudioProvider::ZeroFill(void *buf, int64_t count) const {
 }
 
 void AudioProvider::GetAudio(void *buf, int64_t start, int64_t count) const {
-	if (start < 0) {
-		ZeroFill(buf, std::min(-start, count));
-		buf = static_cast<char *>(buf) + -start * bytes_per_sample * channels;
-		count += start;
-		start = 0;
-	}
-
-	if (start + count > num_samples) {
-		int64_t zero_count = std::min(count, start + count - num_samples);
-		count -= zero_count;
-		ZeroFill(static_cast<char *>(buf) + count * bytes_per_sample * channels, zero_count);
-	}
-
 	if (count <= 0) return;
 
 	try {
-		FillBuffer(buf, start, count);
+		GetAudioChecked(buf, start, count);
 	}
 	catch (AudioDecodeError const& e) {
 		// We don't have any good way to report errors here, so just log the
@@ -210,24 +197,36 @@ void AudioProvider::GetAudio(void *buf, int64_t start, int64_t count) const {
 	}
 }
 
-void AudioProvider::GetInt16MonoAudio(int16_t* buf, int64_t start, int64_t count) const {
+void AudioProvider::GetAudioChecked(void *buf, int64_t start, int64_t count) const {
+	if (count <= 0)
+		return;
+	if (start >= num_samples || start <= -count) {
+		ZeroFill(buf, count);
+		return;
+	}
+
 	if (start < 0) {
-		memset(buf, 0, sizeof(int16_t) * std::min(-start, count));
-		buf -= start;
+		ZeroFill(buf, -start);
+		buf = static_cast<char *>(buf) + -start * bytes_per_sample * channels;
 		count += start;
 		start = 0;
 	}
 
-	if (start + count > num_samples) {
-		int64_t zero_count = std::min(count, start + count - num_samples);
+	if (count > num_samples - start) {
+		int64_t zero_count = count - (num_samples - start);
 		count -= zero_count;
-		memset(buf + count, 0, sizeof(int16_t) * zero_count);
+		ZeroFill(static_cast<char *>(buf) + count * bytes_per_sample * channels, zero_count);
 	}
 
+	if (count > 0)
+		FillBuffer(buf, start, count);
+}
+
+void AudioProvider::GetInt16MonoAudio(int16_t *buf, int64_t start, int64_t count) const {
 	if (count <= 0) return;
 
 	try {
-		FillBufferInt16Mono(buf, start, count);
+		GetInt16MonoAudioChecked(buf, start, count);
 	}
 	catch (AudioDecodeError const& e) {
 		// We don't have any good way to report errors here, so just log the
@@ -241,6 +240,31 @@ void AudioProvider::GetInt16MonoAudio(int16_t* buf, int64_t start, int64_t count
 		memset(buf, 0, sizeof(int16_t) * count);
 		return;
 	}
+}
+
+void AudioProvider::GetInt16MonoAudioChecked(int16_t *buf, int64_t start, int64_t count) const {
+	if (count <= 0)
+		return;
+	if (start >= num_samples || start <= -count) {
+		memset(buf, 0, sizeof(int16_t) * count);
+		return;
+	}
+
+	if (start < 0) {
+		memset(buf, 0, sizeof(int16_t) * -start);
+		buf -= start;
+		count += start;
+		start = 0;
+	}
+
+	if (count > num_samples - start) {
+		int64_t zero_count = count - (num_samples - start);
+		count -= zero_count;
+		memset(buf + count, 0, sizeof(int16_t) * zero_count);
+	}
+
+	if (count > 0)
+		FillBufferInt16Mono(buf, start, count);
 }
 
 namespace {

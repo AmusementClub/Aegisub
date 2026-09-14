@@ -272,12 +272,14 @@ struct PatternMonoProvider final : agi::AudioProvider {
 	}
 };
 
-struct FlippingSilenceProvider final : agi::AudioProvider {
+struct RecoverableReadProvider final : agi::AudioProvider {
 	mutable std::atomic<int> fill_calls{0};
-	int silent_calls = 1;
+	mutable std::atomic<int> failures_remaining{0};
+	mutable std::atomic<int64_t> last_read_count{0};
+	bool silent = false;
 
-	explicit FlippingSilenceProvider(int silent_calls = 1)
-		: silent_calls(silent_calls) {
+	explicit RecoverableReadProvider(int failures = 0, bool silent = false)
+		: failures_remaining(failures), silent(silent) {
 		channels = 1;
 		num_samples = 1 << 20;
 		decoded_samples = num_samples;
@@ -286,15 +288,19 @@ struct FlippingSilenceProvider final : agi::AudioProvider {
 		float_samples = false;
 	}
 
-	void FillBuffer(void *buf, int64_t, int64_t count) const override {
-		auto const call = fill_calls.fetch_add(1) + 1;
-		std::fill_n(
-			static_cast<int16_t *>(buf),
-			static_cast<size_t>(count),
-			call <= silent_calls ? int16_t{0} : int16_t{12345});
+	void FillBuffer(void *buf, int64_t start, int64_t count) const override {
+		++fill_calls;
+		last_read_count = count;
+		auto *samples = static_cast<int16_t *>(buf);
+		if (failures_remaining > 0) {
+			--failures_remaining;
+			std::fill_n(samples, static_cast<size_t>(count / 2), int16_t{12345});
+			throw agi::AudioDecodeError("injected partial audio read");
+		}
+		for (int64_t i = 0; i < count; ++i)
+			samples[i] = silent ? 0 : PatternMonoProvider::SampleAt(start + i);
 	}
 };
-
 struct ExtremeMetadataMonoProvider final : agi::AudioProvider {
 	ExtremeMetadataMonoProvider() {
 		channels = 1;
@@ -1451,79 +1457,106 @@ TEST(lagi_audio_display, spectrum_analysis_cache_prefetch_caps_sparse_range_at_b
 	EXPECT_EQ(4u, cache.GetMetricsSnapshot().prefetch_builds);
 }
 
-TEST(lagi_audio_display, spectrum_analysis_cache_does_not_retain_silent_blocks) {
-	FlippingSilenceProvider provider;
+TEST(lagi_audio_display, spectrum_analysis_cache_recovers_failed_read_before_returning_power) {
+	RecoverableReadProvider provider(1);
+	RecoverableReadProvider reference;
 	auto source = CreateAudioDisplaySource(&provider);
+	auto reference_source = CreateAudioDisplaySource(&reference);
 	AudioSpectrumAnalysisCache cache;
+	AudioSpectrumAnalysisCache reference_cache;
 	cache.SetSource(source.get());
-	cache.SetMixPolicy(AudioMixPolicy::MonoAverage);
+	reference_cache.SetSource(reference_source.get());
 	cache.SetResolution(9, 7);
+	reference_cache.SetResolution(9, 7);
 
-	auto silent = cache.Get(0);
-	ASSERT_NE(nullptr, silent);
-	for (size_t bin = 0; bin < (size_t(1) << 9); ++bin)
-		EXPECT_EQ(0.f, silent[bin]);
-	// Silence is also what a transient upstream read failure produces, so the
-	// block is served but not retained: a rebuild must be able to recover.
-	EXPECT_EQ(nullptr, cache.GetIfReady(0));
-	EXPECT_EQ(1, provider.fill_calls.load());
-
-	auto recovered = cache.Get(0);
+	auto recovered = cache.Get(5);
+	auto expected = reference_cache.Get(5);
 	ASSERT_NE(nullptr, recovered);
+	ASSERT_NE(nullptr, expected);
 	EXPECT_EQ(2, provider.fill_calls.load());
-	EXPECT_GT(recovered[0], 0.f);
-	EXPECT_NE(nullptr, cache.GetIfReady(0));
+	for (size_t bin = 0; bin < (size_t{1} << 9); ++bin)
+		EXPECT_EQ(expected[bin], recovered[bin]) << "bin " << bin;
+	EXPECT_EQ(recovered, cache.GetIfReady(5));
+	EXPECT_EQ(recovered, cache.Get(5));
+	EXPECT_EQ(2, provider.fill_calls.load());
 }
 
-TEST(lagi_audio_display, spectrum_analysis_cache_prefetch_does_not_retain_silent_blocks) {
-	FlippingSilenceProvider provider{1000};
+TEST(lagi_audio_display, spectrum_analysis_cache_failed_prefetch_does_not_publish_partial_audio) {
+	RecoverableReadProvider provider(2);
 	auto source = CreateAudioDisplaySource(&provider);
 	AudioSpectrumAnalysisCache cache;
 	cache.SetSource(source.get());
-	cache.SetMixPolicy(AudioMixPolicy::MonoAverage);
 	cache.SetResolution(9, 7);
 
-	cache.Prefetch(0, 0);
-	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-	while (provider.fill_calls.load() < 1 && std::chrono::steady_clock::now() < deadline)
+	cache.Prefetch(5, 5);
+	auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+	while (cache.GetMetricsSnapshot().prefetch_busy_skips == 0 && std::chrono::steady_clock::now() < deadline)
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));
-	ASSERT_GE(provider.fill_calls.load(), 1);
-
-	// The synchronous Get shares or follows the prefetch build and rebuilds
-	// an unretained block. Had the prefetch wrongly retained the silent
-	// block, this Get would hit the cache and skip the rebuild.
-	auto block = cache.Get(0);
-	ASSERT_NE(nullptr, block);
+	ASSERT_EQ(1u, cache.GetMetricsSnapshot().prefetch_busy_skips);
 	EXPECT_EQ(2, provider.fill_calls.load());
-	// The rebuilt block is still silent, so revalidation retains it.
-	EXPECT_NE(nullptr, cache.GetIfReady(0));
+	EXPECT_EQ(nullptr, cache.GetIfReady(5));
+	EXPECT_EQ(0u, cache.GetMetricsSnapshot().prefetch_builds);
+
+	RecoverableReadProvider reference;
+	auto reference_source = CreateAudioDisplaySource(&reference);
+	AudioSpectrumAnalysisCache reference_cache;
+	reference_cache.SetSource(reference_source.get());
+	reference_cache.SetResolution(9, 7);
+	auto recovered = cache.Get(5);
+	auto expected = reference_cache.Get(5);
+	ASSERT_NE(nullptr, recovered);
+	ASSERT_NE(nullptr, expected);
+	EXPECT_EQ(3, provider.fill_calls.load());
+	for (size_t bin = 0; bin < (size_t{1} << 9); ++bin)
+		EXPECT_EQ(expected[bin], recovered[bin]) << "bin " << bin;
 }
 
-TEST(lagi_audio_display, spectrum_analysis_cache_revalidation_caches_genuine_silence) {
-	FlippingSilenceProvider provider{1000};
+TEST(lagi_audio_display, spectrum_analysis_cache_caches_genuine_silence_on_first_read) {
+	RecoverableReadProvider provider(0, true);
 	auto source = CreateAudioDisplaySource(&provider);
 	AudioSpectrumAnalysisCache cache;
 	cache.SetSource(source.get());
-	cache.SetMixPolicy(AudioMixPolicy::MonoAverage);
 	cache.SetResolution(9, 7);
 
-	auto first = cache.Get(0);
+	auto first = cache.Get(5);
 	ASSERT_NE(nullptr, first);
 	EXPECT_EQ(1, provider.fill_calls.load());
-	EXPECT_EQ(nullptr, cache.GetIfReady(0));
-
-	// The second silent build in the same generation is retained, so genuine
-	// digital silence is not re-analyzed forever.
-	auto second = cache.Get(0);
-	ASSERT_NE(nullptr, second);
-	EXPECT_EQ(2, provider.fill_calls.load());
-	EXPECT_NE(nullptr, cache.GetIfReady(0));
-
-	auto third = cache.Get(0);
-	ASSERT_NE(nullptr, third);
-	EXPECT_EQ(2, provider.fill_calls.load());
+	for (size_t bin = 0; bin < (size_t{1} << 9); ++bin)
+		EXPECT_EQ(0.f, first[bin]);
+	EXPECT_EQ(first, cache.GetIfReady(5));
+	EXPECT_EQ(first, cache.Get(5));
+	EXPECT_EQ(1, provider.fill_calls.load());
 }
 
+TEST(lagi_audio_display, spectrum_analysis_cache_failed_rolling_tail_reloads_entire_window) {
+	RecoverableReadProvider provider;
+	RecoverableReadProvider reference;
+	auto source = CreateAudioDisplaySource(&provider);
+	auto reference_source = CreateAudioDisplaySource(&reference);
+	AudioSpectrumAnalysisCache cache;
+	AudioSpectrumAnalysisCache reference_cache;
+	cache.SetSource(source.get());
+	reference_cache.SetSource(reference_source.get());
+	cache.SetResolution(9, 7);
+	reference_cache.SetResolution(9, 7);
+	auto previous = cache.Get(5);
+	ASSERT_NE(nullptr, previous);
+
+	provider.failures_remaining = 2;
+	EXPECT_THROW(cache.Get(6), agi::AudioDecodeError);
+	EXPECT_EQ(128, provider.last_read_count.load());
+	EXPECT_EQ(nullptr, cache.GetIfReady(6));
+	EXPECT_EQ(previous, cache.GetIfReady(5));
+
+	auto recovered = cache.Get(6);
+	auto expected = reference_cache.Get(6);
+	ASSERT_NE(nullptr, recovered);
+	ASSERT_NE(nullptr, expected);
+	EXPECT_EQ(1024, provider.last_read_count.load());
+	EXPECT_EQ(4, provider.fill_calls.load());
+	for (size_t bin = 0; bin < (size_t{1} << 9); ++bin)
+		EXPECT_EQ(expected[bin], recovered[bin]) << "bin " << bin;
+}
 TEST(lagi_audio_display, spectrum_analysis_cache_visible_get_shares_inflight_prefetch_build) {
 	ScopedTestDeadline deadline("spectrum visible/prefetch shared build");
 	BlockingSpectrumProvider provider;

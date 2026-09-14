@@ -85,6 +85,9 @@ public:
 
 	void GetAudio(void *buf, int64_t start, int64_t count) const;
 	void GetInt16MonoAudio(int16_t* buf, int64_t start, int64_t count) const;
+	/// Pad samples outside the audio with silence, but propagate decoding failures.
+	void GetAudioChecked(void *buf, int64_t start, int64_t count) const;
+	void GetInt16MonoAudioChecked(int16_t *buf, int64_t start, int64_t count) const;
 	void GetInt16MonoAudioWithVolume(int16_t *buf, int64_t start, int64_t count, double volume) const;
 
 	int64_t GetNumSamples()     const { return num_samples; }

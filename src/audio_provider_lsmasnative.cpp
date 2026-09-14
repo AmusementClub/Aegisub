@@ -8,11 +8,9 @@
 
 #include <libaegisub/background_runner.h>
 #include <libaegisub/fs.h>
-#include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/scope_exit.h>
 
-#include <algorithm>
 #include <memory>
 #include <string>
 
@@ -36,20 +34,6 @@ class LsmasAudioProvider final : public agi::AudioProvider {
             });
         if (got < 0)
             throw agi::AudioDecodeError(error.Message("failed to decode audio samples"));
-        if (got < count) {
-            auto *bytes = static_cast<unsigned char *>(buf);
-            auto offset = got * channels * bytes_per_sample;
-            auto remaining = (count - got) * channels * bytes_per_sample;
-            std::fill(bytes + offset, bytes + offset + remaining, 0);
-            // A short read that ends before the stream ends is not an
-            // end-of-stream tail: the data exists, so report the gap instead
-            // of letting silence get cached as if it were real audio.
-            if (start + count <= num_samples) {
-                LOG_W("audio_provider/lsmas")
-                    << "LsmasNative audio returned " << got << " of " << count
-                    << " frames at frame " << start << "; filling the remainder with silence";
-            }
-        }
     }
 
 public:

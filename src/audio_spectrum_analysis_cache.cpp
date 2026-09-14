@@ -86,7 +86,6 @@ void AudioSpectrumAnalysisCache::DestroyFftResources() {
 void AudioSpectrumAnalysisCache::ClearLocked() {
 	cache_blocks.clear();
 	cache_touch.clear();
-	silent_rebuild_blocks.clear();
 	touch_heap = {};
 	current_cache_bytes = 0;
 	current_cache_entries = 0;
@@ -221,6 +220,9 @@ AudioSpectrumAnalysisCache::MutableBlock AudioSpectrumAnalysisCache::BuildBlock(
 		&& block_index == rolling_window_block_index + 1
 		&& hop_samples <= sample_count
 		&& mono_scratch.size() == sample_count;
+	// Moving the overlap or reading the tail can fail. Only a complete read
+	// below makes this scratch window reusable by another block.
+	rolling_window_valid = false;
 
 	if (reused_window) {
 		const size_t overlap_samples = sample_count - hop_samples;
@@ -286,25 +288,6 @@ void AudioSpectrumAnalysisCache::TouchLocked(size_t block_index) {
 	const uint64_t touch = ++touch_counter;
 	cache_touch[block_index] = touch;
 	touch_heap.push(TouchEntry{ touch, block_index });
-}
-
-// A block of exact zeros is either genuine digital silence or the residue of
-// a transient upstream read failure that was zero-filled. The two cannot be
-// told apart here, so the first all-zero build of a block is handed out but
-// not retained, giving a later rebuild the chance to recover real audio. A
-// second all-zero build in the same generation is treated as genuine silence
-// and cached so silent audio is not re-analyzed forever.
-bool AudioSpectrumAnalysisCache::ShouldDeferSilentBlockLocked(
-	size_t block_index,
-	float const *block) {
-	for (size_t i = 0, bin_count = BinCount(); i < bin_count; ++i) {
-		if (block[i] != 0.f)
-			return false;
-	}
-	if (silent_rebuild_blocks.erase(block_index) > 0)
-		return false;
-	silent_rebuild_blocks.insert(block_index);
-	return true;
 }
 
 void AudioSpectrumAnalysisCache::TrimLocked() {
@@ -386,8 +369,6 @@ AudioSpectrumAnalysisCache::BlockHandle AudioSpectrumAnalysisCache::Get(size_t b
 			return {};
 		++metrics_cache_misses;
 		++metrics_visible_builds;
-		if (ShouldDeferSilentBlockLocked(block_index, built.get()))
-			return built;
 		auto block_it = cache_blocks.find(block_index);
 		if (block_it == cache_blocks.end() || !block_it->second) {
 			BlockHandle published = std::move(built);
@@ -569,8 +550,6 @@ void AudioSpectrumAnalysisCache::ProcessPrefetch(
 		auto found = cache_blocks.find(block_index);
 		if (found == cache_blocks.end() || !found->second) {
 			++metrics_prefetch_builds;
-			if (ShouldDeferSilentBlockLocked(block_index, built.get()))
-				return true;
 			BlockHandle published = std::move(built);
 			found = cache_blocks.emplace(block_index, std::move(published)).first;
 			current_cache_bytes += BlockBytes();

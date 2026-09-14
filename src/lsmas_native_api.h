@@ -9,7 +9,8 @@ namespace lsmas {
 namespace api_version {
 
 // API 1.0 provides the legacy frame-output API. API 1.1 adds YUV420P8
-// caller-buffer output for SceneChange.
+// caller-buffer output for SceneChange. Decoder fixes preserve this interface;
+// the native release/build metadata identifies their implementation version.
 constexpr int32_t kMinimumCompatible = LSMAS_NATIVE_MAKE_API_VERSION(1, 0, 0);
 constexpr int32_t kYuv420p8Output = LSMAS_NATIVE_MAKE_API_VERSION(1, 1, 0);
 
@@ -17,7 +18,7 @@ constexpr int32_t kYuv420p8Output = LSMAS_NATIVE_MAKE_API_VERSION(1, 1, 0);
 
 // Feature gates must stay within the vendored header's declared API surface.
 static_assert(LSMAS_NATIVE_API_VERSION >= api_version::kYuv420p8Output,
-    "vendored lsmasnative headers are older than the highest feature gate");
+			  "vendored lsmasnative headers are older than the highest feature gate");
 
 constexpr bool IsApiVersionAtLeast(int32_t actual, int32_t required) noexcept {
     return actual >= required;

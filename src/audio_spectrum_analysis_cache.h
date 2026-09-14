@@ -8,7 +8,6 @@
 #include <mutex>
 #include <queue>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "audio_display_source.h"
@@ -77,10 +76,6 @@ private:
 	std::mutex build_mutex;
 	std::unordered_map<size_t, BlockHandle> cache_blocks;
 	std::unordered_map<size_t, uint64_t> cache_touch;
-	// Blocks already rebuilt once as pure silence in this generation. The next
-	// silent rebuild is retained so genuine digital silence stays cached while
-	// a transient zero-fill still gets one chance to recover.
-	std::unordered_set<size_t> silent_rebuild_blocks;
 	std::priority_queue<TouchEntry, std::vector<TouchEntry>, std::greater<TouchEntry>> touch_heap;
 
 	std::vector<float> audio_scratch;
@@ -138,7 +133,6 @@ private:
 	void NotifyReady() const;
 	void TouchLocked(size_t block_index);
 	void TrimLocked();
-	bool ShouldDeferSilentBlockLocked(size_t block_index, float const *block);
 	void ClearLocked();
 
 public:

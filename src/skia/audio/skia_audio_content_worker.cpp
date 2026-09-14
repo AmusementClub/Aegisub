@@ -638,6 +638,14 @@ struct ContentWorker::Impl {
 				if (analyzer && plan->analysis.kind == ContentKind::Spectrum)
 					PublishAnalysisMetrics(*analyzer);
 			}
+			catch (agi::Exception const& err) {
+				{
+					std::scoped_lock lock(mutex);
+					++metrics.builds_invalid;
+				}
+				if (failure_callback)
+					failure_callback(err.GetMessage());
+			}
 			catch (std::exception const& err) {
 				{
 					std::lock_guard<std::mutex> lock(mutex);

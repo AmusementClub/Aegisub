@@ -38,8 +38,9 @@ class GateAudioProvider final : public agi::AudioProvider {
 	mutable bool entered = false;
 	mutable bool released = true;
 	mutable std::atomic<std::uint64_t> fills { 0 };
+	mutable std::atomic<int> failed_fills_remaining{0};
 
-protected:
+	protected:
 	void FillBuffer(void *buffer, std::int64_t start, std::int64_t count) const override {
 		++fills;
 		{
@@ -50,6 +51,11 @@ protected:
 		}
 
 		auto *samples = static_cast<float *>(buffer);
+		if (failed_fills_remaining > 0) {
+			--failed_fills_remaining;
+			std::fill_n(samples, static_cast<std::size_t>(count) * channels / 2, 0.75f);
+			throw agi::AudioDecodeError("injected partial audio read");
+		}
 		for (std::int64_t frame = 0; frame < count; ++frame) {
 			auto const value = static_cast<float>(((start + frame) % 101) - 50) / 50.f;
 			for (int channel = 0; channel < channels; ++channel)
@@ -88,6 +94,7 @@ public:
 	}
 
 	std::uint64_t FillCount() const { return fills.load(); }
+	void FailNextFill(int count = 1) { failed_fills_remaining = count; }
 };
 
 class IncrementalAudioProvider final : public agi::AudioProvider {
@@ -437,6 +444,113 @@ TEST(skia_audio_content_worker, spectrum_waits_for_complete_fft_windows_before_p
 	EXPECT_NE(nullptr, worker.FindPayload(MakeContentUploadPayloadKey(key, band_plan.get())));
 	EXPECT_GT(provider.FillCount(), 0u);
 	EXPECT_GT(worker.AnalysisMetrics().spectrum_cache_misses, 0u);
+	worker.SetProvider(nullptr);
+}
+
+namespace {
+void ExpectSpectrumScrollRecoversPartialRead(bool memory_cache) {
+	auto source = std::make_unique<GateAudioProvider>();
+	auto *raw = source.get();
+	std::unique_ptr<agi::AudioProvider> provider = std::move(source);
+	std::unique_ptr<agi::AudioProvider> reference_provider = std::make_unique<GateAudioProvider>();
+	if (memory_cache) {
+		raw->FailNextFill();
+		provider = agi::CreateRAMAudioProvider(agi::CreateConvertAudioProvider(std::move(provider)));
+		reference_provider = agi::CreateRAMAudioProvider(agi::CreateConvertAudioProvider(std::move(reference_provider)));
+		auto const deadline = std::chrono::steady_clock::now() + 2s;
+		while ((provider->GetDecodedSamples() != provider->GetNumSamples() || reference_provider->GetDecodedSamples() != reference_provider->GetNumSamples()) && std::chrono::steady_clock::now() < deadline)
+			std::this_thread::sleep_for(1ms);
+		ASSERT_EQ(provider->GetNumSamples(), provider->GetDecodedSamples());
+		ASSERT_EQ(reference_provider->GetNumSamples(), reference_provider->GetDecodedSamples());
+	}
+	ReadyLatch ready;
+	ReadyLatch reference_ready;
+	ContentWorker worker([&](ContentGeneration generation) { ready.Notify(generation); });
+	ContentWorker reference_worker([&](ContentGeneration generation) { reference_ready.Notify(generation); });
+	worker.SetProvider(provider.get());
+	reference_worker.SetProvider(reference_provider.get());
+	auto analysis = SpectrumAnalysis();
+	analysis.milliseconds_per_pixel = 0.25;
+	if (memory_cache)
+		analysis.source_mode = ContentSourceMode::Int16Mono;
+	auto const generation = worker.SetAnalysis(analysis);
+	ASSERT_EQ(generation, reference_worker.SetAnalysis(analysis));
+	auto const plan = SpectrumPlan();
+	// The RAM case starts in a healthy block, then scrolls to the failed block.
+	auto viewport = SpectrumViewport(generation, memory_cache ? 180000 : 0, 4);
+	worker.Request(viewport, plan);
+	ASSERT_TRUE(ready.WaitFor(1));
+	ASSERT_TRUE(WaitForPayloadBuilds(worker, 1));
+
+	if (!memory_cache)
+		raw->FailNextFill();
+	viewport.first_column = 128;
+	worker.Request(viewport, plan);
+	reference_worker.Request(viewport, plan);
+	ASSERT_TRUE(ready.WaitFor(2));
+	ASSERT_TRUE(reference_ready.WaitFor(1));
+	ASSERT_TRUE(WaitForPayloadBuilds(worker, 2));
+	ASSERT_TRUE(WaitForPayloadBuilds(reference_worker, 1));
+	auto const key = FirstKey(viewport);
+	auto const actual = worker.Find(key);
+	auto const expected = reference_worker.Find(key);
+	ASSERT_NE(nullptr, actual);
+	ASSERT_NE(nullptr, expected);
+	EXPECT_EQ(expected->spectrum_power, actual->spectrum_power);
+	auto const payload_key = MakeContentUploadPayloadKey(key, plan.get());
+	auto const payload = worker.FindPayload(payload_key);
+	auto const reference_payload = reference_worker.FindPayload(payload_key);
+	ASSERT_NE(nullptr, payload);
+	ASSERT_NE(nullptr, reference_payload);
+	EXPECT_EQ(reference_payload->primary, payload->primary);
+
+	// Repainting the same viewport must reuse correct data without a zoom or reread.
+	auto const reads = raw->FillCount();
+	worker.Request(viewport, plan);
+	ASSERT_TRUE(ready.WaitFor(3));
+	ASSERT_TRUE(WaitForPayloadBuilds(worker, 2));
+	EXPECT_EQ(reads, raw->FillCount());
+	EXPECT_EQ(payload, worker.FindPayload(payload_key));
+	worker.SetProvider(nullptr);
+	reference_worker.SetProvider(nullptr);
+}
+}
+
+TEST(skia_audio_content_worker, spectrum_scroll_recovers_partial_read_before_caching_payload) {
+	ExpectSpectrumScrollRecoversPartialRead(false);
+}
+
+TEST(skia_audio_content_worker, spectrum_scroll_recovers_failed_ram_block_before_caching_payload) {
+	ExpectSpectrumScrollRecoversPartialRead(true);
+}
+
+TEST(skia_audio_content_worker, spectrum_failed_reads_publish_no_tile_and_remain_retryable) {
+	GateAudioProvider provider;
+	ReadyLatch ready;
+	ReadyLatch failure;
+	ContentWorker worker(
+		[&](ContentGeneration generation) { ready.Notify(generation); },
+		[&](std::string const&) { failure.Notify({}); });
+	worker.SetProvider(&provider);
+	auto const generation = worker.SetAnalysis(SpectrumAnalysis());
+	auto const viewport = SpectrumViewport(generation, 128, 4);
+	auto const key = FirstKey(viewport);
+	auto const plan = SpectrumPlan();
+	provider.FailNextFill(2);
+	worker.Request(viewport, plan);
+	ASSERT_TRUE(failure.WaitFor(1));
+	ASSERT_TRUE(WaitForBuilds(worker, 0));
+	EXPECT_EQ(2u, provider.FillCount());
+	EXPECT_EQ(0u, worker.Metrics().ready_notifications);
+	EXPECT_EQ(nullptr, worker.Find(key));
+	EXPECT_EQ(nullptr, worker.FindPayload(MakeContentUploadPayloadKey(key, plan.get())));
+
+	worker.Request(viewport, plan);
+	ASSERT_TRUE(ready.WaitFor(1));
+	ASSERT_TRUE(WaitForPayloadBuilds(worker, 1));
+	EXPECT_EQ(generation, worker.Generation());
+	EXPECT_NE(nullptr, worker.Find(key));
+	EXPECT_NE(nullptr, worker.FindPayload(MakeContentUploadPayloadKey(key, plan.get())));
 	worker.SetProvider(nullptr);
 }
 

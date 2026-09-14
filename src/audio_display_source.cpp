@@ -11,6 +11,26 @@
 
 namespace {
 
+// A transient decode failure must be retried before analysis caches see any
+// samples. A second failure propagates instead of becoming cached silence.
+void ReadDisplayAudio(agi::AudioProvider *provider, void *buffer, int64_t start, int64_t count) {
+	try {
+		provider->GetAudioChecked(buffer, start, count);
+	}
+	catch (agi::AudioDecodeError const&) {
+		provider->GetAudioChecked(buffer, start, count);
+	}
+}
+
+void ReadDisplayMonoAudio(agi::AudioProvider *provider, int16_t *buffer, int64_t start, int64_t count) {
+	try {
+		provider->GetInt16MonoAudioChecked(buffer, start, count);
+	}
+	catch (agi::AudioDecodeError const&) {
+		provider->GetInt16MonoAudioChecked(buffer, start, count);
+	}
+}
+
 struct AudioDecodeScratch {
 	std::vector<char> raw_buffer;
 	std::vector<int16_t> s16_buffer;
@@ -78,11 +98,11 @@ public:
 		size_t sample_count = static_cast<size_t>(count) * channels;
 		if (provider->AreSamplesFloat()) {
 			if (bytes_per_sample == 4) {
-				provider->GetAudio(buf, start, count);
+				ReadDisplayAudio(provider, buf, start, count);
 			}
 			else if (bytes_per_sample == 8) {
 				scratch.f64_buffer.resize(sample_count);
-				provider->GetAudio(scratch.f64_buffer.data(), start, count);
+				ReadDisplayAudio(provider, scratch.f64_buffer.data(), start, count);
 				aegisub::simd::DecodeFloat64ToFloat(scratch.f64_buffer.data(), sample_count, buf);
 			}
 			else {
@@ -93,17 +113,17 @@ public:
 			switch (bytes_per_sample) {
 				case 1:
 					scratch.raw_buffer.resize(sample_count);
-					provider->GetAudio(scratch.raw_buffer.data(), start, count);
+					ReadDisplayAudio(provider, scratch.raw_buffer.data(), start, count);
 					aegisub::simd::DecodeUInt8ToFloat(reinterpret_cast<uint8_t const*>(scratch.raw_buffer.data()), sample_count, buf);
 					break;
 				case 2:
 					scratch.s16_buffer.resize(sample_count);
-					provider->GetAudio(scratch.s16_buffer.data(), start, count);
+					ReadDisplayAudio(provider, scratch.s16_buffer.data(), start, count);
 					aegisub::simd::DecodeInt16ToFloat(scratch.s16_buffer.data(), sample_count, buf);
 					break;
 				case 3:
 					scratch.raw_buffer.resize(sample_count * bytes_per_sample);
-					provider->GetAudio(scratch.raw_buffer.data(), start, count);
+					ReadDisplayAudio(provider, scratch.raw_buffer.data(), start, count);
 					{
 						const char *src = scratch.raw_buffer.data();
 						for (size_t i = 0; i < sample_count; ++i)
@@ -112,7 +132,7 @@ public:
 					break;
 				case 4:
 					scratch.s32_buffer.resize(sample_count);
-					provider->GetAudio(scratch.s32_buffer.data(), start, count);
+					ReadDisplayAudio(provider, scratch.s32_buffer.data(), start, count);
 					aegisub::simd::DecodeInt32ToFloat(scratch.s32_buffer.data(), sample_count, buf);
 					break;
 				default:
@@ -142,13 +162,13 @@ public:
 		if (provider->AreSamplesFloat()) {
 			if (bytes_per_sample == 4) {
 				scratch.f32_buffer.resize(sample_count);
-				provider->GetAudio(scratch.f32_buffer.data(), start, count);
+				ReadDisplayAudio(provider, scratch.f32_buffer.data(), start, count);
 				ExtractInterleavedChannel(scratch.f32_buffer.data(), channels, channel, count, buf);
 				return true;
 			}
 			if (bytes_per_sample == 8) {
 				scratch.f64_buffer.resize(sample_count);
-				provider->GetAudio(scratch.f64_buffer.data(), start, count);
+				ReadDisplayAudio(provider, scratch.f64_buffer.data(), start, count);
 				const double *src = scratch.f64_buffer.data() + channel;
 				for (int64_t i = 0; i < count; ++i, src += channels)
 					buf[i] = static_cast<float>(*src);
@@ -161,7 +181,7 @@ public:
 		switch (bytes_per_sample) {
 			case 1: {
 				scratch.raw_buffer.resize(sample_count);
-				provider->GetAudio(scratch.raw_buffer.data(), start, count);
+				ReadDisplayAudio(provider, scratch.raw_buffer.data(), start, count);
 				const uint8_t *src = reinterpret_cast<uint8_t const*>(scratch.raw_buffer.data()) + channel;
 				for (int64_t i = 0; i < count; ++i, src += channels)
 					buf[i] = DecodeUInt8(*src);
@@ -169,7 +189,7 @@ public:
 			}
 			case 2: {
 				scratch.s16_buffer.resize(sample_count);
-				provider->GetAudio(scratch.s16_buffer.data(), start, count);
+				ReadDisplayAudio(provider, scratch.s16_buffer.data(), start, count);
 				const int16_t *src = scratch.s16_buffer.data() + channel;
 				for (int64_t i = 0; i < count; ++i, src += channels)
 					buf[i] = static_cast<float>(*src) / 32768.0f;
@@ -177,7 +197,7 @@ public:
 			}
 			case 3: {
 				scratch.raw_buffer.resize(sample_count * bytes_per_sample);
-				provider->GetAudio(scratch.raw_buffer.data(), start, count);
+				ReadDisplayAudio(provider, scratch.raw_buffer.data(), start, count);
 				const char *src = scratch.raw_buffer.data() + static_cast<ptrdiff_t>(channel) * bytes_per_sample;
 				for (int64_t i = 0; i < count; ++i, src += static_cast<ptrdiff_t>(channels) * bytes_per_sample)
 					buf[i] = DecodeInt24(src);
@@ -185,7 +205,7 @@ public:
 			}
 			case 4: {
 				scratch.s32_buffer.resize(sample_count);
-				provider->GetAudio(scratch.s32_buffer.data(), start, count);
+				ReadDisplayAudio(provider, scratch.s32_buffer.data(), start, count);
 				const int32_t *src = scratch.s32_buffer.data() + channel;
 				for (int64_t i = 0; i < count; ++i, src += channels)
 					buf[i] = static_cast<float>(*src / 2147483648.0);
@@ -229,14 +249,14 @@ public:
 
 		auto &scratch = GetAudioDecodeScratch();
 		scratch.s16_buffer.resize(static_cast<size_t>(count));
-		provider->GetInt16MonoAudio(scratch.s16_buffer.data(), start, count);
+		ReadDisplayMonoAudio(provider, scratch.s16_buffer.data(), start, count);
 		aegisub::simd::DecodeInt16ToFloat(scratch.s16_buffer.data(), static_cast<size_t>(count), buf);
 	}
 
 	bool GetInt16MonoAudio(int16_t *buf, int64_t start, int64_t count) const override {
 		if (!provider || !buf || count <= 0)
 			return false;
-		provider->GetInt16MonoAudio(buf, start, count);
+		ReadDisplayMonoAudio(provider, buf, start, count);
 		return true;
 	}
 };

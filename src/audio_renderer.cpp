@@ -34,6 +34,7 @@
 #include "audio_renderer.h"
 
 #include <libaegisub/audio/provider.h>
+#include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 
 #include <algorithm>
@@ -123,10 +124,9 @@ void AudioRenderer::SetRenderer(AudioRendererBitmapProvider *const _renderer)
 	}
 }
 
-void AudioRenderer::SetAudioProvider(agi::AudioProvider *const _provider)
-{
-	if (compare_and_set(provider, _provider))
-	{
+void AudioRenderer::SetAudioProvider(agi::AudioProvider *const _provider) {
+	if (compare_and_set(provider, _provider)) {
+		decode_error_reported = false;
 		Invalidate();
 
 		if (renderer)
@@ -171,7 +171,15 @@ wxBitmap const& AudioRenderer::GetCachedBitmap(const int i, const AudioRendering
 	if (created)
 	{
 		++bitmap_cache_misses;
-		renderer->Render(bmp, i*cache_bitmap_width, style);
+		try {
+			renderer->Render(bmp, i * cache_bitmap_width, style);
+		}
+		catch (...) {
+			// Get already inserted the bitmap; a failed render must not turn
+			// into a cache hit with an incomplete image on the next paint.
+			Invalidate();
+			throw;
+		}
 		needs_age = true;
 		needs_prefetch = true;
 	}
@@ -208,7 +216,18 @@ void AudioRenderer::Render(wxDC &dc, wxPoint origin, const int start, const int 
 
 	for (int i = firstbitmap; i <= lastbitmap; ++i)
 	{
-		dc.DrawBitmap(GetCachedBitmap(i, style), origin);
+		try {
+			dc.DrawBitmap(GetCachedBitmap(i, style), origin);
+		}
+		catch (agi::AudioDecodeError const& error) {
+			// Keep a failed tile out of the bitmap cache, but finish painting
+			// the remaining audio and overlays. A later paint may retry it.
+			renderer->RenderBlank(dc, wxRect(origin, wxSize(cache_bitmap_width, pixel_height)), style);
+			if (!decode_error_reported) {
+				decode_error_reported = true;
+				LOG_E("audio/renderer") << "Audio display read failed: " << error.GetMessage();
+			}
+		}
 		origin.x += cache_bitmap_width;
 	}
 

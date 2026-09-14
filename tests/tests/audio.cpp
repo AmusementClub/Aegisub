@@ -29,9 +29,12 @@
 
 #include <filesystem>
 #include <fstream>
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -619,6 +622,206 @@ struct CountingSequenceAudioProvider : agi::AudioProvider {
 	}
 };
 
+struct FailingRamCacheAudioProvider : agi::AudioProvider {
+	static constexpr int64_t BlockSamples = (1 << 22) / sizeof(int16_t);
+	int failed_reads;
+	bool silence;
+	mutable std::atomic<int> first_block_reads{0};
+	mutable std::atomic<int> second_block_reads{0};
+	mutable std::atomic<int64_t> last_first_block_start{0};
+	mutable std::atomic<int64_t> last_first_block_count{0};
+
+	FailingRamCacheAudioProvider(int failed_reads, bool silence = false)
+		: failed_reads(failed_reads), silence(silence) {
+		channels = 1;
+		num_samples = BlockSamples + 64;
+		decoded_samples = num_samples;
+		sample_rate = 48000;
+		bytes_per_sample = sizeof(int16_t);
+		float_samples = false;
+	}
+
+	static int16_t SampleAt(int64_t position) {
+		return static_cast<int16_t>(1 + position % 30000);
+	}
+
+	void FillBuffer(void *buf, int64_t start, int64_t count) const override {
+		auto *out = static_cast<int16_t *>(buf);
+		if (start < BlockSamples) {
+			last_first_block_start = start;
+			last_first_block_count = count;
+			if (++first_block_reads <= failed_reads) {
+				std::fill_n(out, std::min<int64_t>(count, 32), int16_t{-23456});
+				throw agi::AudioDecodeError("injected partial RAM cache read");
+			}
+		}
+		else {
+			++second_block_reads;
+		}
+		for (int64_t i = 0; i < count; ++i)
+			out[i] = silence ? int16_t{0} : SampleAt(start + i);
+	}
+};
+
+struct FrontierRamCacheAudioProvider : FailingRamCacheAudioProvider {
+	mutable std::mutex mutex;
+	mutable std::condition_variable cv;
+	mutable bool entered = false;
+	mutable bool released = false;
+	mutable std::atomic<bool> timed_out{false};
+
+	FrontierRamCacheAudioProvider() : FailingRamCacheAudioProvider(0) {}
+
+	bool WaitUntilEntered() const {
+		std::unique_lock<std::mutex> lock(mutex);
+		return cv.wait_for(lock, std::chrono::seconds(2), [&] { return entered; });
+	}
+
+	void Release() const {
+		{
+			std::scoped_lock lock(mutex);
+			released = true;
+		}
+		cv.notify_all();
+	}
+
+	void FillBuffer(void *buf, int64_t start, int64_t count) const override {
+		if (start >= BlockSamples) {
+			std::unique_lock<std::mutex> lock(mutex);
+			entered = true;
+			cv.notify_all();
+			if (!cv.wait_for(lock, std::chrono::seconds(2), [&] { return released; })) {
+				timed_out = true;
+				throw agi::AudioDecodeError("RAM cache frontier test timed out");
+			}
+		}
+		FailingRamCacheAudioProvider::FillBuffer(buf, start, count);
+	}
+};
+
+struct FailingStereoFloatAudioProvider : agi::AudioProvider {
+	bool fail_reads = true;
+	mutable int fill_calls = 0;
+
+	explicit FailingStereoFloatAudioProvider(int rate = 48000) {
+		channels = 2;
+		num_samples = 16;
+		decoded_samples = num_samples;
+		sample_rate = rate;
+		bytes_per_sample = sizeof(float);
+		float_samples = true;
+	}
+
+	void FillBuffer(void *buf, int64_t start, int64_t count) const override {
+		++fill_calls;
+		auto *out = static_cast<float *>(buf);
+		out[0] = 0.25F;
+		out[1] = 0.5F;
+		if (fail_reads)
+			throw agi::AudioDecodeError("injected partial stereo read");
+		for (int64_t i = 1; i < count; ++i) {
+			out[i * 2] = 0.25F;
+			out[i * 2 + 1] = 0.5F;
+		}
+	}
+};
+
+TEST(lagi_audio, checked_reads_propagate_partial_decode_failures_through_lock) {
+	auto source = agi::make_unique<FailingStereoFloatAudioProvider>();
+	auto *raw = source.get();
+	auto provider = agi::CreateLockAudioProvider(std::move(source));
+	std::array<float, 8> stereo;
+	stereo.fill(-1.0F);
+
+	EXPECT_THROW(provider->GetAudioChecked(stereo.data(), 0, 4), agi::AudioDecodeError);
+	EXPECT_EQ(1, raw->fill_calls);
+	EXPECT_EQ((std::array<float, 8>{0.25F, 0.5F, -1.0F, -1.0F, -1.0F, -1.0F, -1.0F, -1.0F}), stereo);
+
+	std::array<int16_t, 4> mono;
+	mono.fill(-1234);
+	EXPECT_THROW(provider->GetInt16MonoAudioChecked(mono.data(), 0, mono.size()), agi::AudioDecodeError);
+	EXPECT_EQ(2, raw->fill_calls);
+
+	stereo.fill(-1.0F);
+	provider->GetAudio(stereo.data(), 0, 4);
+	EXPECT_EQ((std::array<float, 8>{}), stereo);
+	provider->GetInt16MonoAudio(mono.data(), 0, mono.size());
+	EXPECT_EQ((std::array<int16_t, 4>{}), mono);
+	EXPECT_EQ(4, raw->fill_calls);
+}
+
+TEST(lagi_audio, checked_reads_propagate_failures_through_conversion_and_sample_doubling) {
+	auto source = agi::make_unique<FailingStereoFloatAudioProvider>(16000);
+	auto *raw = source.get();
+	auto provider = agi::CreateConvertAudioProvider(agi::CreateLockAudioProvider(std::move(source)));
+	ASSERT_EQ(32000, provider->GetSampleRate());
+	ASSERT_EQ(1, provider->GetChannels());
+	ASSERT_EQ(sizeof(int16_t), provider->GetBytesPerSample());
+	ASSERT_FALSE(provider->AreSamplesFloat());
+	std::array<int16_t, 4> samples;
+	samples.fill(-1234);
+
+	EXPECT_THROW(provider->GetAudioChecked(samples.data(), 3, samples.size()), agi::AudioDecodeError);
+	EXPECT_EQ(1, raw->fill_calls);
+	EXPECT_THROW(provider->GetInt16MonoAudioChecked(samples.data(), 3, 1), agi::AudioDecodeError);
+	EXPECT_EQ(2, raw->fill_calls);
+	provider->GetAudio(samples.data(), 3, samples.size());
+	EXPECT_EQ((std::array<int16_t, 4>{}), samples);
+	samples.fill(-1234);
+	provider->GetInt16MonoAudio(samples.data(), 3, samples.size());
+	EXPECT_EQ((std::array<int16_t, 4>{}), samples);
+	EXPECT_EQ(4, raw->fill_calls);
+
+	raw->fail_reads = false;
+	provider->GetAudioChecked(samples.data(), 3, samples.size());
+	EXPECT_EQ((std::array<int16_t, 4>{12288, 12288, 12288, 12288}), samples);
+	samples.fill(-1234);
+	provider->GetInt16MonoAudioChecked(samples.data(), 3, 1);
+	EXPECT_EQ((std::array<int16_t, 4>{12288, -1234, -1234, -1234}), samples);
+	EXPECT_EQ(6, raw->fill_calls);
+}
+
+TEST(lagi_audio, checked_reads_pad_only_samples_outside_audio) {
+	for (bool mono : {false, true}) {
+		SCOPED_TRACE(mono);
+		CountingSequenceAudioProvider provider(1);
+		std::array<int16_t, 8> samples;
+		auto read = [&](int64_t start) {
+			samples.fill(-1);
+			if (mono)
+				provider.GetInt16MonoAudioChecked(samples.data(), start, samples.size());
+			else
+				provider.GetAudioChecked(samples.data(), start, samples.size());
+		};
+
+		read(-2);
+		EXPECT_EQ((std::array<int16_t, 8>{0, 0, 0, 1, 2, 3, 4, 5}), samples);
+		EXPECT_EQ(1, provider.fill_calls);
+		read(provider.GetNumSamples() - 3);
+		for (size_t i = 0; i < 3; ++i)
+			EXPECT_EQ(static_cast<int16_t>(provider.GetNumSamples() - 3 + i), samples[i]);
+		for (size_t i = 3; i < samples.size(); ++i)
+			EXPECT_EQ(0, samples[i]);
+		EXPECT_EQ(2, provider.fill_calls);
+	}
+}
+
+TEST(lagi_audio, checked_reads_pad_fully_outside_audio_without_decoding) {
+	CountingSequenceAudioProvider provider(1);
+	for (auto const start : {int64_t{-8}, int64_t{-9}, std::numeric_limits<int64_t>::min(),
+							 provider.GetNumSamples(), provider.GetNumSamples() + 1, std::numeric_limits<int64_t>::max()}) {
+		SCOPED_TRACE(start);
+		std::array<int16_t, 8> samples;
+		samples.fill(-1);
+		provider.GetAudioChecked(samples.data(), start, samples.size());
+		EXPECT_EQ((std::array<int16_t, 8>{}), samples);
+		samples.fill(-1);
+		provider.GetInt16MonoAudioChecked(samples.data(), start, samples.size());
+		EXPECT_EQ((std::array<int16_t, 8>{}), samples);
+	}
+	EXPECT_EQ(0, provider.fill_calls);
+}
+
 TEST(lagi_audio, before_sample_zero) {
 	TestAudioProvider<> provider;
 
@@ -783,6 +986,118 @@ TEST(lagi_audio, ram_cache_preserves_wrapped_provider_name) {
 
 	auto const stats = provider->GetMemoryStats();
 	EXPECT_EQ("RAM (TestSource)", stats.provider_name);
+}
+
+TEST(lagi_audio, ram_cache_recovers_entire_failed_block_before_publishing_samples) {
+	auto source = agi::make_unique<FailingRamCacheAudioProvider>(1);
+	auto *raw = source.get();
+	auto provider = agi::CreateRAMAudioProvider(std::move(source));
+	ASSERT_TRUE(WaitUntil([&] {
+		return provider->GetDecodedSamples() == provider->GetNumSamples();
+	}));
+	ASSERT_EQ(1, raw->first_block_reads);
+	ASSERT_EQ(1, raw->second_block_reads);
+
+	std::array<int16_t, 32> samples;
+	provider->GetAudioChecked(samples.data(), 100, samples.size());
+	for (size_t i = 0; i < samples.size(); ++i)
+		EXPECT_EQ(FailingRamCacheAudioProvider::SampleAt(100 + i), samples[i]);
+	EXPECT_EQ(2, raw->first_block_reads);
+	EXPECT_EQ(0, raw->last_first_block_start);
+	EXPECT_EQ(FailingRamCacheAudioProvider::BlockSamples, raw->last_first_block_count);
+
+	// Recovery of one small requested range must also replace the partial
+	// prefix and the rest of that block, without rereading its healthy neighbour.
+	provider->GetAudioChecked(samples.data(), 0, samples.size());
+	for (size_t i = 0; i < samples.size(); ++i)
+		EXPECT_EQ(FailingRamCacheAudioProvider::SampleAt(i), samples[i]);
+	auto const boundary_start = FailingRamCacheAudioProvider::BlockSamples - 16;
+	provider->GetAudioChecked(samples.data(), boundary_start, samples.size());
+	for (size_t i = 0; i < samples.size(); ++i)
+		EXPECT_EQ(FailingRamCacheAudioProvider::SampleAt(boundary_start + i), samples[i]);
+	EXPECT_EQ(2, raw->first_block_reads);
+	EXPECT_EQ(1, raw->second_block_reads);
+}
+
+TEST(lagi_audio, ram_cache_failed_recovery_stays_retryable_and_does_not_poison_other_blocks) {
+	auto source = agi::make_unique<FailingRamCacheAudioProvider>(3);
+	auto *raw = source.get();
+	auto provider = agi::CreateRAMAudioProvider(std::move(source));
+	ASSERT_TRUE(WaitUntil([&] {
+		return provider->GetDecodedSamples() == provider->GetNumSamples();
+	}));
+	ASSERT_EQ(1, raw->first_block_reads);
+
+	std::array<int16_t, 32> samples;
+	EXPECT_THROW(provider->GetAudioChecked(samples.data(), 0, samples.size()), agi::AudioDecodeError);
+	EXPECT_EQ(2, raw->first_block_reads);
+	provider->GetAudio(samples.data(), 0, samples.size());
+	for (auto const sample : samples)
+		EXPECT_EQ(0, sample);
+	EXPECT_EQ(3, raw->first_block_reads);
+
+	provider->GetAudioChecked(samples.data(), FailingRamCacheAudioProvider::BlockSamples, samples.size());
+	for (size_t i = 0; i < samples.size(); ++i)
+		EXPECT_EQ(FailingRamCacheAudioProvider::SampleAt(FailingRamCacheAudioProvider::BlockSamples + i), samples[i]);
+	EXPECT_EQ(3, raw->first_block_reads);
+	EXPECT_EQ(1, raw->second_block_reads);
+
+	provider->GetAudioChecked(samples.data(), 0, samples.size());
+	for (size_t i = 0; i < samples.size(); ++i)
+		EXPECT_EQ(FailingRamCacheAudioProvider::SampleAt(i), samples[i]);
+	EXPECT_EQ(4, raw->first_block_reads);
+	provider->GetAudioChecked(samples.data(), 200, samples.size());
+	for (size_t i = 0; i < samples.size(); ++i)
+		EXPECT_EQ(FailingRamCacheAudioProvider::SampleAt(200 + i), samples[i]);
+	EXPECT_EQ(4, raw->first_block_reads);
+}
+
+TEST(lagi_audio, ram_cache_retains_genuine_silence_without_redecoding) {
+	auto source = agi::make_unique<FailingRamCacheAudioProvider>(0, true);
+	auto *raw = source.get();
+	auto provider = agi::CreateRAMAudioProvider(std::move(source));
+	ASSERT_TRUE(WaitUntil([&] {
+		return provider->GetDecodedSamples() == provider->GetNumSamples();
+	}));
+
+	std::array<int16_t, 32> samples;
+	for (auto const start : {int64_t{0}, int64_t{100}, FailingRamCacheAudioProvider::BlockSamples - 16}) {
+		samples.fill(-1);
+		provider->GetAudioChecked(samples.data(), start, samples.size());
+		for (auto const sample : samples)
+			EXPECT_EQ(0, sample);
+	}
+	EXPECT_EQ(1, raw->first_block_reads);
+	EXPECT_EQ(1, raw->second_block_reads);
+}
+
+TEST(lagi_audio, ram_cache_checked_reads_reject_unprocessed_samples_until_decode_completes) {
+	auto source = agi::make_unique<FrontierRamCacheAudioProvider>();
+	auto *raw = source.get();
+	auto provider = agi::CreateRAMAudioProvider(std::move(source));
+	ASSERT_TRUE(raw->WaitUntilEntered());
+	EXPECT_EQ(FailingRamCacheAudioProvider::BlockSamples, provider->GetDecodedSamples());
+
+	std::array<int16_t, 32> samples;
+	auto const boundary_start = FailingRamCacheAudioProvider::BlockSamples - 16;
+	EXPECT_THROW(provider->GetAudioChecked(samples.data(), boundary_start, samples.size()), agi::AudioDecodeError);
+	provider->GetAudio(samples.data(), boundary_start, samples.size());
+	EXPECT_EQ((std::array<int16_t, 32>{}), samples);
+
+	// A healthy block must remain readable while the next source read is gated.
+	provider->GetAudioChecked(samples.data(), 100, samples.size());
+	for (size_t i = 0; i < samples.size(); ++i)
+		EXPECT_EQ(FailingRamCacheAudioProvider::SampleAt(100 + i), samples[i]);
+	raw->Release();
+	ASSERT_TRUE(WaitUntil([&] {
+		return provider->GetDecodedSamples() == provider->GetNumSamples();
+	}));
+	EXPECT_FALSE(raw->timed_out.load());
+	provider->GetAudioChecked(samples.data(), boundary_start, samples.size());
+	for (size_t i = 0; i < samples.size(); ++i)
+		EXPECT_EQ(FailingRamCacheAudioProvider::SampleAt(boundary_start + i), samples[i]);
+	EXPECT_EQ(1, raw->first_block_reads);
+	EXPECT_EQ(1, raw->second_block_reads);
 }
 
 TEST(lagi_audio, hd_cache) {

@@ -20,6 +20,7 @@
 
 #include <array>
 #include <boost/container/stable_vector.hpp>
+#include <mutex>
 #include <thread>
 
 namespace {
@@ -45,10 +46,12 @@ std::string FormatWrappedProviderName(char const* wrapper_name, AudioProvider co
 
 class RAMAudioProvider final : public AudioProviderWrapper {
 #ifdef _MSC_VER
-	boost::container::stable_vector<char[CacheBlockSize]> blockcache;
+	mutable boost::container::stable_vector<char[CacheBlockSize]> blockcache;
 #else
-	boost::container::stable_vector<std::array<char, CacheBlockSize>> blockcache;
+	mutable boost::container::stable_vector<std::array<char, CacheBlockSize>> blockcache;
 #endif
+	std::unique_ptr<std::atomic<bool>[]> failed_blocks;
+	mutable std::mutex source_mutex;
 	std::atomic<bool> cancelled = {false};
 	std::thread decoder;
 
@@ -62,6 +65,7 @@ public:
 
 		try {
 			blockcache.resize((num_samples * bytes_per_sample * channels + CacheBlockSize - 1) >> CacheBits);
+			failed_blocks = std::make_unique<std::atomic<bool>[]>(blockcache.size());
 		}
 		catch (std::bad_alloc const&) {
 			throw AudioProviderError("Not enough memory available to cache in RAM");
@@ -72,7 +76,17 @@ public:
 			for (size_t i = 0; i < blockcache.size(); i++) {
 				if (cancelled) break;
 				auto actual_read = std::min<int64_t>(readsize, num_samples - i * readsize);
-				source->GetAudio(&blockcache[i][0], i * readsize, actual_read);
+				{
+					std::scoped_lock lock(source_mutex);
+					try {
+						source->GetAudioChecked(&blockcache[i][0], i * readsize, actual_read);
+					}
+					catch (...) {
+						failed_blocks[i].store(true, std::memory_order_release);
+					}
+				}
+				// Publish the processed frontier even on failure. Reads of that
+				// block must recover it instead of treating partial data as silence.
 				decoded_samples += actual_read;
 			}
 		});
@@ -94,16 +108,25 @@ public:
 void RAMAudioProvider::FillBuffer(void *buf, int64_t start, int64_t count) const {
 	auto charbuf = static_cast<char *>(buf);
 	for (int64_t bytes_remaining = count * bytes_per_sample * channels; bytes_remaining; ) {
-		if (start >= decoded_samples) {
-			memset(charbuf, 0, bytes_remaining);
-			break;
-		}
+		if (start >= decoded_samples)
+			throw AudioDecodeError("RAM audio cache has not decoded the requested samples yet");
 
 		const int64_t samples_per_block = CacheBlockSize / bytes_per_sample / channels;
 
 		const size_t i = start / samples_per_block;
 		const int start_offset = (start % samples_per_block) * bytes_per_sample * channels;
 		const int read_size = std::min<int>(bytes_remaining, samples_per_block * bytes_per_sample * channels - start_offset);
+		if (failed_blocks[i].load(std::memory_order_acquire)) {
+			std::scoped_lock lock(source_mutex);
+			if (failed_blocks[i].load(std::memory_order_relaxed)) {
+				auto const block_start = static_cast<int64_t>(i) * samples_per_block;
+				auto const block_samples = std::min(samples_per_block, num_samples - block_start);
+				// A failed read may have written any prefix of the block. Replace
+				// all of it, and leave it failed if this single recovery read throws.
+				source->GetAudioChecked(&blockcache[i][0], block_start, block_samples);
+				failed_blocks[i].store(false, std::memory_order_release);
+			}
+		}
 
 		memcpy(charbuf, &blockcache[i][start_offset], read_size);
 		charbuf += read_size;

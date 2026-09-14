@@ -454,6 +454,15 @@ if(GTEST_FOUND)
         target_link_libraries(gtest-run PRIVATE aegisub_core)
     endif()
 
+    if(WIN32)
+        # Exercise the production bitmap renderer without requiring a window
+        # server for the console test suite on other platforms.
+        target_sources(gtest-run PRIVATE
+            src/audio_renderer.cpp
+            tests/tests/audio_renderer.cpp
+        )
+    endif()
+
     # Sources which still belong to the application target should use the
     # exact production compile environment, while being compiled only once
     # when CI builds Aegisub before gtest-run.

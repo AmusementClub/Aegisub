@@ -17,14 +17,11 @@
 #include "libaegisub/audio/provider.h"
 
 #include <libaegisub/file_mapping.h>
-#include <libaegisub/format.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/path.h>
 #include <libaegisub/make_unique.h>
 
 #include <filesystem>
-#include <boost/interprocess/detail/os_thread_functions.hpp>
-#include <ctime>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -100,8 +97,7 @@ class HDAudioProvider final : public AudioProviderWrapper {
 		if ((uint64_t)num_samples * bytes_per_sample * channels > fs::FreeSpace(dir))
 			throw AudioProviderError("Not enough free disk space in " + fs::PathToString(dir) + " to cache the audio");
 
-		return format("audio-%lld-%lld", time(nullptr),
-		              boost::interprocess::ipcdetail::get_current_process_id());
+		return fs::UniquePath("audio-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%");
 	}
 
 public:

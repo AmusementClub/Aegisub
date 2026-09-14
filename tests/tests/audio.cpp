@@ -1843,3 +1843,52 @@ TEST(lagi_audio, ram_cache_uses_whole_frames_for_multichannel_capacity) {
 		}
 	}
 }
+
+TEST(lagi_audio, hd_cache_instances_keep_independent_samples_when_opened_together) {
+	struct CacheDirectory {
+		agi::fs::path path = agi::fs::UniquePath(agi::Path().Decode("?temp") / "audio-cache-isolation-%%%%%%%%%%%%%%%%");
+		~CacheDirectory() {
+			std::error_code error;
+			std::filesystem::remove(path, error);
+		}
+	} directory;
+	ASSERT_TRUE(std::filesystem::create_directory(directory.path));
+	std::vector<std::unique_ptr<agi::AudioProvider>> caches;
+	const auto started = std::chrono::steady_clock::now();
+	for (int index = 0; index < 4; ++index) {
+		auto source = std::make_unique<TestAudioProvider<int16_t>>(1);
+		source->bias = (index + 1) * 1000;
+		caches.push_back(agi::CreateHDAudioProvider(std::move(source), directory.path));
+	}
+	// Four live providers opened within two seconds must share at least one
+	// second-based filename under the old scheme, even across a clock tick.
+	ASSERT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(
+				  std::chrono::steady_clock::now() - started)
+				  .count(),
+			  2000);
+	ASSERT_TRUE(WaitUntil([&] {
+		return std::ranges::all_of(caches, [](auto const& cache) {
+			return cache->GetDecodedSamples() == cache->GetNumSamples();
+		});
+	}));
+#ifdef _WIN32
+	EXPECT_EQ(4, std::distance(std::filesystem::directory_iterator(directory.path), std::filesystem::directory_iterator()));
+#endif
+	auto check_cache = [&](size_t index) {
+		const int bias = static_cast<int>(index + 1) * 1000;
+		std::vector<int16_t> samples(static_cast<size_t>(caches[index]->GetNumSamples()));
+		std::vector<int16_t> expected(samples.size());
+		for (size_t frame = 0; frame < samples.size(); ++frame)
+			expected[frame] = static_cast<int16_t>(frame + bias);
+		caches[index]->GetAudioChecked(samples.data(), 0, samples.size());
+		EXPECT_EQ(expected, samples) << "cache=" << index;
+	};
+	for (size_t index = 0; index < caches.size(); ++index)
+		check_cache(index);
+	caches.front().reset();
+#ifdef _WIN32
+	EXPECT_EQ(3, std::distance(std::filesystem::directory_iterator(directory.path), std::filesystem::directory_iterator()));
+#endif
+	for (size_t index = 1; index < caches.size(); ++index)
+		check_cache(index);
+}

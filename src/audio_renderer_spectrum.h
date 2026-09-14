@@ -216,5 +216,6 @@ public:
 	void AgeCache(size_t max_size) override;
 
 	void Prefetch(int start, int length) override;
+	int64_t GetSampleLookahead() const override;
 	bool GetCacheMetrics(AudioRendererCacheMetrics &metrics) const override;
 };

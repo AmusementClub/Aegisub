@@ -272,6 +272,32 @@ struct PatternMonoProvider final : agi::AudioProvider {
 	}
 };
 
+struct ProgressiveMonoProvider final : agi::AudioProvider {
+	mutable std::atomic<int> unread_requests{0};
+
+	explicit ProgressiveMonoProvider(int64_t sample_count) {
+		channels = 1;
+		num_samples = sample_count;
+		decoded_samples = 0;
+		sample_rate = 1000;
+		bytes_per_sample = sizeof(int16_t);
+		float_samples = false;
+	}
+
+	void Publish(int64_t count) { decoded_samples = count; }
+
+	void FillBuffer(void *buf, int64_t start, int64_t count) const override {
+		const int64_t available = decoded_samples.load();
+		if (start > available || count > available - start) {
+			++unread_requests;
+			throw agi::AudioDecodeError("audio samples are not ready");
+		}
+		auto *out = static_cast<int16_t *>(buf);
+		for (int64_t i = 0; i < count; ++i)
+			out[i] = PatternMonoProvider::SampleAt(start + i);
+	}
+};
+
 struct RecoverableReadProvider final : agi::AudioProvider {
 	mutable std::atomic<int> fill_calls{0};
 	mutable std::atomic<int> failures_remaining{0};
@@ -839,6 +865,136 @@ TEST(lagi_audio_display, waveform_summary_cache_matches_legacy_short_file_and_eo
 	EXPECT_FALSE(cache.Get(1));
 }
 
+TEST(lagi_audio_display, waveform_summary_cache_preserves_final_block_at_file_boundaries) {
+	struct Case {
+		int64_t samples;
+		double pixel_ms;
+		size_t blocks;
+	};
+	for (auto const& test : {Case{.samples = 0, .pixel_ms = 1.0, .blocks = 0}, Case{.samples = 1, .pixel_ms = 1.0, .blocks = 1}, Case{.samples = 31, .pixel_ms = 1.0, .blocks = 1},
+							 Case{.samples = 32, .pixel_ms = 1.0, .blocks = 1}, Case{.samples = 33, .pixel_ms = 1.0, .blocks = 2}, Case{.samples = 64, .pixel_ms = 1.0, .blocks = 2},
+							 Case{.samples = 65, .pixel_ms = 1.0, .blocks = 3}, Case{.samples = 1000, .pixel_ms = 20.0, .blocks = 2}}) {
+		SCOPED_TRACE(test.samples);
+		PatternMonoProvider provider(test.samples);
+		auto source = CreateInt16MonoAudioDisplaySource(&provider);
+		AudioWaveformSummaryCache cache;
+		cache.SetSource(source.get());
+		cache.SetMillisecondsPerPixel(test.pixel_ms);
+
+		EXPECT_EQ(test.blocks, GetAudioDisplayBlockCount(test.samples, 1000, test.pixel_ms, 32));
+		EXPECT_FALSE(cache.Get(test.blocks));
+		if (test.blocks == 0) {
+			EXPECT_FALSE(cache.IsReady());
+			continue;
+		}
+		auto tail = cache.Get(test.blocks - 1);
+		ASSERT_TRUE(tail);
+		ASSERT_TRUE(tail->has_exact_pcm16);
+		for (size_t column = 0; column < AudioWaveformSummaryBlock::width; ++column) {
+			const size_t pixel = (test.blocks - 1) * AudioWaveformSummaryBlock::width + column;
+			auto const expected = AnalyzeLegacyWaveformColumn(provider, pixel, test.pixel_ms);
+			auto const& actual = tail->pcm16_summaries[column];
+			EXPECT_EQ(expected.peak_min, actual.peak_min) << "pixel=" << pixel;
+			EXPECT_EQ(expected.peak_max, actual.peak_max) << "pixel=" << pixel;
+			EXPECT_EQ(expected.avg_min_accum, actual.avg_min_accum) << "pixel=" << pixel;
+			EXPECT_EQ(expected.avg_max_accum, actual.avg_max_accum) << "pixel=" << pixel;
+		}
+	}
+}
+
+TEST(lagi_audio_display, legacy_render_length_exposes_partial_tail_only_after_decoding_finishes) {
+	EXPECT_EQ(0, GetAudioDisplayRenderLength(0, 64, 1, 0, 1000, 1.0, 32));
+	EXPECT_EQ(1, GetAudioDisplayRenderLength(0, 64, 1, 1, 1000, 1.0, 32));
+	EXPECT_EQ(0, GetAudioDisplayRenderLength(0, 64, 33, 31, 1000, 1.0, 32));
+	EXPECT_EQ(32, GetAudioDisplayRenderLength(0, 64, 33, 32, 1000, 1.0, 32));
+	EXPECT_EQ(33, GetAudioDisplayRenderLength(0, 64, 33, 33, 1000, 1.0, 32));
+	EXPECT_EQ(32, GetAudioDisplayRenderLength(0, 64, 64, 63, 1000, 1.0, 32));
+	EXPECT_EQ(64, GetAudioDisplayRenderLength(0, 96, 64, 64, 1000, 1.0, 32));
+	EXPECT_EQ(32, GetAudioDisplayRenderLength(0, 64, 1000, 999, 1000, 20.0, 32));
+	EXPECT_EQ(50, GetAudioDisplayRenderLength(0, 64, 1000, 1000, 1000, 20.0, 32));
+}
+
+TEST(lagi_audio_display, legacy_render_length_clips_audio_tail_across_viewports) {
+	// A 50-column file must retain all 18 columns of its second bitmap, but
+	// no part of the bitmap after column 49 may be drawn as audio.
+	EXPECT_EQ(50, GetAudioDisplayRenderLength(0, 96, 1000, 1000, 1000, 20.0, 32));
+	EXPECT_EQ(19, GetAudioDisplayRenderLength(31, 96, 1000, 1000, 1000, 20.0, 32));
+	EXPECT_EQ(18, GetAudioDisplayRenderLength(32, 96, 1000, 1000, 1000, 20.0, 32));
+	EXPECT_EQ(1, GetAudioDisplayRenderLength(49, 96, 1000, 1000, 1000, 20.0, 32));
+	EXPECT_EQ(0, GetAudioDisplayRenderLength(50, 96, 1000, 1000, 1000, 20.0, 32));
+	EXPECT_EQ(0, GetAudioDisplayRenderLength(64, 96, 1000, 1000, 1000, 20.0, 32));
+	EXPECT_EQ(7, GetAudioDisplayRenderLength(31, 7, 1000, 1000, 1000, 20.0, 32));
+	// A partial final pixel is visible, and decoding metadata cannot extend
+	// the visible duration beyond the actual file.
+	EXPECT_EQ(1, GetAudioDisplayRenderLength(50, 96, 1001, 1001, 1000, 20.0, 32));
+	EXPECT_EQ(0, GetAudioDisplayRenderLength(51, 96, 1001, 1001, 1000, 20.0, 32));
+	EXPECT_EQ(50, GetAudioDisplayRenderLength(0, 96, 1000, 2000, 1000, 20.0, 32));
+	EXPECT_EQ(0, GetAudioDisplayRenderLength(0, 96, 0, 0, 1000, 20.0, 32));
+}
+
+TEST(lagi_audio_display, spectrum_ready_ranges_require_window_lookahead_until_complete_eof) {
+	EXPECT_EQ(0, GetAudioDisplayReadySamples(2000, 511, 512));
+	EXPECT_EQ(0, GetAudioDisplayReadySamples(2000, 512, 512));
+	EXPECT_EQ(1, GetAudioDisplayReadySamples(2000, 513, 512));
+	EXPECT_EQ(1487, GetAudioDisplayReadySamples(2000, 1999, 512));
+	EXPECT_EQ(2000, GetAudioDisplayReadySamples(2000, 2000, 512));
+	EXPECT_EQ(1000, GetAudioDisplayReadySamples(2000, 1000, 0));
+
+	EXPECT_EQ(0u, GetAudioSpectrumReadyBlockCount(2000, 511, 512, 128));
+	EXPECT_EQ(1u, GetAudioSpectrumReadyBlockCount(2000, 512, 512, 128));
+	EXPECT_EQ(1u, GetAudioSpectrumReadyBlockCount(2000, 639, 512, 128));
+	EXPECT_EQ(2u, GetAudioSpectrumReadyBlockCount(2000, 640, 512, 128));
+	EXPECT_EQ(12u, GetAudioSpectrumReadyBlockCount(2000, 1999, 512, 128));
+	EXPECT_EQ(16u, GetAudioSpectrumReadyBlockCount(2000, 2000, 512, 128));
+	EXPECT_EQ(16u, GetAudioSpectrumReadyBlockCount(2048, 2048, 512, 128));
+	EXPECT_EQ(0u, GetAudioSpectrumReadyBlockCount(1, 0, 512, 128));
+	EXPECT_EQ(1u, GetAudioSpectrumReadyBlockCount(1, 1, 512, 128));
+
+	auto const before = GetAudioDisplayReadySamples(2000, 1151, 512);
+	auto const after = GetAudioDisplayReadySamples(2000, 1152, 512);
+	EXPECT_EQ(0, GetAudioDisplayRenderLength(0, 64, 2000, before, 1000, 20.0, 32));
+	EXPECT_EQ(32, GetAudioDisplayRenderLength(0, 64, 2000, after, 1000, 20.0, 32));
+	EXPECT_EQ(100, GetAudioDisplayRenderLength(0, 128, 2000,
+											   GetAudioDisplayReadySamples(2000, 2000, 512), 1000, 20.0, 32));
+}
+
+TEST(lagi_audio_display, spectrum_prefetch_ready_ranges_never_read_unprocessed_samples) {
+	ProgressiveMonoProvider provider(2000);
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioSpectrumAnalysisCache cache;
+	cache.SetSource(source.get());
+	cache.SetResolution(9, 7);
+	PatternMonoProvider complete_provider(2000);
+	auto complete_source = CreateAudioDisplaySource(&complete_provider);
+	AudioSpectrumAnalysisCache reference;
+	reference.SetSource(complete_source.get());
+	reference.SetResolution(9, 7);
+
+	struct Stage {
+		int64_t decoded;
+		size_t ready_blocks;
+	};
+	for (auto const& stage : {Stage{.decoded = 512, .ready_blocks = 1},
+							  Stage{.decoded = 640, .ready_blocks = 2}, Stage{.decoded = 1999, .ready_blocks = 12},
+							  Stage{.decoded = 2000, .ready_blocks = 16}}) {
+		SCOPED_TRACE(stage.decoded);
+		provider.Publish(stage.decoded);
+		const size_t ready_blocks = GetAudioSpectrumReadyBlockCount(
+			provider.GetNumSamples(), provider.GetDecodedSamples(), 512, 128);
+		ASSERT_EQ(stage.ready_blocks, ready_blocks);
+		cache.Prefetch(0, ready_blocks - 1);
+		ASSERT_TRUE(WaitForSpectrumPrefetchBuilds(cache, ready_blocks));
+		EXPECT_EQ(0, provider.unread_requests.load());
+		EXPECT_EQ(nullptr, cache.GetIfReady(ready_blocks));
+		auto const tail = cache.GetIfReady(ready_blocks - 1);
+		auto const expected = reference.Get(ready_blocks - 1);
+		ASSERT_NE(nullptr, tail);
+		ASSERT_NE(nullptr, expected);
+		for (size_t bin = 0; bin < 512; ++bin)
+			EXPECT_FLOAT_EQ(expected[bin], tail[bin]) << "bin=" << bin;
+	}
+}
+
 TEST(lagi_audio_display, waveform_summary_cache_chunks_extreme_zoom_reads) {
 	ChunkTrackingMonoProvider provider;
 	auto source = CreateInt16MonoAudioDisplaySource(&provider);
@@ -1187,6 +1343,7 @@ TEST(lagi_audio_display, waveform_prefetch_blocks_exclude_incomplete_decoded_tai
 		2 * static_cast<int>(AudioWaveformSummaryBlock::width),
 		10 * static_cast<int64_t>(AudioWaveformSummaryBlock::width) + 31,
 		1000,
+		1000,
 		1.0);
 	ASSERT_TRUE(range);
 	EXPECT_EQ(1u, range->first);
@@ -1197,6 +1354,7 @@ TEST(lagi_audio_display, waveform_prefetch_blocks_exclude_incomplete_decoded_tai
 		static_cast<int>(AudioWaveformSummaryBlock::width),
 		10 * static_cast<int64_t>(AudioWaveformSummaryBlock::width) + 31,
 		1000,
+		1000,
 		1.0);
 	ASSERT_TRUE(tail_margin);
 	EXPECT_EQ(2u, tail_margin->first);
@@ -1205,6 +1363,7 @@ TEST(lagi_audio_display, waveform_prefetch_blocks_exclude_incomplete_decoded_tai
 		10 * static_cast<int>(AudioWaveformSummaryBlock::width),
 		static_cast<int>(AudioWaveformSummaryBlock::width),
 		10 * static_cast<int64_t>(AudioWaveformSummaryBlock::width) + 31,
+		1000,
 		1000,
 		1.0,
 		0));
@@ -1222,6 +1381,7 @@ TEST(lagi_audio_display, waveform_prefetch_blocks_use_exact_legacy_column_end) {
 		0,
 		static_cast<int>(AudioWaveformSummaryBlock::width),
 		*sample_end,
+		*sample_end + 1,
 		sample_rate,
 		pixel_ms,
 		0);
@@ -1232,6 +1392,7 @@ TEST(lagi_audio_display, waveform_prefetch_blocks_use_exact_legacy_column_end) {
 		0,
 		static_cast<int>(AudioWaveformSummaryBlock::width),
 		*sample_end - 1,
+		*sample_end + 1,
 		sample_rate,
 		pixel_ms,
 		0));
@@ -1239,6 +1400,7 @@ TEST(lagi_audio_display, waveform_prefetch_blocks_use_exact_legacy_column_end) {
 	auto const rounded_size_limit = PlanWaveformPrefetchBlocks(
 		std::numeric_limits<int>::max(),
 		1,
+		std::numeric_limits<int64_t>::max(),
 		std::numeric_limits<int64_t>::max(),
 		1,
 		15.625,
@@ -1248,6 +1410,36 @@ TEST(lagi_audio_display, waveform_prefetch_blocks_use_exact_legacy_column_end) {
 		/ AudioWaveformSummaryBlock::width;
 	EXPECT_EQ(expected_block, rounded_size_limit->first);
 	EXPECT_EQ(expected_block, rounded_size_limit->last);
+}
+
+TEST(lagi_audio_display, waveform_prefetch_blocks_include_completed_partial_tail_without_exceeding_eof) {
+	EXPECT_FALSE(PlanWaveformPrefetchBlocks(0, 64, 0, 1, 1000, 1.0, 0));
+	auto const short_file = PlanWaveformPrefetchBlocks(0, 64, 1, 1, 1000, 1.0, 0);
+	ASSERT_TRUE(short_file);
+	EXPECT_EQ(0u, short_file->first);
+	EXPECT_EQ(0u, short_file->last);
+
+	auto const incomplete = PlanWaveformPrefetchBlocks(0, 64, 32, 33, 1000, 1.0, 0);
+	ASSERT_TRUE(incomplete);
+	EXPECT_EQ(0u, incomplete->first);
+	EXPECT_EQ(0u, incomplete->last);
+	EXPECT_FALSE(PlanWaveformPrefetchBlocks(32, 32, 32, 33, 1000, 1.0, 0));
+
+	auto const complete = PlanWaveformPrefetchBlocks(31, 64, 33, 33, 1000, 1.0, 0);
+	ASSERT_TRUE(complete);
+	EXPECT_EQ(0u, complete->first);
+	EXPECT_EQ(1u, complete->last);
+	auto const tail = PlanWaveformPrefetchBlocks(32, 64, 33, 33, 1000, 1.0, 0);
+	ASSERT_TRUE(tail);
+	EXPECT_EQ(1u, tail->first);
+	EXPECT_EQ(1u, tail->last);
+	EXPECT_FALSE(PlanWaveformPrefetchBlocks(64, 32, 33, 33, 1000, 1.0, 0));
+
+	auto const exact = PlanWaveformPrefetchBlocks(0, 96, 64, 64, 1000, 1.0, 0);
+	ASSERT_TRUE(exact);
+	EXPECT_EQ(0u, exact->first);
+	EXPECT_EQ(1u, exact->last);
+	EXPECT_FALSE(PlanWaveformPrefetchBlocks(64, 32, 64, 64, 1000, 1.0, 0));
 }
 
 TEST(lagi_audio_display, latest_range_scheduler_request_increments_generation) {

@@ -82,6 +82,7 @@ void AudioWaveformRenderer::Prefetch(int start, int length) {
 		start,
 		length,
 		provider->GetDecodedSamples(),
+		provider->GetNumSamples(),
 		provider->GetSampleRate(),
 		pixel_ms);
 	if (range)

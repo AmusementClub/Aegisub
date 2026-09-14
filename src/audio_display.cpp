@@ -872,8 +872,8 @@ void AudioDisplay::OnLoadTimer(wxTimerEvent&)
 		if (new_pos > audio_load_position)
 			audio_load_position = new_pos;
 
-		const double left = last_sample_decoded * 1000.0 / provider->GetSampleRate() / ms_per_pixel;
-		const double right = new_decoded_count * 1000.0 / provider->GetSampleRate() / ms_per_pixel;
+		const double left = audio_renderer->GetRenderReadySamples(last_sample_decoded) * 1000.0 / provider->GetSampleRate() / ms_per_pixel;
+		const double right = audio_renderer->GetRenderReadySamples(new_decoded_count) * 1000.0 / provider->GetSampleRate() / ms_per_pixel;
 
 		if (left < scroll_left + pixel_audio_width && right >= scroll_left)
 			Refresh();

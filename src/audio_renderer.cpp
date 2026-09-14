@@ -32,6 +32,7 @@
 /// @ingroup audio_ui
 
 #include "audio_renderer.h"
+#include "audio_display_analysis.h"
 
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/log.h>
@@ -157,8 +158,7 @@ void AudioRenderer::ResetBlockCount()
 
 size_t AudioRenderer::NumBlocks(const int64_t samples) const
 {
-	const double duration = samples * 1000.0 / provider->GetSampleRate();
-	return static_cast<size_t>(duration / pixel_ms / cache_bitmap_width);
+	return GetAudioDisplayBlockCount(samples, provider->GetSampleRate(), pixel_ms, cache_bitmap_width);
 }
 
 wxBitmap const& AudioRenderer::GetCachedBitmap(const int i, const AudioRenderingStyle style)
@@ -190,6 +190,12 @@ wxBitmap const& AudioRenderer::GetCachedBitmap(const int i, const AudioRendering
 	return bmp;
 }
 
+int64_t AudioRenderer::GetRenderReadySamples(int64_t decoded_samples) const {
+	if (!provider || !renderer)
+		return 0;
+	return GetAudioDisplayReadySamples(provider->GetNumSamples(), decoded_samples, renderer->GetSampleLookahead());
+}
+
 void AudioRenderer::Render(wxDC &dc, wxPoint origin, const int start, const int length, const AudioRenderingStyle style)
 {
 	assert(start >= 0);
@@ -198,42 +204,37 @@ void AudioRenderer::Render(wxDC &dc, wxPoint origin, const int start, const int 
 	if (!renderer) return;
 	if (length <= 0) return;
 
-	// One past last absolute pixel strip to render
-	const int end = start + length;
-	// One past last X coordinate to render on
-	const int lastx = origin.x + length;
-	// Figure out which range of bitmaps are required
-	const int firstbitmap = start / cache_bitmap_width;
-	// And the offset in it to start its use at
-	const int firstbitmapoffset = start % cache_bitmap_width;
-	// The last bitmap required
-	const int lastbitmap = std::min<int>(end / cache_bitmap_width, NumBlocks(provider->GetDecodedSamples()) - 1);
-
-	// Set a clipping region so that the first and last bitmaps don't draw
-	// outside the requested range
+	const int render_length = GetAudioDisplayRenderLength(start, length,
+														  provider->GetNumSamples(), GetRenderReadySamples(provider->GetDecodedSamples()),
+														  provider->GetSampleRate(), pixel_ms, cache_bitmap_width);
 	const wxDCClipper clipper(dc, wxRect(origin, wxSize(length, pixel_height)));
-	origin.x -= firstbitmapoffset;
-
-	for (int i = firstbitmap; i <= lastbitmap; ++i)
-	{
-		try {
-			dc.DrawBitmap(GetCachedBitmap(i, style), origin);
-		}
-		catch (agi::AudioDecodeError const& error) {
-			// Keep a failed tile out of the bitmap cache, but finish painting
-			// the remaining audio and overlays. A later paint may retry it.
-			renderer->RenderBlank(dc, wxRect(origin, wxSize(cache_bitmap_width, pixel_height)), style);
-			if (!decode_error_reported) {
-				decode_error_reported = true;
-				LOG_E("audio/renderer") << "Audio display read failed: " << error.GetMessage();
+	if (render_length > 0) {
+		const int firstbitmap = start / cache_bitmap_width;
+		const int lastbitmap = static_cast<int>((static_cast<int64_t>(start) + render_length - 1) / cache_bitmap_width);
+		// Clip the final bitmap at the audio endpoint as well as the viewport.
+		// Spectrum caches may otherwise repeat their last FFT beyond the file.
+		const wxDCClipper audio_clipper(dc, wxRect(origin, wxSize(render_length, pixel_height)));
+		wxPoint bitmap_origin = origin;
+		bitmap_origin.x -= start % cache_bitmap_width;
+		for (int i = firstbitmap; i <= lastbitmap; ++i) {
+			try {
+				dc.DrawBitmap(GetCachedBitmap(i, style), bitmap_origin);
 			}
+			catch (agi::AudioDecodeError const& error) {
+				// Keep a failed tile out of the bitmap cache, but finish painting
+				// the remaining audio and overlays. A later paint may retry it.
+				renderer->RenderBlank(dc, wxRect(bitmap_origin, wxSize(cache_bitmap_width, pixel_height)), style);
+				if (!decode_error_reported) {
+					decode_error_reported = true;
+					LOG_E("audio/renderer") << "Audio display read failed: " << error.GetMessage();
+				}
+			}
+			bitmap_origin.x += cache_bitmap_width;
 		}
-		origin.x += cache_bitmap_width;
 	}
 
-	// Now render blank audio from origin to end
-	if (origin.x < lastx)
-		renderer->RenderBlank(dc, wxRect(origin.x-1, origin.y, lastx-origin.x+1, pixel_height), style);
+	if (render_length < length)
+		renderer->RenderBlank(dc, wxRect(origin.x + render_length, origin.y, length - render_length, pixel_height), style);
 
 	if (needs_age)
 	{

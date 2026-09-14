@@ -237,6 +237,9 @@ public:
 	/// of audio samples rendered is length*pixel_samples.
 	void Render(wxDC &dc, wxPoint origin, int start, int length, AudioRenderingStyle style);
 
+	/// Convert decoding progress to the sample range whose analysis is ready.
+	int64_t GetRenderReadySamples(int64_t decoded_samples) const;
+
 	/// Queue bounded background preparation after the current paint is complete.
 	void Prefetch(int start, int length);
 
@@ -330,6 +333,9 @@ public:
 	/// Queue bounded background preparation for a rendered pixel range.
 	/// The current render has already completed when this hook is called.
 	virtual void Prefetch(int start, int length) { }
+
+	/// Samples needed after a displayed sample to complete its analysis.
+	virtual int64_t GetSampleLookahead() const { return 0; }
 
 	virtual bool GetCacheMetrics(AudioRendererCacheMetrics &metrics) const { return false; }
 };

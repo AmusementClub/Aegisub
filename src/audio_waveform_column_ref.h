@@ -91,10 +91,11 @@ inline std::optional<AudioWaveformPrefetchBlockRange> PlanWaveformPrefetchBlocks
 	int start,
 	int length,
 	int64_t decoded_samples,
+	int64_t num_samples,
 	int sample_rate,
 	double pixel_ms,
 	size_t margin_blocks = 8) {
-	if (start < 0 || length <= 0 || decoded_samples <= 0 || sample_rate <= 0 || pixel_ms <= 0.0)
+	if (start < 0 || length <= 0 || decoded_samples <= 0 || num_samples <= 0 || sample_rate <= 0 || pixel_ms <= 0.0)
 		return std::nullopt;
 
 	const int64_t last_column = static_cast<int64_t>(start) + length - 1;
@@ -110,7 +111,14 @@ inline std::optional<AudioWaveformPrefetchBlockRange> PlanWaveformPrefetchBlocks
 		: std::numeric_limits<size_t>::max();
 
 	const double samples_per_pixel = pixel_ms * sample_rate / 1000.0;
+	const double total_pixels = num_samples * 1000.0 / sample_rate / pixel_ms;
+	if (!std::isfinite(total_pixels) || total_pixels <= 0.0)
+		return std::nullopt;
 	auto is_fully_decoded = [&](size_t block_index) {
+		if (static_cast<double>(block_index) * AudioWaveformSummaryBlock::width >= total_pixels)
+			return false;
+		if (decoded_samples >= num_samples)
+			return true;
 		auto const sample_end = GetWaveformSummaryBlockSampleEnd(block_index, samples_per_pixel);
 		return sample_end && *sample_end <= decoded_samples;
 	};

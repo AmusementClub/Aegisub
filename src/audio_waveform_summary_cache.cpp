@@ -102,20 +102,12 @@ void AudioWaveformSummaryCache::RecreateCache() {
 	ClearLocked();
 	block_count = 0;
 	if (source && pixel_ms > 0.0 && source->GetSampleRate() > 0 && source->GetNumSamples() > 0) {
-		const double duration = source->GetNumSamples() * 1000.0 / source->GetSampleRate();
-		const double blocks = duration / pixel_ms / AudioWaveformSummaryBlock::width;
-		const double size_t_exclusive_upper = std::ldexp(
-			1.0,
-			std::numeric_limits<size_t>::digits);
-		if (std::isfinite(blocks) && blocks >= 0.0
-			&& blocks < size_t_exclusive_upper) {
-			const size_t new_block_count = std::max<size_t>(1, static_cast<size_t>(blocks));
-			if (new_block_count <= cache_blocks.max_size()
-				&& new_block_count <= cache_touch.max_size()) {
-				block_count = new_block_count;
-				cache_blocks.resize(block_count);
-				cache_touch.resize(block_count);
-			}
+		const size_t new_block_count = GetAudioDisplayBlockCount(
+			source->GetNumSamples(), source->GetSampleRate(), pixel_ms, AudioWaveformSummaryBlock::width);
+		if (new_block_count <= cache_blocks.max_size() && new_block_count <= cache_touch.max_size()) {
+			block_count = new_block_count;
+			cache_blocks.resize(block_count);
+			cache_touch.resize(block_count);
 		}
 	}
 	++metrics_generation;

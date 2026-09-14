@@ -40,6 +40,8 @@
 #include "audio_spectrum_analysis_cache.h"
 #include "utils.h"
 
+#include <libaegisub/audio/provider.h>
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -426,8 +428,12 @@ void AudioSpectrumRenderer::AgeCache(size_t max_size) {
 	}
 }
 
+int64_t AudioSpectrumRenderer::GetSampleLookahead() const {
+	return int64_t{1} << derivation_size;
+}
+
 void AudioSpectrumRenderer::Prefetch(int start, int length) {
-	if (!display_source || pixel_ms <= 0.0 || start < 0 || length <= 0)
+	if (!display_source || !provider || pixel_ms <= 0.0 || start < 0 || length <= 0)
 		return;
 
 	auto const samples_per_pixel = static_cast<long double>(pixel_ms)
@@ -450,6 +456,12 @@ void AudioSpectrumRenderer::Prefetch(int start, int length) {
 	last_block = last_block <= std::numeric_limits<size_t>::max() - margin_blocks
 		? last_block + margin_blocks
 		: std::numeric_limits<size_t>::max();
+	const size_t ready_blocks = GetAudioSpectrumReadyBlockCount(
+		display_source->GetNumSamples(), provider->GetDecodedSamples(),
+		GetSampleLookahead(), int64_t{1} << derivation_dist);
+	if (first_block >= ready_blocks)
+		return;
+	last_block = std::min(last_block, ready_blocks - 1);
 
 	if (UsesPerChannelMonoAggregation()) {
 		for (auto &cache : per_channel_caches) {

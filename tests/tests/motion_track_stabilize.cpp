@@ -78,15 +78,17 @@ std::string FirstPartText(MotionTrackApplyPlan const& plan) {
 	return plan.lines[0].parts.front().text;
 }
 
-// First "\\tag(value" occurrence of any tag in the family list.
+// Read a scalar tag in its ASS spelling: the value follows the tag name.
 bool FindTagValue(std::string const& text, std::string const& tag,
 				  double& out) {
-	std::string const needle = "\\" + tag + "(";
+	std::string const needle = "\\" + tag;
 	auto const at = text.find(needle);
 	if (at == std::string::npos)
 		return false;
-	out = std::strtod(text.c_str() + at + needle.size(), nullptr);
-	return true;
+	auto const *begin = text.c_str() + at + needle.size();
+	char *end = nullptr;
+	out = std::strtod(begin, &end);
+	return end != begin && (*end == '\\' || *end == '}');
 }
 
 // Covered parts only: the planner keeps a trailing covered=false suffix
@@ -242,9 +244,9 @@ TEST(motion_track_stabilize, growth_scales_bord_shad_blur) {
 	auto const text = FirstPartText(plan);
 	// Style defaults outline 2 / shadow 2, inline \blur3; a uniform x2 zoom
 	// doubles each (geometric mean of the per-axis growths).
-	EXPECT_NE(std::string::npos, text.find(R"(\bord(4.00))"));
-	EXPECT_NE(std::string::npos, text.find(R"(\shad(4.00))"));
-	EXPECT_NE(std::string::npos, text.find(R"(\blur(6.00))"));
+	EXPECT_NE(std::string::npos, text.find(R"(\bord4.00)"));
+	EXPECT_NE(std::string::npos, text.find(R"(\shad4.00)"));
+	EXPECT_NE(std::string::npos, text.find(R"(\blur6.00)"));
 }
 
 TEST(motion_track_stabilize, growth_flags_disable_emission) {
@@ -269,9 +271,11 @@ TEST(motion_track_stabilize, growth_flags_disable_emission) {
 	auto plan = BuildApplyPlan(fx.file, {line}, input);
 	ASSERT_EQ(ApplyPlanStatus::Ok, plan.status);
 	auto const text = FirstPartText(plan);
-	EXPECT_EQ(std::string::npos, text.find("\\bord("));
-	EXPECT_EQ(std::string::npos, text.find("\\shad("));
-	EXPECT_EQ(std::string::npos, text.find("\\blur("));
+	EXPECT_EQ(std::string::npos, text.find("\\bord"));
+	EXPECT_EQ(std::string::npos, text.find("\\shad"));
+	double blur = 0.0;
+	ASSERT_TRUE(FindTagValue(text, "blur", blur));
+	EXPECT_DOUBLE_EQ(3.0, blur);
 }
 
 TEST(motion_track_stabilize, identity_growth_emits_nothing) {
@@ -298,14 +302,14 @@ TEST(motion_track_stabilize, identity_growth_emits_nothing) {
 	auto plan = BuildApplyPlan(fx.file, {line}, input);
 	ASSERT_EQ(ApplyPlanStatus::Ok, plan.status);
 	auto const text = FirstPartText(plan);
-	EXPECT_EQ(std::string::npos, text.find("\\bord("));
-	EXPECT_EQ(std::string::npos, text.find("\\shad("));
-	EXPECT_EQ(std::string::npos, text.find("\\blur("));
+	EXPECT_EQ(std::string::npos, text.find("\\bord"));
+	EXPECT_EQ(std::string::npos, text.find("\\shad"));
+	EXPECT_EQ(std::string::npos, text.find("\\blur"));
 }
 
-TEST(motion_track_stabilize, growth_uses_per_axis_bord_tags) {
+TEST(motion_track_stabilize, growth_uses_per_axis_border_and_shadow_tags) {
 	Fixture fx;
-	auto *line = fx.AddLine(0, 2000, R"({\pos(100,100)\xbord3\ybord2}x)");
+	auto *line = fx.AddLine(0, 2000, R"({\pos(100,100)\xbord3\ybord2\xshad-1.5\yshad3}x)");
 	auto input = BaseInput();
 	// Growth compensation is opt-in (default off) since the dialog
 	// checkbox landed; these tests exercise it enabled.
@@ -327,17 +331,19 @@ TEST(motion_track_stabilize, growth_uses_per_axis_bord_tags) {
 	auto plan = BuildApplyPlan(fx.file, {line}, input);
 	ASSERT_EQ(ApplyPlanStatus::Ok, plan.status);
 	auto const text = FirstPartText(plan);
-	EXPECT_NE(std::string::npos, text.find(R"(\xbord(6.00))"));
-	EXPECT_NE(std::string::npos, text.find(R"(\ybord(4.00))"));
-	EXPECT_EQ(std::string::npos, text.find("\\bord("));
+	EXPECT_NE(std::string::npos, text.find(R"(\xbord6.00)"));
+	EXPECT_NE(std::string::npos, text.find(R"(\ybord4.00)"));
+	EXPECT_NE(std::string::npos, text.find(R"(\xshad-3.00)"));
+	EXPECT_NE(std::string::npos, text.find(R"(\yshad6.00)"));
+	EXPECT_EQ(std::string::npos, text.find("\\bord"));
+	EXPECT_EQ(std::string::npos, text.find("\\shad"));
 }
 
 TEST(motion_track_stabilize, growth_replaces_inline_rounding_to_style_default) {
 	// Style outline 2 with an inline \bord4 at half scale: the compensated
 	// value rounds back to the style default, but without re-emission the
-	// inline override would keep rendering 4. The paren-less short form is
-	// not strippable by name, so correctness is the emitted \bord landing
-	// after it in the same override block (later tags win).
+	// inline override would keep rendering 4. The stale override must be
+	// replaced by a single scalar tag carrying the compensated value.
 	Fixture fx;
 	auto *line = fx.AddLine(0, 2000, R"({\pos(100,100)\bord4}x)");
 	auto input = BaseInput();
@@ -361,10 +367,10 @@ TEST(motion_track_stabilize, growth_replaces_inline_rounding_to_style_default) {
 	auto plan = BuildApplyPlan(fx.file, {line}, input);
 	ASSERT_EQ(ApplyPlanStatus::Ok, plan.status);
 	auto const text = FirstPartText(plan);
-	auto const emitted = text.find(R"(\bord(2.00))");
+	auto const emitted = text.find(R"(\bord2.00)");
 	ASSERT_NE(std::string::npos, emitted);
-	if (auto const stale = text.find("\\bord4"); stale != std::string::npos)
-		EXPECT_LT(stale, emitted);
+	EXPECT_EQ(emitted, text.find("\\bord"));
+	EXPECT_EQ(std::string::npos, text.find("\\bord", emitted + 1));
 }
 
 TEST(motion_track_stabilize, growth_reemits_inline_at_identity_transform) {
@@ -394,10 +400,10 @@ TEST(motion_track_stabilize, growth_reemits_inline_at_identity_transform) {
 	auto plan = BuildApplyPlan(fx.file, {line}, input);
 	ASSERT_EQ(ApplyPlanStatus::Ok, plan.status);
 	auto const text = FirstPartText(plan);
-	auto const emitted = text.find(R"(\bord(4.00))");
+	auto const emitted = text.find(R"(\bord4.00)");
 	ASSERT_NE(std::string::npos, emitted);
-	if (auto const stale = text.find("\\bord4"); stale != std::string::npos)
-		EXPECT_LT(stale, emitted);
+	EXPECT_EQ(emitted, text.find("\\bord"));
+	EXPECT_EQ(std::string::npos, text.find("\\bord", emitted + 1));
 }
 
 TEST(motion_track_stabilize, exact_mode_merges_identical_parts_across_held_gap) {

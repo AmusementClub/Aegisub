@@ -577,8 +577,8 @@ bool KeptStillHasPosition(std::string const& kept) {
 }
 
 // Drops matching top-level override tags and splices `tag` raw into the
-// first override — the planner already emits parenthesized values. Kept tags
-// are copied from the original text byte-for-byte: re-serializing through
+// first override block. Kept tags are copied from the original text
+// byte-for-byte: re-serializing through
 // AssDialogueBlockOverride::GetText() would normalize libass-compatible
 // input the planner never touches (extra \fad parameters beyond the two in
 // the proto table, style-name spacing after \r, ...), so Apply must not
@@ -2053,11 +2053,11 @@ MotionTrackApplyPlan BuildPositionApplyPlan(
 
 				std::string static_transforms;
 				if (emit_rotation)
-					static_transforms += "\\frz(" + FormatCoord(start_rot, 2) + ")";
+					static_transforms += "\\frz" + FormatCoord(start_rot, 2);
 				if (emit_scale)
-					static_transforms += "\\fscx(" +
-										 FormatCoord(start_scale_x, 2) + ")\\fscy(" +
-										 FormatCoord(start_scale_y, 2) + ")";
+					static_transforms += "\\fscx" +
+										 FormatCoord(start_scale_x, 2) + "\\fscy" +
+										 FormatCoord(start_scale_y, 2);
 
 				std::string animated_transforms;
 				if ((rotation_changed || scale_changed) && t2 > t1) {
@@ -2116,9 +2116,9 @@ MotionTrackApplyPlan BuildPositionApplyPlan(
 					"\\pos(" + FormatCoord(pt.x, dec_s) + "," + FormatCoord(pt.y, dec_s) + ")";
 				std::string transforms;
 				if (emit_frz)
-					transforms += "\\frz(" + FormatCoord(pt.rot_deg, 2) + ")";
+					transforms += "\\frz" + FormatCoord(pt.rot_deg, 2);
 				if (emit_scale)
-					transforms += "\\fscx(" + FormatCoord(pt.scale_pct_x, 2) + ")\\fscy(" + FormatCoord(pt.scale_pct_y, 2) + ")";
+					transforms += "\\fscx" + FormatCoord(pt.scale_pct_x, 2) + "\\fscy" + FormatCoord(pt.scale_pct_y, 2);
 
 				// Border/shadow/blur growth compensation: scale the composed
 				// base (style + inline override) with the transform's local
@@ -2155,11 +2155,11 @@ MotionTrackApplyPlan BuildPositionApplyPlan(
 							scaled_differs(by, pt.growth_y, style_outline_w);
 						if (emit_x || emit_y) {
 							if (emit_x) {
-								transforms += "\\xbord(" + FormatCoord(bx * pt.growth_x, 2) + ")";
+								transforms += "\\xbord" + FormatCoord(bx * pt.growth_x, 2);
 								growth_drops.emplace_back("\\xbord");
 							}
 							if (emit_y) {
-								transforms += "\\ybord(" + FormatCoord(by * pt.growth_y, 2) + ")";
+								transforms += "\\ybord" + FormatCoord(by * pt.growth_y, 2);
 								growth_drops.emplace_back("\\ybord");
 							}
 							// A uniform inline \bord would override the
@@ -2169,7 +2169,7 @@ MotionTrackApplyPlan BuildPositionApplyPlan(
 					}
 					else if (scaled_differs(base, growth_geo,
 											style_outline_w)) {
-						transforms += "\\bord(" + FormatCoord(base * growth_geo, 2) + ")";
+						transforms += "\\bord" + FormatCoord(base * growth_geo, 2);
 						growth_drops.emplace_back("\\bord");
 					}
 				}
@@ -2187,11 +2187,11 @@ MotionTrackApplyPlan BuildPositionApplyPlan(
 							scaled_differs(sy, pt.growth_y, style_shadow_w);
 						if (emit_x || emit_y) {
 							if (emit_x) {
-								transforms += "\\xshad(" + FormatCoord(sx * pt.growth_x, 2) + ")";
+								transforms += "\\xshad" + FormatCoord(sx * pt.growth_x, 2);
 								growth_drops.emplace_back("\\xshad");
 							}
 							if (emit_y) {
-								transforms += "\\yshad(" + FormatCoord(sy * pt.growth_y, 2) + ")";
+								transforms += "\\yshad" + FormatCoord(sy * pt.growth_y, 2);
 								growth_drops.emplace_back("\\yshad");
 							}
 							growth_drops.emplace_back("\\shad");
@@ -2199,7 +2199,7 @@ MotionTrackApplyPlan BuildPositionApplyPlan(
 					}
 					else if (scaled_differs(base, growth_geo,
 											style_shadow_w)) {
-						transforms += "\\shad(" + FormatCoord(base * growth_geo, 2) + ")";
+						transforms += "\\shad" + FormatCoord(base * growth_geo, 2);
 						growth_drops.emplace_back("\\shad");
 					}
 				}
@@ -2208,7 +2208,7 @@ MotionTrackApplyPlan BuildPositionApplyPlan(
 					// value or 0, and 0 never emits.
 					double const base = pose_info.has_blur ? pose_info.blur : 0.0;
 					if (scaled_differs(base, growth_geo, 0.0)) {
-						transforms += "\\blur(" + FormatCoord(base * growth_geo, 2) + ")";
+						transforms += "\\blur" + FormatCoord(base * growth_geo, 2);
 						growth_drops.emplace_back("\\blur");
 					}
 				}

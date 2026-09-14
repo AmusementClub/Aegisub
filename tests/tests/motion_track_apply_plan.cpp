@@ -570,7 +570,7 @@ void FillPose(TrackSample& s, double cx, double cy, double theta_cw,
 
 TEST(motion_track_apply_plan, similarity_compact_emits_move_and_transform) {
 	Fixture fx;
-	auto *line = fx.AddLine(0, 1950, R"({\pos(0,0)}x)");
+	auto *line = fx.AddLine(0, 1950, R"({\pos(0,0)\frz15\fscx120\fscy80}x)");
 	auto input = BaseInput();
 	input.model = TrackModel::Similarity;
 	input.options.mode = ApplyMode::Compact;
@@ -606,8 +606,9 @@ TEST(motion_track_apply_plan, similarity_compact_emits_move_and_transform) {
 	EXPECT_DOUBLE_EQ(0.0, position.y2);
 	EXPECT_EQ(0, position.t1);
 	EXPECT_EQ(1900, position.t2);
-	EXPECT_NE(std::string::npos, text.find(R"(\t(0,1900,\frz-9.50\fscx119.00\fscy119.00))"));
-	EXPECT_EQ(std::string::npos, text.find(R"(\t(0,1900,\frz(-9.50)))"));
+	EXPECT_NE(std::string::npos, text.find(R"(\frz15.00\fscx120.00\fscy80.00\t(0,1900,\frz5.50\fscx142.80\fscy95.20))"));
+	for (auto const tag : {R"(\frz()", R"(\fscx()", R"(\fscy()"})
+		EXPECT_EQ(std::string::npos, text.find(tag)) << text;
 	AssDialogue emitted;
 	emitted.Start = 0;
 	emitted.End = 1950;
@@ -616,10 +617,10 @@ TEST(motion_track_apply_plan, similarity_compact_emits_move_and_transform) {
 		auto const state = perspective::EvaluateEffectiveAssState({
 			&fx.file, &emitted, {1920.0, 1080.0}, time});
 		ASSERT_TRUE(state) << perspective::DescribeAssStateError(state.error);
-		EXPECT_NEAR(-0.005 * time, state.value.transform.rotation_z, 1.0e-6);
-		EXPECT_NEAR(100.0 + 0.01 * time, state.value.transform.scale_x,
+		EXPECT_NEAR(15.0 - 0.005 * time, state.value.transform.rotation_z, 1.0e-6);
+		EXPECT_NEAR(120.0 + 0.012 * time, state.value.transform.scale_x,
 					1.0e-6);
-		EXPECT_NEAR(100.0 + 0.01 * time, state.value.transform.scale_y,
+		EXPECT_NEAR(80.0 + 0.008 * time, state.value.transform.scale_y,
 					1.0e-6);
 	}
 }
@@ -759,7 +760,19 @@ TEST(motion_track_apply_plan, similarity_exact_emits_full_transform_tags) {
 	// so +90 deg clockwise emits -90. Style base scale is 100/100.
 	EXPECT_NE(std::string::npos,
 			  plan.lines[0].parts.front().text.find(
-				  R"(\pos(141.00,121.00)\frz(-90.00)\fscx(105.00)\fscy(105.00))"));
+				  R"(\pos(141.00,121.00)\frz-90.00\fscx105.00\fscy105.00)"));
+	AssDialogue emitted;
+	emitted.Start = plan.lines[0].parts.front().start_ms;
+	emitted.End = plan.lines[0].parts.front().end_ms;
+	emitted.Text = plan.lines[0].parts.front().text;
+	auto const state = perspective::EvaluateEffectiveAssState({.file = &fx.file,
+															   .line = &emitted,
+															   .play_resolution = {.width = 1920.0, .height = 1080.0},
+															   .capture_time_ms = emitted.Start});
+	ASSERT_TRUE(state) << perspective::DescribeAssStateError(state.error);
+	EXPECT_DOUBLE_EQ(-90.0, state.value.transform.rotation_z);
+	EXPECT_DOUBLE_EQ(105.0, state.value.transform.scale_x);
+	EXPECT_DOUBLE_EQ(105.0, state.value.transform.scale_y);
 }
 
 TEST(motion_track_apply_plan, similarity_exact_composes_style_scale_and_angle) {
@@ -795,7 +808,7 @@ TEST(motion_track_apply_plan, similarity_exact_composes_style_scale_and_angle) {
 	// base multiplies in: 110*0.5, 90*0.5. Anchor offset is zero here.
 	EXPECT_NE(std::string::npos,
 			  plan.lines[0].parts.front().text.find(
-				  R"(\pos(100.00,100.00)\frz(-20.00)\fscx(55.00)\fscy(45.00))"));
+				  R"(\pos(100.00,100.00)\frz-20.00\fscx55.00\fscy45.00)"));
 }
 
 TEST(motion_track_apply_plan, similarity_exact_splits_parts_on_pose_change) {
@@ -830,7 +843,7 @@ TEST(motion_track_apply_plan, similarity_exact_splits_parts_on_pose_change) {
 		++covered;
 		// Identity pose emits no transform tags; the turned pose does.
 		found_identity = found_identity || (part.text.find("\\fscx") == std::string::npos && part.text.find(R"(\pos(10.00,0.00))") != std::string::npos);
-		found_turned = found_turned || part.text.find(R"(\fscx(110.00))") != std::string::npos;
+		found_turned = found_turned || part.text.find(R"(\fscx110.00)") != std::string::npos;
 	}
 	EXPECT_EQ(2u, covered);
 	EXPECT_TRUE(found_identity);
@@ -924,13 +937,13 @@ TEST(motion_track_apply_plan, similarity_preserves_inline_transform_base) {
 	// The inline tags were stripped, so the base must be re-emitted or the
 	// user's styling would be silently reset to the style values.
 	EXPECT_NE(std::string::npos,
-			  plan.lines[0].parts.front().text.find(R"(\frz(45.00))"));
+			  plan.lines[0].parts.front().text.find(R"(\frz45.00)"));
 	EXPECT_EQ(std::string::npos,
-			  plan.lines[0].parts.front().text.find("\\frz45"));
+			  plan.lines[0].parts.front().text.find(R"(\frz45\)"));
 	EXPECT_NE(std::string::npos,
-			  plan.lines[0].parts.front().text.find(R"(\fscx(150.00))"));
+			  plan.lines[0].parts.front().text.find(R"(\fscx150.00)"));
 	EXPECT_NE(std::string::npos,
-			  plan.lines[0].parts.front().text.find(R"(\fscy(80.00))"));
+			  plan.lines[0].parts.front().text.find(R"(\fscy80.00)"));
 }
 
 TEST(motion_track_apply_plan, move_origin_interpolates_at_seed_time) {
@@ -1463,7 +1476,7 @@ TEST(motion_track_apply_plan, similarity_inline_fr_absorbed_and_transforms_stay_
 	// byte-for-byte and the transform still lands after it.
 	size_t const b1 = text.find(R"(\b1)");
 	size_t const pos = text.find(R"(\pos(0.00,0.00))");
-	size_t const frz = text.find(R"(\frz(20.00))");
+	size_t const frz = text.find(R"(\frz20.00)");
 	ASSERT_NE(std::string::npos, b1) << text;
 	ASSERT_NE(std::string::npos, pos) << text;
 	ASSERT_NE(std::string::npos, frz) << text;
@@ -1993,8 +2006,8 @@ TEST(motion_track_apply_plan, similarity_preserves_font_color_and_reset_scope_wi
 	auto const plan = BuildApplyPlan(fx.file, {line}, input);
 	ASSERT_TRUE(plan.has_mutations()) << plan.message;
 	auto const& text = plan.lines.front().parts.front().text;
-	EXPECT_NE(std::string::npos, text.find(R"(A{\rAlt\b1\1c&H0000FF&\frz(0.00)\fscx(120.00)\fscy(120.00)}B)"));
-	EXPECT_NE(std::string::npos, text.find(R"(B{\r\frz(0.00)\fscx(120.00)\fscy(120.00)}C)"));
+	EXPECT_NE(std::string::npos, text.find(R"(A{\rAlt\b1\1c&H0000FF&\frz0.00\fscx120.00\fscy120.00}B)"));
+	EXPECT_NE(std::string::npos, text.find(R"(B{\r\frz0.00\fscx120.00\fscy120.00}C)"));
 }
 
 TEST(motion_track_apply_plan, uncovered_move_parts_retain_the_source_event_clock) {

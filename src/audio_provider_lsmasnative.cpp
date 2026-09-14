@@ -49,7 +49,7 @@ public:
 
 LsmasAudioProvider::LsmasAudioProvider(agi::fs::path const& filename, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) {
     auto const& api = lsmas::GetApi();
-    auto const filename_utf8 = agi::fs::PathToString(filename);
+	auto const filename_utf8 = agi::fs::PathToString(filename);
     bool const downmix = GetConfiguredLsmasNativeAudioDownmix();
 
     int stream_index = lsmas_provider::SelectTrack(filename, lsmas_provider::TrackType::Audio, choice_sink);
@@ -93,9 +93,9 @@ LsmasAudioProvider::LsmasAudioProvider(agi::fs::path const& filename, agi::Backg
     sample_rate = info.sample_rate;
     bytes_per_sample = info.bytes_per_sample > 0 ? info.bytes_per_sample : 2;
     float_samples = false;
-    num_samples = info.total_samples;
-    decoded_samples = info.decoded_samples;
-    if (channels <= 0 || sample_rate <= 0 || num_samples <= 0)
+	num_samples = info.total_samples;
+	decoded_samples = num_samples;
+	if (channels <= 0 || sample_rate <= 0 || num_samples <= 0)
         throw agi::AudioProviderError("invalid audio properties returned by LsmasNative");
     close_handle_on_error.release();
 }

@@ -236,6 +236,55 @@ TEST(lsmas_provider_common, audio_retry_recovers_on_last_attempt_after_no_progre
 	EXPECT_EQ(-42, buffer[1]);
 }
 
+TEST(lsmas_provider_common, audio_provider_exposes_entire_shifted_timeline_as_ready) {
+	if (!lsmas::IsAvailable())
+		GTEST_SKIP() << "LsmasNative runtime unavailable: " << lsmas::GetLoadError();
+
+	auto root = agi::fs::UniquePath(std::filesystem::temp_directory_path() / "aegisub-lsmas-timeline-%%%%%%%%");
+	agi::fs::CreateDirectory(root);
+	agi::Path paths;
+	paths.SetToken("?local", root);
+	auto *previous_path = config::path;
+	config::path = &paths;
+	auto restore_path = agi::make_scope_exit([&] {
+		config::path = previous_path;
+		std::error_code error;
+		std::filesystem::remove_all(root, error);
+	});
+
+	for (auto const& [name, delay] : {std::pair{"positive-delay.mkv", 11520}, {"negative-delay.mkv", -11520}}) {
+		SCOPED_TRACE(name);
+		auto const fixture = std::filesystem::path(AEGISUB_PROJECT_SOURCE_DIR) / "tests/fixtures/audio" / name;
+		auto const filename = agi::fs::PathToString(fixture);
+		auto options = lsmas_provider::MakeAudioOpenOptions(-1, false);
+		options.cache_index = 0;
+		lsmas_provider::ErrorString error;
+		auto const& api = lsmas::GetApi();
+		auto *handle = api.audio_open_with_progress_utf8(filename.c_str(), &options, nullptr, nullptr, error.Out());
+		ASSERT_NE(nullptr, handle) << error.Message("open failed");
+		auto close = agi::make_scope_exit([&] { api.audio_close(handle); });
+		lsmas_audio_info_t info{};
+		ASSERT_EQ(0, api.audio_get_info(handle, &info, error.Out()));
+		ASSERT_EQ(delay, info.delay_samples);
+		ASSERT_EQ(23040, info.decoded_samples);
+		ASSERT_EQ(23040 + delay, info.total_samples);
+
+		auto provider = GetAudioProviderWithPreferred(fixture, "LsmasNative", nullptr, nullptr);
+		ASSERT_EQ("LsmasNative", provider->GetMemoryStats().provider_name);
+		EXPECT_EQ(info.total_samples, provider->GetNumSamples());
+		EXPECT_EQ(info.total_samples, provider->GetDecodedSamples());
+		std::array<int16_t, 64> samples{};
+		provider->GetAudioChecked(samples.data(), provider->GetNumSamples() - samples.size(), samples.size());
+		for (auto sample : samples)
+			EXPECT_EQ(16384, sample);
+		auto display = CreateAudioDisplaySource(provider.get());
+		std::array<float, 64> displayed{};
+		display->GetFloatAudio(displayed.data(), provider->GetNumSamples() - displayed.size(), displayed.size());
+		for (auto sample : displayed)
+			EXPECT_FLOAT_EQ(0.5f, sample);
+	}
+}
+
 namespace {
 struct CompressedAudioCacheCase {
 	char const *name;
@@ -244,6 +293,9 @@ struct CompressedAudioCacheCase {
 	int sample_rate;
 	bool disk_cache;
 	bool exact_seek_samples;
+	int channels = 2;
+	int64_t leading_silence = 0;
+	bool bipolar_tone = true;
 };
 
 class LsmasCompressedAudioCacheTest : public ::testing::TestWithParam<CompressedAudioCacheCase> {};
@@ -271,19 +323,26 @@ TEST_P(LsmasCompressedAudioCacheTest, complete_and_random_reads_match_uncached_a
 	auto const fixture = std::filesystem::path(AEGISUB_PROJECT_SOURCE_DIR) / "tests/fixtures/audio" / scenario.filename;
 	auto source = GetAudioProviderWithPreferred(fixture, "LsmasNative", nullptr, nullptr);
 	ASSERT_EQ("LsmasNative", source->GetMemoryStats().provider_name);
-	ASSERT_EQ(2, source->GetChannels());
+	ASSERT_EQ(scenario.channels, source->GetChannels());
 	ASSERT_EQ(2, source->GetBytesPerSample());
 	ASSERT_FALSE(source->AreSamplesFloat());
 	ASSERT_EQ(scenario.sample_rate, source->GetSampleRate());
 	ASSERT_EQ(scenario.frames, source->GetNumSamples());
 	ASSERT_EQ(scenario.frames, source->GetDecodedSamples());
-	std::vector<int16_t> reference(static_cast<size_t>(scenario.frames) * 2, -32768);
+	std::vector<int16_t> reference(static_cast<size_t>(scenario.frames) * scenario.channels, -32768);
 	ASSERT_NO_THROW(source->GetAudioChecked(reference.data(), 0, scenario.frames));
-	// A generated low-amplitude sine contains both signs and never reaches
-	// full scale. Preserve the sentinel check so a short write cannot pass.
+	// All generated fixtures stay below full scale. Preserve the sentinel
+	// check so a short write cannot pass, including the real A/V cache path.
 	EXPECT_EQ(reference.end(), std::ranges::find(reference, int16_t{-32768}));
 	EXPECT_TRUE(std::ranges::any_of(reference, [](int16_t sample) { return sample > 0; }));
-	EXPECT_TRUE(std::ranges::any_of(reference, [](int16_t sample) { return sample < 0; }));
+	if (scenario.bipolar_tone)
+		EXPECT_TRUE(std::ranges::any_of(reference, [](int16_t sample) { return sample < 0; }));
+	if (scenario.leading_silence > 0)
+		EXPECT_TRUE(std::all_of(reference.begin(), reference.begin() + scenario.leading_silence * scenario.channels,
+								[](int16_t sample) { return sample == 0; }));
+	EXPECT_TRUE(std::any_of(reference.begin() + scenario.leading_silence * scenario.channels,
+							reference.begin() + (scenario.leading_silence + 1024) * scenario.channels,
+							[](int16_t sample) { return sample > 0; }));
 
 	auto cached_source = GetAudioProviderWithPreferred(fixture, "LsmasNative", nullptr, nullptr);
 	ASSERT_EQ("LsmasNative", cached_source->GetMemoryStats().provider_name);
@@ -299,18 +358,19 @@ TEST_P(LsmasCompressedAudioCacheTest, complete_and_random_reads_match_uncached_a
 	EXPECT_EQ(reference, complete);
 
 	std::vector<std::pair<int64_t, int64_t>> ranges{
-		{scenario.frames - 1, 1}, {0, 128}, {scenario.frames - 127, 256}, {-64, 128}, {scenario.frames / 2, 1024}, {1, 129}, {scenario.frames, 64}, {-128, 64}};
+		{scenario.frames - 1, 1}, {0, 128}, {scenario.frames - 127, 256}, {-64, 128}, {scenario.frames / 2, 1024}, {1, 129}, {scenario.frames, 64}, {-128, 64}, {0, scenario.frames}};
 	std::mt19937_64 random(0x5A17);
 	for (int index = 0; index < 16; ++index)
 		ranges.emplace_back(static_cast<int64_t>(random() % scenario.frames), 1 + random() % 2048);
 	for (auto const [start, count] : ranges) {
 		SCOPED_TRACE(start);
 		SCOPED_TRACE(count);
-		std::vector<int16_t> expected(static_cast<size_t>(count) * 2, 0);
+		std::vector<int16_t> expected(static_cast<size_t>(count) * scenario.channels, 0);
 		for (int64_t frame = 0; frame < count; ++frame) {
 			auto const source_frame = start + frame;
 			if (source_frame >= 0 && source_frame < scenario.frames)
-				std::ranges::copy_n(reference.data() + source_frame * 2, 2, expected.data() + frame * 2);
+				std::ranges::copy_n(reference.data() + source_frame * scenario.channels, scenario.channels,
+									expected.data() + frame * scenario.channels);
 		}
 		std::vector<int16_t> uncached(expected.size(), -32768);
 		std::vector<int16_t> cached(expected.size(), -32768);
@@ -324,23 +384,29 @@ TEST_P(LsmasCompressedAudioCacheTest, complete_and_random_reads_match_uncached_a
 			EXPECT_EQ(uncached.end(), std::ranges::find(uncached, int16_t{-32768}));
 			for (int64_t frame = 0; frame < count; ++frame) {
 				if (start + frame < 0 || start + frame >= scenario.frames) {
-					EXPECT_EQ(0, uncached[frame * 2]);
-					EXPECT_EQ(0, uncached[frame * 2 + 1]);
+					for (int channel = 0; channel < scenario.channels; ++channel)
+						EXPECT_EQ(0, uncached[frame * scenario.channels + channel]);
 				}
 			}
 			auto const first_frame = std::clamp<int64_t>(start, 0, scenario.frames);
 			auto const last_frame = std::clamp<int64_t>(start + count, 0, scenario.frames);
 			auto const two_periods = (static_cast<int64_t>(scenario.sample_rate) * 2 + 996) / 997;
 			if (last_frame - first_frame >= two_periods) {
-				auto const actual_first = uncached.begin() + (first_frame - start) * 2;
-				auto const actual_last = uncached.begin() + (last_frame - start) * 2;
-				auto const expected_first = reference.begin() + first_frame * 2;
-				auto const expected_last = reference.begin() + last_frame * 2;
-				// Preserve genuine codec padding while rejecting lost tone data.
-				if (std::ranges::any_of(expected_first, expected_last, [](int16_t sample) { return sample > 0; }))
-					EXPECT_TRUE(std::ranges::any_of(actual_first, actual_last, [](int16_t sample) { return sample > 0; }));
-				if (std::ranges::any_of(expected_first, expected_last, [](int16_t sample) { return sample < 0; }))
-					EXPECT_TRUE(std::ranges::any_of(actual_first, actual_last, [](int16_t sample) { return sample < 0; }));
+				for (auto frame = first_frame; frame < last_frame; frame += two_periods) {
+					// Anchor the final window at the end of the valid range so a
+					// successful prefix cannot hide a zero-filled decoder shortfall.
+					auto const window_first = std::min(frame, last_frame - two_periods);
+					auto const window_last = window_first + two_periods;
+					auto const actual_first = uncached.begin() + (window_first - start) * scenario.channels;
+					auto const actual_last = uncached.begin() + (window_last - start) * scenario.channels;
+					auto const expected_first = reference.begin() + window_first * scenario.channels;
+					auto const expected_last = reference.begin() + window_last * scenario.channels;
+					// Preserve genuine codec padding while rejecting lost tone data.
+					if (std::ranges::any_of(expected_first, expected_last, [](int16_t sample) { return sample > 0; }))
+						EXPECT_TRUE(std::ranges::any_of(actual_first, actual_last, [](int16_t sample) { return sample > 0; }));
+					if (std::ranges::any_of(expected_first, expected_last, [](int16_t sample) { return sample < 0; }))
+						EXPECT_TRUE(std::ranges::any_of(actual_first, actual_last, [](int16_t sample) { return sample < 0; }));
+				}
 			}
 		}
 		EXPECT_EQ(expected, cached);
@@ -356,5 +422,11 @@ INSTANTIATE_TEST_SUITE_P(
 		CompressedAudioCacheCase{"AacRam", "synthetic-tone.m4a", 44673, 44100, false, false},
 		CompressedAudioCacheCase{"AacDisk", "synthetic-tone.m4a", 44673, 44100, true, false},
 		CompressedAudioCacheCase{"OpusRam", "synthetic-tone.opus", 48624, 48000, false, false},
-		CompressedAudioCacheCase{"OpusDisk", "synthetic-tone.opus", 48624, 48000, true, false}),
+		CompressedAudioCacheCase{"OpusDisk", "synthetic-tone.opus", 48624, 48000, true, false},
+		CompressedAudioCacheCase{"AacAvZeroRam", "aac-av-zero.mp4", 57600, 48000, false, false, 1, 0, false},
+		CompressedAudioCacheCase{"AacAvZeroDisk", "aac-av-zero.mp4", 57600, 48000, true, false, 1, 0, false},
+		CompressedAudioCacheCase{"AacAvPositiveRam", "aac-av-positive.mp4", 57568, 48000, false, false, 1, 10464, false},
+		CompressedAudioCacheCase{"AacAvPositiveDisk", "aac-av-positive.mp4", 57568, 48000, true, false, 1, 10464, false},
+		CompressedAudioCacheCase{"AacAvNegativeRam", "aac-av-negative.mp4", 46080, 48000, false, false, 1, 0, false},
+		CompressedAudioCacheCase{"AacAvNegativeDisk", "aac-av-negative.mp4", 46080, 48000, true, false, 1, 0, false}),
 	[](auto const& info) { return info.param.name; });

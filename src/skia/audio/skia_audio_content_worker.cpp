@@ -329,6 +329,18 @@ struct ContentWorker::Impl {
 		++metrics.ready_notifications;
 	}
 
+	void NotifyFailure(ContentWorkerFailure failure, bool visible, std::string message) {
+		{
+			std::scoped_lock lock(mutex);
+			++metrics.builds_invalid;
+		}
+		// A speculative tile failure must not replace healthy visible content.
+		if (!visible || !failure_callback || !IsRequestCurrent(failure.request_serial, failure.generation))
+			return;
+		failure.message = std::move(message);
+		failure_callback(std::move(failure));
+	}
+
 	void PublishAnalysisMetrics(ContentAnalyzer const& analyzer) {
 		auto snapshot = analyzer.Metrics();
 		std::lock_guard<std::mutex> lock(mutex);
@@ -373,6 +385,8 @@ struct ContentWorker::Impl {
 
 		for (;;) {
 			std::optional<WorkPlan> plan;
+			ContentWorkerFailure failure;
+			bool visible = true;
 			std::size_t requested_analysis_budget = 0;
 			std::uint64_t requested_budget_revision = 0;
 			{
@@ -384,6 +398,8 @@ struct ContentWorker::Impl {
 				});
 				if (stop)
 					break;
+				failure.generation = generation;
+				failure.request_serial = request_serial;
 				requested_analysis_budget = spectrum_analysis_budget_bytes;
 				requested_budget_revision = spectrum_analysis_budget_revision;
 				if (latest) {
@@ -415,6 +431,7 @@ struct ContentWorker::Impl {
 					continue;
 
 				for (std::size_t tile_offset = 0; tile_offset < plan->tiles.size(); ++tile_offset) {
+					visible = tile_offset < plan->visible_tile_count;
 					{
 						std::lock_guard<std::mutex> lock(mutex);
 						requested_analysis_budget = spectrum_analysis_budget_bytes;
@@ -431,7 +448,6 @@ struct ContentWorker::Impl {
 					}
 
 					auto const& key = plan->tiles[tile_offset];
-					auto const visible = tile_offset < plan->visible_tile_count;
 					if (!IsRequestCurrent(plan->serial, plan->generation))
 						break;
 					auto const payload_key = MakeContentUploadPayloadKey(
@@ -635,32 +651,18 @@ struct ContentWorker::Impl {
 					}
 					NotifyVisiblePayloadReady(visible, plan->generation);
 				}
+				visible = true;
 				if (analyzer && plan->analysis.kind == ContentKind::Spectrum)
 					PublishAnalysisMetrics(*analyzer);
 			}
 			catch (agi::Exception const& err) {
-				{
-					std::scoped_lock lock(mutex);
-					++metrics.builds_invalid;
-				}
-				if (failure_callback)
-					failure_callback(err.GetMessage());
+				NotifyFailure(std::move(failure), visible, err.GetMessage());
 			}
 			catch (std::exception const& err) {
-				{
-					std::lock_guard<std::mutex> lock(mutex);
-					++metrics.builds_invalid;
-				}
-				if (failure_callback)
-					failure_callback(err.what());
+				NotifyFailure(std::move(failure), visible, err.what());
 			}
 			catch (...) {
-				{
-					std::lock_guard<std::mutex> lock(mutex);
-					++metrics.builds_invalid;
-				}
-				if (failure_callback)
-					failure_callback("an unknown exception escaped the Audio content worker");
+				NotifyFailure(std::move(failure), visible, "an unknown exception escaped the Audio content worker");
 			}
 
 			{
@@ -771,6 +773,10 @@ bool ContentWorker::SetCacheBudgets(ContentCacheBudgets budgets) {
 ContentGeneration ContentWorker::Generation() const {
 	std::lock_guard<std::mutex> lock(impl->mutex);
 	return impl->generation;
+}
+
+bool ContentWorker::IsFailureCurrent(ContentWorkerFailure const& failure) const {
+	return impl->IsRequestCurrent(failure.request_serial, failure.generation);
 }
 
 void ContentWorker::Request(

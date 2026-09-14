@@ -272,9 +272,9 @@ struct SkiaAudioDisplay::Impl {
 	, content_worker([this, owner](ContentGeneration) {
 		if (!content_ready_event_pending.exchange(true, std::memory_order_acq_rel))
 			wxQueueEvent(owner, new wxThreadEvent(EVT_SKIA_AUDIO_CONTENT_READY));
-	}, [owner](std::string message) {
+	}, [owner](ContentWorkerFailure const& failure) {
 		auto *event = new wxThreadEvent(EVT_SKIA_AUDIO_CONTENT_FAILURE);
-		event->SetString(wxString::FromUTF8(message));
+		event->SetPayload(failure);
 		wxQueueEvent(owner, event);
 	})
 	, failure_callback(std::move(failure_callback)) {
@@ -1489,7 +1489,9 @@ void SkiaAudioDisplay::OnPresentationTimer(wxTimerEvent&) {
 }
 
 void SkiaAudioDisplay::OnContentFailure(wxThreadEvent& event) {
-	RequestFallback(event.GetString().utf8_string());
+	auto const failure = event.GetPayload<ContentWorkerFailure>();
+	if (impl->content_worker.IsFailureCurrent(failure))
+		RequestFallback(failure.message);
 }
 
 void SkiaAudioDisplay::OnLoadTimer(wxTimerEvent&) {

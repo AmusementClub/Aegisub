@@ -8,10 +8,12 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <future>
 #include <mutex>
@@ -128,6 +130,59 @@ public:
 	}
 
 	std::uint64_t FillCount() const { return fills.load(); }
+};
+
+class ObsoleteReadProvider final : public agi::AudioProvider {
+	mutable std::mutex mutex;
+	mutable std::condition_variable condition;
+	mutable bool entered = false;
+	mutable bool released = false;
+	mutable std::atomic<int> failed_reads{0};
+	mutable std::atomic<bool> gate_timed_out{false};
+
+	protected:
+	void FillBuffer(void *buffer, std::int64_t start, std::int64_t count) const override {
+		if (start == 0) {
+			std::unique_lock lock(mutex);
+			entered = true;
+			condition.notify_all();
+			if (!condition.wait_for(lock, 2s, [&] { return released; })) {
+				gate_timed_out = true;
+				throw agi::AudioDecodeError("obsolete-read gate timed out");
+			}
+			++failed_reads;
+			throw agi::AudioDecodeError("obsolete request read failed");
+		}
+		auto *samples = static_cast<float *>(buffer);
+		for (std::int64_t frame = 0; frame < count; ++frame)
+			samples[frame] = (start + frame) % 2 == 0 ? 0.5f : -0.25f;
+	}
+
+	public:
+	ObsoleteReadProvider() {
+		channels = 1;
+		num_samples = 48000 * 60;
+		decoded_samples = num_samples;
+		sample_rate = 48000;
+		bytes_per_sample = sizeof(float);
+		float_samples = true;
+	}
+
+	bool WaitUntilEntered() const {
+		std::unique_lock lock(mutex);
+		return condition.wait_for(lock, 2s, [&] { return entered; });
+	}
+
+	void Release() const {
+		{
+			std::scoped_lock lock(mutex);
+			released = true;
+		}
+		condition.notify_all();
+	}
+
+	int FailedReads() const { return failed_reads.load(); }
+	bool GateTimedOut() const { return gate_timed_out.load(); }
 };
 
 ContentAnalysisConfig WaveformAnalysis() {
@@ -530,7 +585,7 @@ TEST(skia_audio_content_worker, spectrum_failed_reads_publish_no_tile_and_remain
 	ReadyLatch failure;
 	ContentWorker worker(
 		[&](ContentGeneration generation) { ready.Notify(generation); },
-		[&](std::string const&) { failure.Notify({}); });
+		[&](ContentWorkerFailure const&) { failure.Notify({}); });
 	worker.SetProvider(&provider);
 	auto const generation = worker.SetAnalysis(SpectrumAnalysis());
 	auto const viewport = SpectrumViewport(generation, 128, 4);
@@ -552,6 +607,270 @@ TEST(skia_audio_content_worker, spectrum_failed_reads_publish_no_tile_and_remain
 	EXPECT_NE(nullptr, worker.Find(key));
 	EXPECT_NE(nullptr, worker.FindPayload(MakeContentUploadPayloadKey(key, plan.get())));
 	worker.SetProvider(nullptr);
+}
+
+namespace {
+
+void ExpectPrefetchFailureKeepsVisibleContent(ContentKind kind) {
+	GateAudioProvider provider;
+	GateAudioProvider reference_provider;
+	ReadyLatch ready;
+	ReadyLatch reference_ready;
+	ReadyLatch failed;
+	ContentWorkerFailure queued_failure;
+	std::atomic<int> failure_count{0};
+	bool prefetch_failure_armed = false;
+	ContentWorker worker(
+		[&](ContentGeneration generation) {
+			// Visible content is already published when this callback runs.
+			// Only its immediately following prefetch read should fail.
+			if (!prefetch_failure_armed) {
+				prefetch_failure_armed = true;
+				provider.FailNextFill(2);
+			}
+			ready.Notify(generation);
+		},
+		[&](ContentWorkerFailure failure) {
+			queued_failure = std::move(failure);
+			++failure_count;
+			failed.Notify({});
+		});
+	ContentWorker reference_worker([&](ContentGeneration generation) { reference_ready.Notify(generation); });
+	worker.SetProvider(&provider);
+	reference_worker.SetProvider(&reference_provider);
+	auto analysis = kind == ContentKind::Waveform ? WaveformAnalysis() : SpectrumAnalysis();
+	analysis.source_mode = ContentSourceMode::Int16Mono;
+	auto const generation = worker.SetAnalysis(analysis);
+	ASSERT_EQ(generation, reference_worker.SetAnalysis(analysis));
+	ContentViewportRequest viewport;
+	viewport.generation = generation;
+	viewport.kind = kind;
+	viewport.column_count = 256;
+	viewport.tile_column_count = 256;
+	viewport.spectrum_bin_count = kind == ContentKind::Spectrum ? 16 : 0;
+	viewport.prefetch_tile_count = 1;
+	auto reference_viewport = viewport;
+	reference_viewport.prefetch_tile_count = 0;
+	auto const plan = kind == ContentKind::Spectrum ? SpectrumPlan() : nullptr;
+	worker.Request(viewport, plan);
+	reference_worker.Request(reference_viewport, plan);
+	ASSERT_TRUE(ready.WaitFor(1));
+	ASSERT_TRUE(reference_ready.WaitFor(1));
+	ASSERT_TRUE(WaitForPayloadBuilds(worker, 1));
+	ASSERT_TRUE(WaitForPayloadBuilds(reference_worker, 1));
+	EXPECT_EQ(0, failure_count.load());
+	EXPECT_EQ(1u, worker.Metrics().builds_invalid);
+	EXPECT_EQ(reference_provider.FillCount() + 2, provider.FillCount());
+	auto const key = FirstKey(viewport);
+	auto const tile = worker.Find(key);
+	auto const expected = reference_worker.Find(key);
+	ASSERT_NE(nullptr, tile);
+	ASSERT_NE(nullptr, expected);
+	EXPECT_EQ(expected->waveform, tile->waveform);
+	EXPECT_EQ(expected->spectrum_power, tile->spectrum_power);
+	auto const payload_key = MakeContentUploadPayloadKey(key, plan.get());
+	auto const payload = worker.FindPayload(payload_key);
+	auto const expected_payload = reference_worker.FindPayload(payload_key);
+	ASSERT_NE(nullptr, payload);
+	ASSERT_NE(nullptr, expected_payload);
+	EXPECT_EQ(expected_payload->primary, payload->primary);
+	auto prefetched_key = key;
+	++prefetched_key.tile_index;
+	auto const prefetched_payload_key = MakeContentUploadPayloadKey(prefetched_key, plan.get());
+	EXPECT_EQ(nullptr, worker.Find(prefetched_key));
+	EXPECT_EQ(nullptr, worker.FindPayload(prefetched_payload_key));
+
+	// Once that same region is visible, an exhausted retry must still report
+	// its current error rather than silently leaving the viewport incomplete.
+	viewport.first_column = 256;
+	viewport.prefetch_tile_count = 0;
+	provider.FailNextFill(2);
+	auto const reads_before_visible_failure = provider.FillCount();
+	worker.Request(viewport, plan);
+	ASSERT_TRUE(failed.WaitFor(1));
+	ASSERT_TRUE(WaitForBuilds(worker, 1));
+	EXPECT_EQ(1, failure_count.load());
+	EXPECT_EQ("injected partial audio read", queued_failure.message);
+	EXPECT_TRUE(worker.IsFailureCurrent(queued_failure));
+	EXPECT_EQ(reads_before_visible_failure + 2, provider.FillCount());
+	EXPECT_EQ(nullptr, worker.Find(prefetched_key));
+	EXPECT_EQ(nullptr, worker.FindPayload(prefetched_payload_key));
+	EXPECT_EQ(tile, worker.Find(key));
+	EXPECT_EQ(payload, worker.FindPayload(payload_key));
+
+	// A later request recovers from fresh samples and caches exactly the same
+	// tile and upload bytes as the healthy source, including rolling FFT reads.
+	worker.Request(viewport, plan);
+	reference_worker.Request(viewport, plan);
+	ASSERT_TRUE(ready.WaitFor(2));
+	ASSERT_TRUE(reference_ready.WaitFor(2));
+	ASSERT_TRUE(WaitForPayloadBuilds(worker, 2));
+	ASSERT_TRUE(WaitForPayloadBuilds(reference_worker, 2));
+	EXPECT_EQ(1, failure_count.load());
+	EXPECT_FALSE(worker.IsFailureCurrent(queued_failure));
+	auto const recovered = worker.Find(prefetched_key);
+	auto const reference = reference_worker.Find(prefetched_key);
+	ASSERT_NE(nullptr, recovered);
+	ASSERT_NE(nullptr, reference);
+	EXPECT_EQ(reference->waveform, recovered->waveform);
+	EXPECT_EQ(reference->spectrum_power, recovered->spectrum_power);
+	auto const recovered_payload = worker.FindPayload(prefetched_payload_key);
+	auto const reference_payload = reference_worker.FindPayload(prefetched_payload_key);
+	ASSERT_NE(nullptr, recovered_payload);
+	ASSERT_NE(nullptr, reference_payload);
+	EXPECT_EQ(reference_payload->primary, recovered_payload->primary);
+	auto const reads_after_recovery = provider.FillCount();
+	worker.Request(viewport, plan);
+	ASSERT_TRUE(ready.WaitFor(3));
+	ASSERT_TRUE(WaitForPayloadBuilds(worker, 2));
+	EXPECT_EQ(reads_after_recovery, provider.FillCount());
+	EXPECT_EQ(recovered_payload, worker.FindPayload(prefetched_payload_key));
+}
+
+void ExpectObsoleteFailureSuppressed(bool change_analysis) {
+	ObsoleteReadProvider provider;
+	ReadyLatch ready;
+	std::atomic<int> failure_count{0};
+	ContentWorker worker(
+		[&](ContentGeneration generation) { ready.Notify(generation); },
+		[&](ContentWorkerFailure const&) { ++failure_count; });
+	worker.SetProvider(&provider);
+	auto const old_generation = worker.SetAnalysis(WaveformAnalysis());
+	auto const old_viewport = WaveformViewport(old_generation, 0, 64);
+	worker.Request(old_viewport);
+	ASSERT_TRUE(provider.WaitUntilEntered());
+
+	auto new_generation = old_generation;
+	if (change_analysis) {
+		auto analysis = WaveformAnalysis();
+		analysis.milliseconds_per_pixel = 2.0;
+		new_generation = worker.SetAnalysis(analysis);
+		EXPECT_NE(old_generation, new_generation);
+	}
+	auto const new_viewport = WaveformViewport(new_generation, 64, 64);
+	worker.Request(new_viewport);
+	provider.Release();
+	ASSERT_TRUE(ready.WaitFor(1));
+	ASSERT_TRUE(WaitForPayloadBuilds(worker, 1));
+	EXPECT_FALSE(provider.GateTimedOut());
+	EXPECT_EQ(2, provider.FailedReads());
+	EXPECT_EQ(0, failure_count.load());
+	EXPECT_EQ(1u, worker.Metrics().ready_notifications);
+	EXPECT_EQ(nullptr, worker.Find(FirstKey(old_viewport)));
+	EXPECT_EQ(nullptr, worker.FindPayload(MakeContentUploadPayloadKey(FirstKey(old_viewport))));
+
+	auto const key = FirstKey(new_viewport);
+	auto const tile = worker.Find(key);
+	ASSERT_NE(nullptr, tile);
+	ASSERT_EQ(64u, tile->waveform.size());
+	for (auto const& column : tile->waveform) {
+		EXPECT_FLOAT_EQ(-0.25f, column.peak_min);
+		EXPECT_FLOAT_EQ(0.5f, column.peak_max);
+		EXPECT_FLOAT_EQ(-0.125f, column.average_min);
+		EXPECT_FLOAT_EQ(0.25f, column.average_max);
+	}
+	auto const payload = worker.FindPayload(MakeContentUploadPayloadKey(key));
+	ASSERT_NE(nullptr, payload);
+	ASSERT_EQ(64u * kWaveformUploadBytesPerColumn, payload->primary.size());
+	std::array<std::uint16_t, 4> const expected{24576, 49151, 28672, 40959};
+	for (std::size_t column = 0; column < 64; ++column) {
+		std::array<std::uint16_t, 4> endpoints;
+		std::memcpy(endpoints.data(), payload->primary.data() + column * kWaveformUploadBytesPerColumn, sizeof(endpoints));
+		EXPECT_EQ(expected, endpoints) << "column " << column;
+	}
+}
+
+enum class FailureInvalidation : std::uint8_t {
+	Viewport,
+	Analysis,
+	Provider,
+};
+
+void ExpectQueuedFailureInvalidated(FailureInvalidation invalidation) {
+	GateAudioProvider provider;
+	GateAudioProvider replacement;
+	ReadyLatch ready;
+	ReadyLatch failed;
+	ContentWorkerFailure queued_failure;
+	std::atomic<int> failure_count{0};
+	ContentWorker worker(
+		[&](ContentGeneration generation) { ready.Notify(generation); },
+		[&](ContentWorkerFailure failure) {
+			queued_failure = std::move(failure);
+			++failure_count;
+			failed.Notify({});
+		});
+	worker.SetProvider(&provider);
+	auto generation = worker.SetAnalysis(WaveformAnalysis());
+	provider.FailNextFill(2);
+	worker.Request(WaveformViewport(generation, 0, 64));
+	ASSERT_TRUE(failed.WaitFor(1));
+	ASSERT_TRUE(WaitForBuilds(worker, 0));
+	EXPECT_TRUE(worker.IsFailureCurrent(queued_failure));
+	EXPECT_EQ("injected partial audio read", queued_failure.message);
+	EXPECT_EQ(generation, queued_failure.generation);
+	EXPECT_NE(0u, queued_failure.request_serial);
+	EXPECT_EQ(2u, provider.FillCount());
+	EXPECT_EQ(generation, worker.SetProvider(&provider));
+	EXPECT_EQ(generation, worker.SetAnalysis(WaveformAnalysis()));
+	EXPECT_TRUE(worker.IsFailureCurrent(queued_failure));
+
+	switch (invalidation) {
+		case FailureInvalidation::Viewport:
+			break;
+		case FailureInvalidation::Analysis: {
+			auto analysis = WaveformAnalysis();
+			analysis.milliseconds_per_pixel = 2.0;
+			generation = worker.SetAnalysis(analysis);
+			EXPECT_FALSE(worker.IsFailureCurrent(queued_failure));
+			break;
+		}
+		case FailureInvalidation::Provider:
+			worker.SetProvider(nullptr);
+			EXPECT_FALSE(worker.IsFailureCurrent(queued_failure));
+			generation = worker.SetProvider(&replacement);
+			EXPECT_FALSE(worker.IsFailureCurrent(queued_failure));
+			break;
+	}
+
+	auto const viewport = WaveformViewport(generation, 64, 64);
+	worker.Request(viewport);
+	EXPECT_FALSE(worker.IsFailureCurrent(queued_failure));
+	ASSERT_TRUE(ready.WaitFor(1));
+	ASSERT_TRUE(WaitForPayloadBuilds(worker, 1));
+	EXPECT_EQ(1, failure_count.load());
+	EXPECT_NE(nullptr, worker.FindPayload(MakeContentUploadPayloadKey(FirstKey(viewport))));
+	EXPECT_FALSE(worker.IsFailureCurrent(queued_failure));
+}
+
+}
+
+TEST(skia_audio_content_worker, waveform_prefetch_failure_preserves_visible_content_and_recovers) {
+	ExpectPrefetchFailureKeepsVisibleContent(ContentKind::Waveform);
+}
+
+TEST(skia_audio_content_worker, spectrum_prefetch_failure_preserves_visible_content_and_recovers) {
+	ExpectPrefetchFailureKeepsVisibleContent(ContentKind::Spectrum);
+}
+
+TEST(skia_audio_content_worker, obsolete_viewport_failure_does_not_interrupt_healthy_waveform) {
+	ExpectObsoleteFailureSuppressed(false);
+}
+
+TEST(skia_audio_content_worker, obsolete_analysis_failure_does_not_interrupt_healthy_waveform) {
+	ExpectObsoleteFailureSuppressed(true);
+}
+
+TEST(skia_audio_content_worker, queued_failure_is_rejected_after_viewport_changes) {
+	ExpectQueuedFailureInvalidated(FailureInvalidation::Viewport);
+}
+
+TEST(skia_audio_content_worker, queued_failure_is_rejected_after_analysis_changes) {
+	ExpectQueuedFailureInvalidated(FailureInvalidation::Analysis);
+}
+
+TEST(skia_audio_content_worker, queued_failure_is_rejected_after_provider_detach_and_attach) {
+	ExpectQueuedFailureInvalidated(FailureInvalidation::Provider);
 }
 
 TEST(skia_audio_content_worker, audio_trace_records_spectrum_tile_lifecycle) {

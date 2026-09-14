@@ -60,6 +60,12 @@ struct ContentCacheBudgets {
 	friend bool operator==(ContentCacheBudgets const&, ContentCacheBudgets const&) = default;
 };
 
+struct ContentWorkerFailure {
+	ContentGeneration generation;
+	std::uint64_t request_serial = 0;
+	std::string message;
+};
+
 // One coalescing analysis worker for one AudioProvider lifetime. SetProvider
 // synchronously stops and joins the previous worker before returning, which is
 // required because Project destroys its raw AudioProvider immediately after
@@ -73,7 +79,7 @@ class ContentWorker final {
 
 public:
 	using ReadyCallback = std::function<void(ContentGeneration)>;
-	using FailureCallback = std::function<void(std::string)>;
+	using FailureCallback = std::function<void(ContentWorkerFailure)>;
 
 	explicit ContentWorker(
 		ReadyCallback ready_callback = {},
@@ -88,6 +94,8 @@ public:
 	ContentGeneration SetAnalysis(ContentAnalysisConfig config);
 	bool SetCacheBudgets(ContentCacheBudgets budgets);
 	ContentGeneration Generation() const;
+	// Recheck queued failures on the consumer thread before changing the display.
+	[[nodiscard]] bool IsFailureCurrent(ContentWorkerFailure const& failure) const;
 
 	void Request(
 		ContentViewportRequest request,

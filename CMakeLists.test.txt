@@ -453,7 +453,12 @@ if(GTEST_FOUND)
         )
         target_link_libraries(gtest-run PRIVATE aegisub_core)
     endif()
-
+    if(WITH_AVISYNTH AND HAVE_AVISYNTH)
+        target_sources(gtest-run PRIVATE tests/tests/audio_provider_avs.cpp)
+        target_compile_definitions(gtest-run PRIVATE WITH_AVISYNTH)
+        target_include_directories(gtest-run PRIVATE "${AviSynth_INCLUDE_DIR}")
+        target_link_libraries(gtest-run PRIVATE aegisub_core)
+    endif()
     if(WIN32)
         # Exercise the production bitmap renderer without requiring a window
         # server for the console test suite on other platforms.

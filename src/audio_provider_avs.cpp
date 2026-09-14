@@ -150,7 +150,12 @@ void AvisynthAudioProvider::LoadFromClip(AVSValue clip) {
 }
 
 void AvisynthAudioProvider::FillBuffer(void *buf, int64_t start, int64_t count) const {
-	clip->GetAudio(buf, start, count, avs_wrapper.GetEnv());
+	try {
+		clip->GetAudio(buf, start, count, avs_wrapper.GetEnv());
+	}
+	catch (AvisynthError const& error) {
+		throw agi::AudioDecodeError("Avisynth error: " + std::string(error.msg));
+	}
 }
 }
 

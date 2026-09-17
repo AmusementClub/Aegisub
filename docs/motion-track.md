@@ -18,6 +18,17 @@ uses a fresh ROI pose; continuing an existing session retains its accumulated po
 | Affine | Translation, rotation, shear and independent horizontal/vertical scale |
 | Perspective | A planar homography: perspective deformation of all four ROI corners |
 
+Similarity retains the subpixel position prior and refines its pose against the
+frozen reference patch. Bounded backtracking accepts only an improved fit on the
+same pixels; an inner sampling margin avoids mixing in the unknown background at
+the reference boundary after resampling. An initial fit keeps sparse motion edges
+available and is accepted only when it reduces the robust loss on the same pixels.
+Robust refinement excludes gradients beside rejected pixels and fails if no
+gradient remains on either translation axis. The search crop expands with the
+estimated rotation and scale. These changes reduce numerical oscillation without
+temporally smoothing away real motion or delaying
+direction changes; the existing confidence, residual and jump limits still apply.
+
 Affine and Perspective use direct grayscale registration against the reference
 patch. They need texture and sufficiently small changes between adjacent frames.
 They do not recognize object identities, estimate 3D depth, or follow independent

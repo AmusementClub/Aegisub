@@ -414,7 +414,7 @@ AnalyzeStopReason MotionTrackSession::RunAnalyze(
 			}
 			RoiRect crop{expected_left_x - radius, expected_left_y - radius,
 						 roi_.w + 2 * radius, roi_.h + 2 * radius};
-			if (model_ == TrackModel::Affine || model_ == TrackModel::Homography) {
+			if (model_ == TrackModel::Similarity || model_ == TrackModel::Affine || model_ == TrackModel::Homography) {
 				auto const& m = arm.state->last_transform.matrix;
 				double extent_x = roi_.w * 0.5, extent_y = roi_.h * 0.5;
 				for (double y : {-roi_.h * 0.5, roi_.h * 0.5})

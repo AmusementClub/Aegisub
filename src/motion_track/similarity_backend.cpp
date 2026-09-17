@@ -186,13 +186,17 @@ TrackStepResult SimilarityTrackerBackend::Step(TrackStepRequest const& request) 
 	int const sample_stride = std::max(
 	    1, int(std::ceil(std::sqrt(
 	           double(roi_w_) * roi_h_ / std::max(1, config_.max_samples)))));
-	double const cx = anchor_x + (roi_w_ - 1) / 2.0;
-	double const cy = anchor_y + (roi_h_ - 1) / 2.0;
+	double const cx = request.search_center_x - request.image_origin_x;
+	double const cy = request.search_center_y - request.image_origin_y;
 
 	std::vector<float> t_vals;
 	std::vector<double> xs, ys;
-	for (int y = 0; y < roi_h_; y += sample_stride)
-		for (int x = 0; x < roi_w_; x += sample_stride) {
+	// A boundary pixel can blend with unknown pixels outside the seed ROI
+	// after resampling. Fitting that blend biases scale toward the interior.
+	int const margin_x = roi_w_ > 2 ? 1 : 0;
+	int const margin_y = roi_h_ > 2 ? 1 : 0;
+	for (int y = margin_y; y < roi_h_ - margin_y; y += sample_stride)
+		for (int x = margin_x; x < roi_w_ - margin_x; x += sample_stride) {
 			t_vals.push_back(
 			    float(template_pixels_[size_t(y) * roi_w_ + size_t(x)]));
 			xs.push_back(x - (roi_w_ - 1) / 2.0);
@@ -223,14 +227,15 @@ TrackStepResult SimilarityTrackerBackend::Step(TrackStepRequest const& request) 
 		py = cy + ty + scale * (sin_r * xs[i] + cos_r * ys[i]);
 	};
 
-	// Forward-additive Gauss-Newton with trust-region clamps. Empty weights
-	// mean unit weights; otherwise weights[i] scales sample i's contribution
-	// (IRLS second pass). Sets offscreen when the warp leaves the crop.
+	// Forward-additive Gauss-Newton with bounded backtracking. IRLS weights
+	// scale each sample's contribution. Sets offscreen if the warp leaves the crop.
 	bool offscreen = false;
+	bool missing_gradient = false;
 	auto run_iterations = [&](std::vector<double> const& weights) {
-		double prev_error = std::numeric_limits<double>::infinity();
-		int worsening = 0;
+		std::vector<size_t> active;
+		active.reserve(n);
 		for (int iter = 0; iter < config_.max_iterations; ++iter) {
+			active.clear();
 			double const cos_r = std::cos(rotation);
 			double const sin_r = std::sin(rotation);
 
@@ -242,19 +247,14 @@ TrackStepResult SimilarityTrackerBackend::Step(TrackStepRequest const& request) 
 				double px = 0.0, py = 0.0;
 				warped_pos(i, cos_r, sin_r, px, py);
 				float iv = 0.f, gx = 0.f, gy = 0.f;
-				if (!SampleGray(image, px, py, iv))
-					continue;
-				if (!SampleField(grad_x.data(), image.width, image.height,
-				                 px, py, gx))
-					continue;
-				if (!SampleField(grad_y.data(), image.width, image.height,
-				                 px, py, gy))
+				if (!SampleGray(image, px, py, iv) || !SampleField(grad_x.data(), image.width, image.height, px, py, gx) || !SampleField(grad_y.data(), image.width, image.height, px, py, gy))
 					continue;
 				++valid;
 
-				double const w = weights.empty() ? 1.0 : weights[i];
+				double const w = weights[i];
 				if (w <= 0.0)
 					continue;
+				active.push_back(i);
 				double const e = double(iv) - t_vals[i];
 				double const dpx_dth = scale * (-sin_r * xs[i] - cos_r * ys[i]);
 				double const dpy_dth = scale * (cos_r * xs[i] - sin_r * ys[i]);
@@ -278,10 +278,17 @@ TrackStepResult SimilarityTrackerBackend::Step(TrackStepRequest const& request) 
 				return;
 			}
 
-			// Tikhonov damping keeps flat-texture Hessians solvable.
+			// Masking all gradients on either axis leaves translation on that
+			// axis unobservable. Damping must not turn this into a valid zero step.
+			if (h[0][0] == 0.0 || h[1][1] == 0.0) {
+				missing_gradient = true;
+				return;
+			}
+			// Tikhonov damping keeps weak-texture Hessians solvable.
 			double const trace = h[0][0] + h[1][1] + h[2][2] + h[3][3];
 			double const damp = 1e-9 * std::max(1.0, trace);
-			for (int r = 0; r < 4; ++r) h[r][r] += damp;
+			for (int r = 0; r < 4; ++r)
+				h[r][r] += damp;
 
 			double delta[4];
 			if (!Solve4(h, b, delta))
@@ -290,46 +297,65 @@ TrackStepResult SimilarityTrackerBackend::Step(TrackStepRequest const& request) 
 			for (int r = 0; r < 4; ++r)
 				delta[r] = -delta[r];
 
-			tx += std::clamp(delta[0], -config_.max_iteration_translation,
-			                 config_.max_iteration_translation);
-			ty += std::clamp(delta[1], -config_.max_iteration_translation,
-			                 config_.max_iteration_translation);
-			rotation += std::clamp(delta[2], -config_.max_iteration_rotation,
-			                       config_.max_iteration_rotation);
-			scale *= std::exp(std::clamp(delta[3] / scale,
-			                             -config_.max_iteration_log_scale,
-			                             config_.max_iteration_log_scale));
-			if (scale < 0.1 || scale > 10.0)
-				return;
-
-			if (error_sum > prev_error * 1.5 + 1e-9) {
-				if (++worsening >= 3)
-					return;
-			} else {
-				worsening = 0;
+			delta[0] = std::clamp(delta[0], -config_.max_iteration_translation,
+								  config_.max_iteration_translation);
+			delta[1] = std::clamp(delta[1], -config_.max_iteration_translation,
+								  config_.max_iteration_translation);
+			delta[2] = std::clamp(delta[2], -config_.max_iteration_rotation,
+								  config_.max_iteration_rotation);
+			double const log_scale_delta = std::clamp(delta[3] / scale,
+													  -config_.max_iteration_log_scale, config_.max_iteration_log_scale);
+			bool accepted = false;
+			double fraction = 1.0;
+			double scale_delta = 0.0;
+			for (int trial = 0; trial < 12; ++trial, fraction *= 0.5) {
+				double const next_scale = scale * std::exp(fraction * log_scale_delta);
+				if (!std::isfinite(next_scale) || next_scale < 0.1 || next_scale > 10.0)
+					continue;
+				double const next_rotation = rotation + fraction * delta[2];
+				double const c = std::cos(next_rotation), s = std::sin(next_rotation);
+				double next_error = 0.0;
+				// Compare exactly the same samples and weights. Dropping a
+				// difficult sample at the crop boundary is not an improvement.
+				for (size_t i : active) {
+					double const px = cx + tx + fraction * delta[0] + next_scale * (c * xs[i] - s * ys[i]);
+					double const py = cy + ty + fraction * delta[1] + next_scale * (s * xs[i] + c * ys[i]);
+					float value = 0.f;
+					if (!SampleGray(image, px, py, value)) {
+						next_error = std::numeric_limits<double>::infinity();
+						break;
+					}
+					double const e = static_cast<double>(value) - t_vals[i];
+					next_error += weights[i] * e * e;
+				}
+				if (next_error >= error_sum)
+					continue;
+				tx += fraction * delta[0];
+				ty += fraction * delta[1];
+				rotation = next_rotation;
+				scale_delta = next_scale - scale;
+				scale = next_scale;
+				accepted = true;
+				break;
 			}
-			prev_error = error_sum;
-
+			if (!accepted)
+				return;
 			double const max_delta = std::max(
-			    {std::abs(delta[0]), std::abs(delta[1]), std::abs(delta[2]),
-			     std::abs(delta[3])});
+				{fraction * std::abs(delta[0]), fraction * std::abs(delta[1]),
+				 fraction * std::abs(delta[2]), std::abs(scale_delta)});
 			if (max_delta < config_.step_tolerance)
 				return;
 		}
 	};
 
-	run_iterations({});
-	if (offscreen) {
-		result.status = TrackStatus::Failed;
-		result.failure = TrackFailureReason::Offscreen;
-		return result;
-	}
+	auto const within_step_limits = [&] {
+		return std::abs(rotation - init_rotation) <= config_.max_rotation_per_step && scale / init_scale >= config_.min_scale_ratio_per_step && scale / init_scale <= config_.max_scale_ratio_per_step;
+	};
 
-	// IRLS reweighting: samples whose residual survives a Tukey biweight on
-	// the robust sigma (template edge riding on background after rotation,
-	// partial occlusion) get ~0 weight and the pose is refined again. Two
-	// passes let the weights follow the improving fit.
-	for (int irls_pass = 0; irls_pass < 2; ++irls_pass) {
+	// Propose an unweighted initial alignment, then refine with Tukey IRLS.
+	// The proposal must improve the robust loss, not just the plain fit:
+	// an occluder must not drag the pose away from the valid image region.
+	for (int pass = 0; pass < 4; ++pass) {
 		double const cos_r = std::cos(rotation);
 		double const sin_r = std::sin(rotation);
 		std::vector<double> residuals(n, 0.0);
@@ -350,9 +376,49 @@ TrackStepResult SimilarityTrackerBackend::Step(TrackStepRequest const& request) 
 		auto const mid = abs_r.begin() + (abs_r.size() - 1) / 2;
 		std::nth_element(abs_r.begin(), mid, abs_r.end());
 		double const sigma = 1.4826 * (*mid);
-		if (sigma <= 0.25)
+		if (sigma <= 0.25 && pass > 1)
 			break;
-		double const c = 4.685 * sigma;
+		// Exact alignment can have a zero median despite a new occluder.
+		// Keep a nonzero cutoff so those outliers are still rejected.
+		double const c = 4.685 * std::max(0.25, sigma);
+		if (pass == 0) {
+			// Sparse motion edges can be the only nonzero residuals. Do not
+			// remove them before solving for a candidate pose. Compare the
+			// full Tukey loss on the same pixels with a frozen cutoff; unlike
+			// weighted squared error, rejected pixels still carry a penalty.
+			auto const loss = [c](double residual) {
+				double const r = residual / c;
+				double const r2 = std::min(1.0, r * r);
+				return r2 * (3.0 - r2 * (3.0 - r2));
+			};
+			double prior_loss = 0.0;
+			for (double residual : abs_r)
+				prior_loss += loss(residual);
+			run_iterations(std::vector<double>(n, 1.0));
+			double candidate_loss = 0.0;
+			double const candidate_cos = std::cos(rotation);
+			double const candidate_sin = std::sin(rotation);
+			for (size_t i = 0; i < n; ++i) {
+				if (!usable[i])
+					continue;
+				double px = 0.0, py = 0.0;
+				warped_pos(i, candidate_cos, candidate_sin, px, py);
+				float value = 0.f;
+				if (!SampleGray(image, px, py, value)) {
+					candidate_loss = std::numeric_limits<double>::infinity();
+					break;
+				}
+				candidate_loss += loss(static_cast<double>(value) - t_vals[i]);
+			}
+			if (offscreen || missing_gradient || !within_step_limits() || candidate_loss >= prior_loss) {
+				tx = ty = 0.0;
+				rotation = init_rotation;
+				scale = init_scale;
+			}
+			offscreen = false;
+			missing_gradient = false;
+			continue;
+		}
 		std::vector<double> weights(n, 0.0);
 		double weight_sum = 0.0;
 		for (size_t i = 0; i < n; ++i) {
@@ -363,21 +429,48 @@ TrackStepResult SimilarityTrackerBackend::Step(TrackStepRequest const& request) 
 			    : 0.0;
 			weight_sum += weights[i];
 		}
-		if (weight_sum * 4 < double(n))
-			break; // almost everything is an outlier; keep the plain fit
-		run_iterations(weights);
-		if (offscreen) {
+		// Central-difference gradients also see the neighbouring pixels.
+		// Exclude the rim of a rejected region so its occluder edge cannot
+		// pull otherwise valid samples toward a smaller, shifted pose.
+		auto const raw_weights = weights;
+		int const columns = (roi_w_ - 2 * margin_x + sample_stride - 1) / sample_stride;
+		for (size_t i = 0; i < n; ++i) {
+			if (raw_weights[i] != 0.0)
+				continue;
+			int const row = static_cast<int>(i) / columns;
+			int const column = static_cast<int>(i) % columns;
+			for (int y = std::max(0, row - 1); y <= row + 1; ++y)
+				for (int x = std::max(0, column - 1); x <= std::min(columns - 1, column + 1); ++x) {
+					auto const neighbour = static_cast<size_t>(y) * columns + x;
+					if (neighbour < n) {
+						weight_sum -= weights[neighbour];
+						weights[neighbour] = 0.0;
+					}
+				}
+		}
+		if (weight_sum * 4 < static_cast<double>(n)) {
 			result.status = TrackStatus::Failed;
-			result.failure = TrackFailureReason::Offscreen;
+			result.failure = TrackFailureReason::NccLow;
 			return result;
 		}
+		run_iterations(weights);
+		if (missing_gradient) {
+			result.status = TrackStatus::Failed;
+			result.failure = TrackFailureReason::NccLow;
+			return result;
+		}
+		if (offscreen)
+			break;
+	}
+	if (offscreen) {
+		result.status = TrackStatus::Failed;
+		result.failure = TrackFailureReason::Offscreen;
+		return result;
 	}
 
 	// Per-step sanity gates: the refinement must not have run away from the
 	// pose it was initialized with.
-	if (std::abs(rotation - init_rotation) > config_.max_rotation_per_step
-	    || scale / init_scale < config_.min_scale_ratio_per_step
-	    || scale / init_scale > config_.max_scale_ratio_per_step) {
+	if (!within_step_limits()) {
 		result.status = TrackStatus::Failed;
 		result.failure = TrackFailureReason::JumpTooLarge;
 		return result;
@@ -386,8 +479,7 @@ TrackStepResult SimilarityTrackerBackend::Step(TrackStepRequest const& request) 
 	// Final quality metrics: zero-mean NCC and MAD residual between the
 	// template and the warped image over the valid samples. Per-sample data
 	// is retained so a failed plain score can be rescored on inlier blocks
-	// only (partial occlusion); the plain path is byte-identical to the
-	// historical one for frames that pass it.
+	// only (partial occlusion). The full-sample score is used when it passes.
 	double const cos_r = std::cos(rotation);
 	double const sin_r = std::sin(rotation);
 	std::vector<bool> usable(n, false);

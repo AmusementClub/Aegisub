@@ -41,8 +41,9 @@ struct SimilarityMotion {
 // Deterministic scene whose object translates, rotates and scales smoothly.
 class SimilarityScene {
 public:
-	SimilarityScene(double vx, double vy, double w_rot, double w_scale)
-	: vx_(vx), vy_(vy), w_rot_(w_rot), w_scale_(w_scale) {}
+	SimilarityScene(double vx, double vy, double w_rot, double w_scale,
+	                double texture_margin = 0.0, double texture_frequency = 1.0)
+	: vx_(vx), vy_(vy), w_rot_(w_rot), w_scale_(w_scale), texture_margin_(texture_margin), texture_frequency_(texture_frequency) {}
 
 	int Width() const { return 160; }
 	int Height() const { return 120; }
@@ -66,13 +67,13 @@ public:
 		double const v = (s * dx + c * dy) / m.scale;
 		double const hw = (kObj.w - 1) / 2.0;
 		double const hh = (kObj.h - 1) / 2.0;
-		if (std::abs(u) <= hw && std::abs(v) <= hh)
-			return Clamp8(ObjectTex(u, v));
+		if (std::abs(u) <= hw + texture_margin_ && std::abs(v) <= hh + texture_margin_)
+			return Clamp8(ObjectTex(u * texture_frequency_, v * texture_frequency_));
 		return Clamp8(BackgroundTex(x, y));
 	}
 
 private:
-	double vx_, vy_, w_rot_, w_scale_;
+	double vx_, vy_, w_rot_, w_scale_, texture_margin_, texture_frequency_;
 };
 
 class SimilarityFrameReader final : public MotionFrameReader {
@@ -285,6 +286,174 @@ TEST(motion_track_similarity, converges_from_identity_on_moderate_pose) {
 	EXPECT_NEAR(motion.scale, EstimatedScale(result), 0.03);
 	EXPECT_NEAR(motion.cx, result.candidate_center_x, 0.8);
 	EXPECT_NEAR(motion.cy, result.candidate_center_y, 0.8);
+}
+
+TEST(motion_track_similarity, subpixel_pose_stays_stable_through_scale_and_direction_changes) {
+	// Keep the ROI inside the texture. Measure rendered-point motion against
+	// analytic truth, including immediate reversals, with the previous estimate
+	// (not the true center) initializing the next frame.
+	for (double scale_step : {-0.008, 0.008}) {
+		SCOPED_TRACE(scale_step);
+		SimilarityScene scene(0.23, -0.17, 0.003, scale_step, 4.0, 2.0);
+		SimilarityTrackerBackend backend;
+		ASSERT_EQ(TrackStatus::Ok, backend.Reset(MakeSeed(SeedPatch(scene))));
+		auto prior = scene.MotionAt(0);
+		double previous_error_x[5] = {}, previous_error_y[5] = {};
+		double max_error = 0.0, max_step_error = 0.0;
+		for (int step = 1; step <= 50; ++step) {
+			int const frame = step <= 25 ? step : 50 - step;
+			auto const truth = scene.MotionAt(frame);
+			auto const result = StepSim(backend, scene, frame, prior,
+										prior.rot, prior.scale, 16);
+			ASSERT_EQ(TrackStatus::Ok, result.status) << "step " << step;
+			for (int point = 0; point < 5; ++point) {
+				double const x = point == 0 ? 0.0 : (point & 1 ? -1.0 : 1.0) * (kObj.w - 1) / 2.0;
+				double const y = point == 0 ? 0.0 : (point & 2 ? -1.0 : 1.0) * (kObj.h - 1) / 2.0;
+				auto const& m = result.transform.matrix;
+				double const error_x = result.candidate_center_x + m[0] * x + m[1] * y -
+									   (truth.cx + truth.scale * (std::cos(truth.rot) * x - std::sin(truth.rot) * y));
+				double const error_y = result.candidate_center_y + m[3] * x + m[4] * y -
+									   (truth.cy + truth.scale * (std::sin(truth.rot) * x + std::cos(truth.rot) * y));
+				max_error = std::max(max_error, std::hypot(error_x, error_y));
+				max_step_error = std::max(max_step_error,
+										  std::hypot(error_x - previous_error_x[point], error_y - previous_error_y[point]));
+				previous_error_x[point] = error_x;
+				previous_error_y[point] = error_y;
+			}
+			prior = {.cx = result.candidate_center_x, .cy = result.candidate_center_y, .rot = EstimatedRotation(result), .scale = EstimatedScale(result)};
+		}
+		EXPECT_LT(max_error, 0.15);
+		EXPECT_LT(max_step_error, 0.12);
+		RecordProperty(scale_step < 0 ? "shrink_max_error" : "grow_max_error", std::to_string(max_error));
+		RecordProperty(scale_step < 0 ? "shrink_max_step_error" : "grow_max_step_error", std::to_string(max_step_error));
+	}
+}
+
+TEST(motion_track_similarity, session_keeps_enlarged_rotated_template_inside_search_crop) {
+	SimilarityScene scene(0.0, 0.0, 0.004, 0.04, 4.0);
+	SimilarityFrameReader reader(scene);
+	SimilarityTrackerBackend backend;
+	SessionDomains domains;
+	domains.decode_interval = {.first = 0, .last = 29};
+	domains.direction_domain = {.first = 0, .last = 29};
+	domains.video_frame_count = scene.Frames();
+	domains.storage_width = scene.Width();
+	domains.storage_height = scene.Height();
+	domains.search_radius_override = 4;
+	auto lease = VideoProviderLeaseState::Create();
+	auto handle = lease->Acquire();
+	MotionTrackSession session(domains, kObj, TrackDirection::Forward, TrackModel::Similarity);
+	auto const seed = scene.MotionAt(0);
+	session.SetBackendSeed(0, kObj, seed.cx, seed.cy);
+	ASSERT_EQ(AnalyzeStopReason::Completed, session.RunAnalyze(reader, backend, handle, {}));
+	auto const snapshot = session.Capture();
+	for (int frame = 1; frame <= 29; ++frame) {
+		auto const *sample = FindSample(snapshot->samples, frame);
+		ASSERT_NE(nullptr, sample) << "frame " << frame;
+		ASSERT_EQ(TrackStatus::Ok, sample->status) << "frame " << frame;
+		auto const truth = scene.MotionAt(frame);
+		EXPECT_NEAR(truth.scale, std::hypot(sample->transform.matrix[0], sample->transform.matrix[3]), 0.01);
+		EXPECT_NEAR(truth.rot, std::atan2(sample->transform.matrix[3], sample->transform.matrix[0]), 0.01);
+		EXPECT_NEAR(truth.cx, sample->center_x, 0.15);
+		EXPECT_NEAR(truth.cy, sample->center_y, 0.15);
+	}
+}
+
+TEST(motion_track_similarity, partial_occlusion_keeps_pose_but_full_occlusion_is_rejected) {
+	for (double motion : {0.0, 1.0}) {
+		SCOPED_TRACE(motion);
+		SimilarityScene scene(0.3 * motion, -0.2 * motion, 0.003 * motion, 0.005 * motion, 4.0);
+		SimilarityTrackerBackend backend;
+		ASSERT_EQ(TrackStatus::Ok, backend.Reset(MakeSeed(SeedPatch(scene))));
+		SimilarityFrameReader reader(scene);
+		GrayPatch image;
+		RoiRect const crop{.x = kObj.x - 16, .y = kObj.y - 16, .w = kObj.w + 32, .h = kObj.h + 32};
+		ASSERT_EQ(FrameReadStatus::Ok, reader.FetchGray(1, crop, image).status);
+		for (int y = 16; y < 16 + kObj.h; ++y)
+			for (int x = 16 + 3 * kObj.w / 4; x < 16 + kObj.w; ++x)
+				image.gray[static_cast<size_t>(y) * image.stride + x] = 240;
+		TrackStepRequest request;
+		request.frame = 1;
+		request.image = image.View();
+		request.image_origin_x = crop.x;
+		request.image_origin_y = crop.y;
+		request.search_center_x = scene.MotionAt(0).cx;
+		request.search_center_y = scene.MotionAt(0).cy;
+		auto const partial = backend.Step(request);
+		ASSERT_EQ(TrackStatus::Ok, partial.status);
+		auto const truth = scene.MotionAt(1);
+		EXPECT_NEAR(truth.cx, partial.candidate_center_x, 0.15);
+		EXPECT_NEAR(truth.cy, partial.candidate_center_y, 0.15);
+		EXPECT_NEAR(truth.rot, EstimatedRotation(partial), 0.005);
+		EXPECT_NEAR(truth.scale, EstimatedScale(partial), 0.005);
+		std::ranges::fill(image.gray, 128);
+		auto const full = backend.Step(request);
+		EXPECT_EQ(TrackStatus::Failed, full.status);
+		EXPECT_EQ(TrackFailureReason::NccLow, full.failure);
+	}
+}
+
+TEST(motion_track_similarity, sparse_edges_preserve_motion_or_fail_when_unobservable) {
+	// Most pixels still match before alignment. The few changed edges carry
+	// the motion; a zero median residual must not classify them as occlusion.
+	constexpr int radius = 16;
+	int const width = kObj.w + 2 * radius;
+	int const height = kObj.h + 2 * radius;
+	std::vector<std::uint8_t> pixels(static_cast<size_t>(kObj.w) * kObj.h, 30);
+	for (int y = 10; y < 22; ++y)
+		for (int x = 12; x < 28; ++x)
+			pixels[static_cast<size_t>(y) * kObj.w + x] = 200;
+	TrackerSeed seed;
+	seed.model = TrackModel::Similarity;
+	seed.roi = kObj;
+	seed.template_gray = {.data = pixels.data(), .stride = kObj.w, .width = kObj.w, .height = kObj.h};
+	seed.seed_frame = 0;
+	for (bool horizontal : {false, true}) {
+		SCOPED_TRACE(horizontal);
+		for (int shift : {-5, -3, -1, 0, 1, 3, 5}) {
+			SCOPED_TRACE(shift);
+			int const dx = horizontal ? shift : 0;
+			int const dy = horizontal ? 0 : shift;
+			std::vector<std::uint8_t> image(static_cast<size_t>(width) * height, 30);
+			for (int y = 10; y < 22; ++y)
+				for (int x = 12; x < 28; ++x)
+					image[static_cast<size_t>(y + radius + dy) * width + x + radius + dx] = 200;
+			SimilarityTrackerBackend backend;
+			ASSERT_EQ(TrackStatus::Ok, backend.Reset(seed));
+			TrackStepRequest request;
+			request.frame = 1;
+			request.image = {.data = image.data(), .stride = width, .width = width, .height = height};
+			request.image_origin_x = kObj.x - radius;
+			request.image_origin_y = kObj.y - radius;
+			request.search_center_x = kObj.x + (kObj.w - 1) / 2.0;
+			request.search_center_y = kObj.y + (kObj.h - 1) / 2.0;
+			auto const result = backend.Step(request);
+			ASSERT_EQ(TrackStatus::Ok, result.status);
+			EXPECT_NEAR(request.search_center_x + dx, result.candidate_center_x, 0.05);
+			EXPECT_NEAR(request.search_center_y + dy, result.candidate_center_y, 0.05);
+			EXPECT_NEAR(0.0, EstimatedRotation(result), 0.005);
+			EXPECT_NEAR(1.0, EstimatedScale(result), 0.005);
+			if (horizontal) {
+				// A new foreground stripe leaves the object visible but can
+				// remove all horizontal motion gradients from the robust fit.
+				for (int y = 0; y < kObj.h; ++y)
+					for (int x = 33; x < kObj.w; ++x)
+						image[static_cast<size_t>(y + radius) * width + x + radius] = 240;
+				auto const occluded = backend.Step(request);
+				if (shift == 0) {
+					ASSERT_EQ(TrackStatus::Ok, occluded.status);
+					EXPECT_NEAR(request.search_center_x, occluded.candidate_center_x, 0.05);
+					EXPECT_NEAR(request.search_center_y, occluded.candidate_center_y, 0.05);
+					EXPECT_NEAR(0.0, EstimatedRotation(occluded), 0.005);
+					EXPECT_NEAR(1.0, EstimatedScale(occluded), 0.005);
+				}
+				else {
+					EXPECT_EQ(TrackStatus::Failed, occluded.status);
+					EXPECT_EQ(TrackFailureReason::NccLow, occluded.failure);
+				}
+			}
+		}
+	}
 }
 
 TEST(motion_track_similarity, flat_template_fails_with_ncc_low) {

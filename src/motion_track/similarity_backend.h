@@ -4,8 +4,9 @@
 // Forward-additive Gauss-Newton intensity alignment (ECC family) over the
 // gray ROI: parameters (tx, ty, rotation, scale) warp the frozen seed
 // template onto the search image; each iteration samples the image and its
-// gradients bilinearly at the warped positions and solves the 4x4 normal
-// equations. The template is the seed snapshot, so the estimated pose is
+// central-difference gradients bilinearly and solves the 4x4 normal equations.
+// Bounded backtracking accepts only steps that reduce the alignment error.
+// The template is the seed snapshot, so the estimated pose is
 // seed-relative and never accumulates integration drift; per-frame motion is
 // small, and the session supplies the previous accepted pose as the starting
 // point via TrackStepRequest::init_rotation/init_scale.
@@ -30,8 +31,8 @@ struct SimilarityTrackerConfig {
 	double max_rotation_per_step = 0.35; // ~20 degrees
 	double min_scale_ratio_per_step = 0.75;
 	double max_scale_ratio_per_step = 1.333;
-	/// Trust region: per-iteration update clamps that keep the linearization
-	/// valid without line searching.
+	/// Per-iteration update limits, followed by backtracking when the full
+	/// step does not improve the fit.
 	double max_iteration_translation = 20.0; // px
 	double max_iteration_rotation = 0.25;    // rad
 	double max_iteration_log_scale = 0.25;
